@@ -26,7 +26,27 @@ Last updated: 2026-11-18.
 3. No free gridded annual outlook — months 8–12 are climatology, permanently labelled.
 4. CHIRPS bulk host unreachable from this environment — ERA5 archive is the shipped baseline fallback.
 5. Model-relative anomalies are the primary user-facing number; baseline differences require grid matching and offset disclosure.
+6. **ECMWF Set VII (13-month) is real but unproven for access** — months 8–12 stay climatology until a licence enquiry + GRIB POC succeed (ADR-001 D2a).
+7. **All probes were one location (Jakarta).** No provider is validated for real plot coordinates yet; see `forecast-horizon-capabilities.md` §4.
+
+### Review rounds
+
+1. Oracle adversarial pass — found the wrong ensemble horizon (35 d → 14 d), wrong member count, wrong seasonal row count, and a bias-contaminated anomaly contract. Amended.
+2. External (GPT) review — accepted on CHIRPS licensing (public domain **and** CC BY 4.0), on overclaiming "bias-free by construction", on coarse data classes, and on single-location validation. Set VII finding verified as a real product but not as accessible data. Amended.
 
 ## Next phases
 
-Phase 1 (product requirements, system architecture, ADR-002) — **unblocked**, with the carried-over decisions listed in `docs/review/phase-0-review.md` treated as mandatory inputs.
+Phase 1 (product requirements, system architecture, ADR-002) — **documents produced, review pending**.
+
+| Phase 1 deliverable | Status | File |
+|---|---|---|
+| Product definition | done | `docs/PROJECT.md` |
+| System architecture + Mermaid | done | `docs/architecture/system-architecture.md` |
+| Domain model (conceptual) | done | `docs/architecture/domain-model.md` |
+| Data flow | done | `docs/architecture/data-flow.md` |
+| Background processing | done | `docs/architecture/background-processing.md` |
+| API conventions | done | `docs/architecture/api-conventions.md` |
+| ADR-002 monorepo & backend | done (Proposed) | `docs/adr/ADR-002-monorepo-and-backend-architecture.md` |
+| Oracle architecture review | pending | — |
+
+Gate to Phase 2: oracle review of ADR-002 + the four invariants that Phase 2 must not violate (derived data materialised, agronomy pure, dataClass mandatory in contract, no synchronous provider calls).

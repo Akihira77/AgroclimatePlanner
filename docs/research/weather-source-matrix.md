@@ -111,7 +111,7 @@ Caveat that must reach the UI: a SEAS5 "anomaly" is model-relative. Showing it a
 |---|---|---|---|---|---|
 | ERA5 (CDS) | 0.25° hourly | 1940–present | CDS API | Copernicus Licence, commercial OK, attribution required | **observed** via Open-Meteo archive from `1940-01-02` → 200 |
 | ERA5-Land | 0.1° hourly | 1950–present | CDS API | same | **doc** |
-| CHIRPS v3.0 | 0.05° daily+monthly | 1981–near-present | HTTP/FTP, GEE | public domain / CC0 | **doc** (v3 release 2025); **host `data.chc.ucsb.edu` timed out from this environment (2026-11-18) — reachability unconfirmed** |
+| CHIRPS v3.0 | 0.05° daily+monthly | 1981–near-present | HTTP/FTP, GEE | **public domain AND CC BY 4.0** (attribution expected) | **doc** (v3 page 2026-11-18); `data.chc.ucsb.edu` timed out, `www.chc.ucsb.edu` reachable |
 | NASA POWER | 0.5°×0.625° daily/monthly | 1981–present | REST point API, `community=AG` | NASA open, free | **observed** response for 1991–1993 monthly, keys `YYYYMM` |
 | GPM IMERG V07 | 0.1° | 2000–present | GES DISC, GEE | US Gov, effectively public domain | **doc** |
 | BMKG station history | station | varies | request/PPID only | commercial needs permission | **doc/inferred** |

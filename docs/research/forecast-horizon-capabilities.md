@@ -105,7 +105,7 @@ Consequence: BMKG gives **0–3 days only**, deterministic, single-value, no ens
 | 15–45 days | EC46 via seasonal endpoint (`ecmwf_ec46`): 46 daily rows, 50 members, data through day 45; weekly statistics available to **42 days** (100 members) | 6 h raw → daily/weekly | **Subseasonal** — weekly or daily-with-caveat, anomaly only |
 | 2–7 months | SEAS5 (`ecmwf_seas5`) monthly mean + anomaly | 6 h raw → **monthly only** | **Seasonal**, monthly, probabilistic, no daily claim |
 | 8–12 months | **No genuine forecast** — ERA5 (or CHIRPS if reachable) 1991–2020 climatology | monthly | **Climatology baseline** — never labelled forecast |
-| Any range, "annual outlook" | ECMWF annual product exists (13 months) but **charts only, no gridded point feed**; C3S annual dataset family not yet evaluated | — | Not offered until a verified data route exists (ADR-001) |
+| Any range, "annual outlook" | **ECMWF Set VII (13 months, months 8–13) exists** — GRIB, quarterly, monthly means/anomalies per member; **access route unverified, not in Open Data, no point API** | monthly | Not offered until a licence enquiry + GRIB proof-of-concept succeed (ADR-001 D2a). Until then months 8–12 are climatology |
 
 Deleted from the previous version of this table: a "16–35 days | Open-Meteo ensemble" band (no data past day 14) and "dekadal derived" SEAS5 aggregation (not derivable from a monthly mean).
 
@@ -138,7 +138,20 @@ Every month record must carry `temporalClass` ∈ {observation, short_range_fore
 
 ---
 
-## 4. Open questions carried to Phase 4
+## 4. Validation scope (what these probes do NOT prove)
+
+All probes were run at **one point: Jakarta (`-6.2, 106.8`)**. Nothing here demonstrates that any provider is adequate at a real farm plot.
+
+Not validated, and therefore not claimable:
+- Behaviour at plots on volcanic slopes, narrow valleys, or coasts where a 28–36 km cell averages away the signal.
+- Which grid cell a specific plot maps to, and how far the served interpolated point is from the plot.
+- BMKG village (`adm4`) resolution correctness for non-Jakarta desa.
+- Seasonal/hindcast behaviour at any second location.
+- Any accuracy claim whatsoever — accuracy is Phase 9, not Phase 0.
+
+Required before a provider is called "validated for local use": repeat the probe suite at a set of real plot coordinates spanning altitude and coastline, record served-vs-requested distance and elevation delta per point, and keep the raw responses.
+
+## 5. Open questions carried to Phase 4
 
 - Does BMKG publish a machine-readable probability product for monthly rainfall? (Phase 0 scope: appears PNG-map only — confirmed in `weather-source-matrix.md`.)
 - Is there any lawful, point-queryable Indonesian national rainfall observation series for bias correction? **[unverified]**

@@ -33,15 +33,19 @@ Use Open-Meteo as the transport for ECMWF model data across all horizons:
 
 No daily rendering of EC46 beyond day 45 or of SEAS5 at all.
 
-**D2. Months 8–12 are climatology, permanently labelled as such.**
+**D2. Months 8–12 default to climatology, with one documented escape hatch.**
 
-Baseline: **1991–2020**, WMO normal period. Preferred dataset CHIRPS v3.0 monthly rainfall; **implemented fallback ERA5 monthly via the Open-Meteo archive API**, because the CHIRPS bulk host was unreachable from the target environment on 2026-11-18 and was not confirmed by the provider. The baseline dataset is a configurable, named property of every climatology record, and the UI names it. Temperature baseline: ERA5 (0.25°) as implemented, ERA5-Land (0.1°) when a reachable route exists. Stored as a first-class `climatology` temporal class — never as `forecast`. There is no annual-outlook feed; none will be simulated.
+Baseline: **1991–2020**, WMO normal period. Preferred dataset CHIRPS v3.0 monthly rainfall; **implemented fallback ERA5 monthly via the Open-Meteo archive API**, because the CHIRPS bulk host was unreachable from the target environment on 2026-11-18 and was not confirmed by the provider. The baseline dataset is a configurable, named property of every climatology record, and the UI names it.
+
+**D2a. ECMWF Set VII (Seasonal 13-month forecast, forecast months 8–13) is real and must not be dismissed.** Verified on ECMWF's dataset page 2026-11-18: quarterly production (Feb/May/Aug/Nov, disseminated on the 5th at 12:00 UTC), GRIB, monthly means of ensemble means, monthly mean anomalies, monthly means and anomalies per ensemble member, plus 6-hourly/24-hourly individual runs. Units note from that page: monthly `tp` is a **rate in m/s**, not mm — conversion depends on calendar month length and parameter definition.
+
+What is **not** verified: how a third party obtains it. It is not in ECMWF's Open Data portal, and no free point API is documented. Until a licence enquiry and a GRIB proof-of-concept (fetch → parse → cell extraction → member count → variable audit) succeed, months 8–12 remain climatology. If they succeed, months 8–12 become a genuine — quarterly-refreshed, therefore up to ~3 months stale — labelled `annual_outlook` class, and the timeline gains a real 13-month reach. This is a Phase 4 research task, not a Phase 1 assumption.
 
 **D3. Anomalies are computed twice and labelled — model-relative is the primary number.**
 
 Evidence forced a reversal of the original decision. Measured at Jakarta 2026-11-18, the model's implied seasonal climatology is systematically wetter than ERA5 (Nov 297.6 mm vs 220.5 mm, **+35 %**), so a "forecast minus observed baseline" anomaly is contaminated by a bias as large as the signal: November flips from **−50.0 mm** (model-relative) to **+27.1 mm** (ERA5 baseline) to **+52.0 mm** (NASA POWER baseline), and February flips too.
 
-- `modelAnomaly` — **primary, user-facing.** SEAS5 value minus the model's own climatology, as delivered. Bias-free by construction (the bias sits in the climatology, and it cancels). Always labelled "anomali terhadap iklim model".
+- `modelAnomaly` — **primary, user-facing.** SEAS5 value minus the model's own climatology, as delivered. This removes the *mean* model-vs-baseline offset; it does **not** mean the forecast is unbiased, skilful, or locally representative. Seasonal-, lead-time- and regime-dependent errors survive. `biasCorrected` therefore stays `false` and `modelSkill` stays `null` until verification exists.
 - `baselineAnomaly` — **secondary, conditional.** Monthly aggregate minus the observed baseline, permitted **only** when (a) the baseline has been area-averaged over the model grid cell, and (b) the measured model-vs-baseline climate offset is disclosed alongside it. Labelled "selisih terhadap normal historis" with the baseline dataset and period named.
 - `modelClimateOffset` — its own labelled quantity: model climatology minus observed climatology, per month. Never presented as an anomaly.
 - Both anomalies are reported in **mm and % of normal**. The denominator is part of the contract, not an implementation detail.
@@ -80,6 +84,26 @@ Cache key: `(provider, model, initTime, cellKey, variableSet, aggregationLevel)`
 **D8b. Members are ephemeral; aggregates are the system of record.**
 
 Open-Meteo retains individual ensemble members for about one month. The ingest job therefore: (a) sweeps every known cell on/just after the SEAS5 run date; (b) aggregates to per-member monthly means at ingest (~350 rows/cell/run instead of ~10 000 member-days) and keeps them; (c) accepts that a cell first registered mid-cycle cannot be backfilled and reports `spreadUnavailable` rather than substituting a mean.
+
+**D9. Data classes are finer than "forecast vs observation", and the UI must not claim an observation it does not have.**
+
+```ts
+type WeatherDataClass =
+  | "field_observation"      // user's own rain gauge / sensor / manual note
+  | "station_observation"    // BMKG station — not available as a feed
+  | "satellite_estimate"     // IMERG, CHIRPS-SAT
+  | "reanalysis"             // ERA5, ERA5-Land, MERRA-2
+  | "weather_forecast"
+  | "subseasonal_forecast"
+  | "seasonal_forecast"
+  | "annual_outlook"
+  | "climatology";
+```
+
+1. No provider in scope returns `station_observation`. BMKG's village API is `weather_forecast`; ERA5 is `reanalysis`; CHIRPS is `satellite_estimate` blended with gauges. Only user-entered plot measurements produce `field_observation`.
+2. The dashboard must therefore say **"Data cuaca terbaru"** with source and valid time — not "Observed at". `Observed at` is unlocked only when a field observation exists.
+3. Reanalysis may be displayed for the recent past, always labelled, never as "current conditions".
+4. Suitability and anomaly records carry the class of their *evidence*, not of their display date.
 
 ## Consequences
 

@@ -16,7 +16,7 @@ This document is an engineering summary of provider terms, not legal advice. Whe
 | Open-Meteo self-host | depends | AGPLv3 (software), data retains upstream licences | Open-Meteo + upstream | AGPL obligations if modified and offered over network; upstream bucket terms undocumented |
 | ECMWF SEAS5 / EC46 data | Yes (via licensed distributor) | CC BY 4.0 + ECMWF Terms of Use | ECMWF attribution string | none for CC-BY products |
 | Copernicus CDS (ERA5, SEAS5 hindcast) | **Yes** | Licence to Use Copernicus Products | "Contains modified Copernicus Climate Change Service information [year]" | none |
-| CHIRPS | **Yes** | public domain / CC0 | citation requested | none |
+| CHIRPS | **Yes** | public domain **and** CC BY 4.0 | required (CC BY) — cite Funk et al. | none |
 | NASA POWER | Yes | NASA open data policy | attribution per NASA guidance | none |
 | GPM IMERG | Yes | US Government work | citation requested | none |
 
@@ -85,7 +85,7 @@ Licence to Use Copernicus Products: free, commercial use permitted, no endorseme
 
 ## 6. CHIRPS, NASA POWER, IMERG
 
-- **CHIRPS v3.0** — public domain / CC0; citation requested (Funk et al.). No commercial restriction. Prefer v3.0 (2025); v2.0 is archived.
+- **CHIRPS v3.0** — **both** "in the public domain, as registered with Creative Commons" **and** licensed **CC BY 4.0** (verbatim, `chc.ucsb.edu/data/chirps3`), i.e. copyright waived but attribution expected. Citation: Funk et al. No commercial restriction. Prefer v3.0 (2025); v2 production ends after December 2026. `data.chc.ucsb.edu` timed out from this environment while `www.chc.ucsb.edu` responded — so the download host, not the project, is the problem; use GEE or a mirror, and attribute regardless.
 - **NASA POWER** — NASA open data, commercial use allowed, attribution per NASA guidance. `community=AG` provides agronomic parameters.
 - **GPM IMERG V07** — US Government work, effectively public domain; Final product ~3.5 months behind, so NRT use relies on Early/Late runs.
 

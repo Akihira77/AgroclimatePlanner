@@ -31,6 +31,36 @@ Verdict at review time: **not ready for Phase 1** — the horizon map and the an
 5. **Agronomic grade rule made self-consistent**: all four crops' rainfall thresholds are grade C, so v1 hard gates reduce to pH / drainage / paddy water; soybean and chili water dimension is explicitly insufficient in v1.
 6. **Engine shape corrected**: four evaluation bases (daily / weekly / monthly / climatology), per-dimension coverage, no score when a dimension is unknown, cycle start per crop.
 
+## Second review round — external (GPT), 2026-11-18
+
+Verdict from that review: "conditional pass — do Phase 0.1 corrections, then Phase 1". Two of its claims were load-bearing and were checked before changing anything.
+
+### Claim checked and accepted — CHIRPS licensing
+
+Verified at `chc.ucsb.edu/data/chirps3`: CHIRPS3 is **both** public domain (copyright waived) **and** licensed **CC BY 4.0** (attribution expected). The earlier "public domain / CC0" line was incomplete. Corrected in `data-licensing-and-attribution.md` §1/§6 and `weather-source-matrix.md` §D. Also noted: `data.chc.ucsb.edu` times out while `www.chc.ucsb.edu` responds — a host problem, not a project problem.
+
+### Claim checked and conditionally accepted — ECMWF Set VII (13-month forecast)
+
+Verified on ECMWF's dataset page: **Set VII - SEAS is real**, covers forecast months 8–13, is produced quarterly (Feb/May/Aug/Nov, disseminated 5th 12:00 UTC), in GRIB, with monthly means of ensemble means, monthly anomalies, and per-member monthly means/anomalies. That invalidates the earlier flat statement "no annual outlook exists". It is **not** invalidated the other way either: no access route or licence for a third party was verified — it is not in the Open Data portal and no point API is documented. Recorded as **ADR-001 D2a**: months 8–12 stay climatology until a licence enquiry and a GRIB POC succeed. Also recorded: monthly `tp` in that product is a **rate (m/s)**, not mm.
+
+### Claim checked and accepted — "bias-free by construction" was too strong
+
+Removed from D3. Model-relative anomalies cancel the mean model-vs-baseline offset only; seasonal, lead-time and regime errors remain, `biasCorrected` stays `false`, `modelSkill` stays `null`.
+
+### Claim checked and accepted — data classes were too coarse
+
+Replaced the 6-value temporal class with a 9-value `WeatherDataClass` (ADR-001 D9), separating field observation, station observation, satellite estimate, reanalysis, and the three forecast horizons. Consequence: dashboard must say "Data cuaca terbaru", not "Observed at", until a user measurement exists.
+
+### Claim checked and accepted — probes cover one location only
+
+Added `forecast-horizon-capabilities.md` §4 "Validation scope": nothing about Jakarta generalises to a real plot; repeat the suite at real coordinates with served-vs-requested distance recorded before calling a provider locally validated.
+
+### Already fixed before this review arrived
+
+These were flagged by the external review but had already been corrected in the amendment documented above: 50-vs-51 members, `precision` → evaluation basis, cycle start (sowing/transplant), BMKG ~48 h + partial third day, unresolvable agronomic citations, per-dimension `insufficient_data`.
+
+
+
 ## Carried into Phase 1 as required decisions
 
 - Cell-identification contract (requested-cell key, interpolation semantics, polygon → centroid).
