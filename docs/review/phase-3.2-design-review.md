@@ -5,6 +5,15 @@ Nothing in this document was applied. No code, no migration, no role, no grant, 
 policy, no configuration change exists because of it. Every SQL block is labelled
 and unimplemented.
 
+**Reconciled 2026-11-18, after implementation.** Two rows below described the S2
+validation design before it was implemented: §10's `ValidationPipe` row and §18's S2
+row both named a global class-validator pipe. The owner decided Zod-only validation
+bound per parameter (`IG-12`, `phase-3.2-owner-decisions.md`), so both rows were
+updated to name `ZodValidationPipe`. Nothing else in this review was edited, and the
+rest of it still describes `master` at `bf0e593`. Note that `IG-12` was raised after
+this review, so §15's eleven-gate table does not list it; its authority is
+`phase-3.2-owner-decisions.md`.
+
 Repository state reviewed: `master` at `bf0e593`, reviewed again at round 2. Files
 inspected: the Phase 3.2 brief; `packages/database` (`bootstrap/roles.sql`,
 `bootstrap.mjs`, `scripts/lib/{connections,privilege-verification}.mjs`,
@@ -758,7 +767,7 @@ Needed before any endpoint can be written, because none of it exists (`[V]` F6/F
 | `registerRequestSchema` / `loginRequestSchema` | absent | email (trim, lowercase, ≤254), password (policy per `IG-4`) |
 | `authenticatedUserSchema` | absent | `{ id, email, role, locale, timezone, createdAt }` — never `passwordHash` |
 | global prefix `/v1` | absent | `app.setGlobalPrefix("v1")`, with `health` exempt as `api-conventions.md:183` already implies |
-| `ValidationPipe` | absent | global, `whitelist: true`, `forbidNonWhitelisted: true` — this is the mass-assignment control |
+| Zod request validation | absent | `ZodValidationPipe(schema)` bound per controller parameter; strict objects reject unknown keys — this is the mass-assignment control. No global pipe (`IG-12`) |
 | exception filter | absent | maps `ZodError`→400, `23505`→409, `TenantContextError`→500, store outage→503 |
 | cookies / CSRF | absent | `cookie-parser`; double-submit token per `api-conventions.md:196`, details currently unspecified (`IG-8`, `IG-9`) |
 | OpenAPI | promised, absent | `api-conventions.md:3,211-215` and `ADR-002` D4 promise generation from Zod. Adding auth without a generator breaks that promise a second time; at minimum the new schemas must be generator-ready and the gap re-recorded |
@@ -1055,7 +1064,7 @@ earlier and must not be described as authentication progress.
 | Step | Work | Gate |
 |---|---|---|
 | S1 | Contracts: response envelope, error envelope, error-code enum, `requestId` shape. **No auth request/response schemas yet** — those depend on `IG-4` | `IG-5`, `IG-11` |
-| S2 | API plumbing: global prefix `/v1`, `ValidationPipe` (`whitelist`, `forbidNonWhitelisted`), exception filter, request-id middleware, cookie parser, helmet, trust-proxy, CORS, `apps/api` → `@agroclimate/database` dependency and client lifecycle | `IG-11` |
+| S2 | API plumbing: global prefix `/v1`, `ZodValidationPipe` bound per parameter (`IG-12`), exception filter, request-id middleware, cookie parser, helmet, trust-proxy, CORS, `apps/api` → `@agroclimate/database` dependency and client lifecycle | `IG-11`, `IG-12` |
 
 Both write to `apps/api` and `packages/contracts`; they do not touch roles, grants,
 migrations, or the tenant path.

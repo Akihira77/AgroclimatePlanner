@@ -17,21 +17,49 @@ export function testConfig(overrides = {}) {
 }
 
 export function testDatabase() {
-  const state = { created: 0, disconnected: 0, failQuery: false };
+  const state = {
+    created: 0,
+    disconnected: 0,
+    /** Rejects the transaction itself: unreachable host, unusable credential. */
+    failTransaction: false,
+    /** Rejects the statement inside the transaction: a timeout or a cancelled query. */
+    failQuery: false,
+    /** Every `$transaction` options object, in call order. */
+    transactionOptions: [],
+    /** Every statement issued through `$executeRawUnsafe`. */
+    statements: [],
+  };
+
   const factory = () => {
     state.created += 1;
     return {
-      async $queryRaw() {
-        if (state.failQuery) {
+      async $transaction(work, options) {
+        state.transactionOptions.push(options);
+        if (state.failTransaction) {
           throw new Error("connect ECONNREFUSED 127.0.0.1:5442 password=hunter2");
         }
-        return [{ "?column?": 1 }];
+
+        const tx = {
+          async $executeRawUnsafe(sql) {
+            state.statements.push(sql);
+            return 0;
+          },
+          async $queryRaw() {
+            if (state.failQuery) {
+              throw new Error("canceling statement due to statement timeout (57014)");
+            }
+            return [{ "?column?": 1 }];
+          },
+        };
+
+        return work(tx);
       },
       async $disconnect() {
         state.disconnected += 1;
       },
     };
   };
+
   return { state, factory };
 }
 

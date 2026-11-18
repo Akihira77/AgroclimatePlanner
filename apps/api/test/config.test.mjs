@@ -55,7 +55,7 @@ describe("runtime configuration", () => {
   it("defaults cors to the development origin and requires an allowlist in production", () => {
     assert.deepEqual(parse({}).corsOrigins, ["http://localhost:5173"]);
     assert.throws(
-      () => parse({ NODE_ENV: "production", APP_API_DATABASE_URL: "postgresql://a@b/c" }),
+      () => parse({ NODE_ENV: "production", APP_API_DATABASE_URL: "postgresql://app_api@db/app" }),
       ConfigurationError,
     );
 
@@ -89,5 +89,63 @@ describe("runtime configuration", () => {
 
   it("rejects an unknown NODE_ENV", () => {
     assert.throws(() => parse({ NODE_ENV: "staging" }), ConfigurationError);
+  });
+});
+
+describe("runtime credential boundary", () => {
+  const url = (user, password = "s3cretp4ss") => `postgresql://${user}:${password}@db:5432/app`;
+
+  it("accepts only the app_api role", () => {
+    const config = parse({ APP_API_DATABASE_URL: url("app_api") });
+    assert.equal(new URL(config.databaseUrl).username, "app_api");
+  });
+
+  it("rejects every privileged or unrelated role", () => {
+    for (const role of ["migration_owner", "postgres", "app_system", "app_auth", "someone"]) {
+      assert.throws(
+        () => parse({ APP_API_DATABASE_URL: url(role) }),
+        ConfigurationError,
+        `${role} must be rejected`,
+      );
+    }
+  });
+
+  it("decodes a percent-encoded username before comparing", () => {
+    // `%5F` is `_`. The same role written differently is the same role.
+    const config = parse({ APP_API_DATABASE_URL: "postgresql://app%5Fapi:pa%40ss@db:5432/app" });
+    assert.equal(new URL(config.databaseUrl).username, "app%5Fapi");
+  });
+
+  it("does not echo the password or the connection string when rejecting", () => {
+    for (const role of ["migration_owner", "someone"]) {
+      try {
+        parse({ APP_API_DATABASE_URL: url(role) });
+        assert.fail("expected a ConfigurationError");
+      } catch (error) {
+        assert.ok(error instanceof ConfigurationError);
+        assert.equal(error.message.includes("s3cretp4ss"), false, "password leaked");
+        assert.equal(error.message.includes("@db:5432"), false, "connection string leaked");
+        if (role === "someone") {
+          assert.equal(error.message.includes("someone"), false, "arbitrary username echoed");
+        }
+      }
+    }
+  });
+
+  it("derives a development url for app_api and never for a privileged role", () => {
+    const config = parse({});
+    const derived = new URL(config.databaseUrl);
+    assert.equal(derived.username, "app_api");
+    assert.equal(derived.password, "devsecret");
+
+    // A migration credential lying around does not become the runtime one.
+    assert.throws(
+      () =>
+        parseRuntimeConfig({
+          NODE_ENV: "development",
+          MIGRATION_DATABASE_URL: "postgresql://migration_owner:x@db:5432/app",
+        }),
+      ConfigurationError,
+    );
   });
 });

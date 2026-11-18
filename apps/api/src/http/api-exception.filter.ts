@@ -64,12 +64,29 @@ const STATUS_TO_CODE: Readonly<Record<number, ErrorCode>> = {
 const RESOURCE_NOT_FOUND = notFoundErrorCodeSchema.parse("RESOURCE_NOT_FOUND");
 
 /**
- * 4xx statuses Nest itself raises before any handler runs — wrong method, wrong
- * media type, unacceptable response encoding. The status is the precise meaning,
- * and `VALIDATION_FAILED` is the closest closed-set member: the request, not the
- * server, was unacceptable.
+ * 4xx statuses Nest or `body-parser` raise before a handler runs — wrong method,
+ * unacceptable response encoding, unsupported request media type.
+ *
+ * The status is kept because it is the precise transport reason, and the code is
+ * `VALIDATION_FAILED` because that is the closed-set member meaning "the request
+ * itself was unusable". `api-conventions.md` §3 documents that pairing explicitly:
+ * the code names the category, the status refines it, and `400` is merely the
+ * common case. Collapsing these to `400` would delete information the transport
+ * already knows; inventing three codes would grow a contract nobody asked to grow.
  */
 const PASS_THROUGH_4XX = new Set([405, 406, 415]);
+
+/**
+ * A single log line's worth of a failure. Deliberately a fixed field list rather
+ * than free text: the response is sanitised, and the log must not become the leak
+ * path it was cleaned out of the response.
+ */
+type LogField = string | number;
+
+/** The only logger method this filter uses, so a test can pass a recorder. */
+interface MinimalLogger {
+  error(message: string): void;
+}
 
 interface Resolved {
   readonly status: number;
@@ -88,12 +105,20 @@ interface Resolved {
  * 2. An exception that is not an `HttpException`, or whose status is not one the
  *    contract maps, becomes `500 INTERNAL_ERROR`. Failing closed is cheaper than
  *    deciding that an unfamiliar exception is really a `503`.
+ *
+ * A third keeps the log from undoing the second: only correlation, status, code,
+ * and exception class name are written. See `logFailure`.
  */
 @Catch()
 export class ApiExceptionFilter implements ExceptionFilter {
-  private readonly logger = new Logger(ApiExceptionFilter.name);
+  private readonly logger: MinimalLogger;
 
-  constructor(private readonly config: RuntimeConfig) {}
+  constructor(
+    private readonly config: RuntimeConfig,
+    logger: MinimalLogger = new Logger(ApiExceptionFilter.name),
+  ) {
+    this.logger = logger;
+  }
 
   catch(exception: unknown, host: ArgumentsHost): void {
     const http = host.switchToHttp();
@@ -106,14 +131,41 @@ export class ApiExceptionFilter implements ExceptionFilter {
     const resolved = this.resolve(exception);
 
     if (resolved.status >= 500) {
-      // Name and request id only: a message can carry SQL, a connection string,
-      // or a value from the request body. The stack is a development affordance.
-      const name = exception instanceof Error ? exception.name : typeof exception;
-      const suffix = this.config.nodeEnv === "production" ? "" : ` ${String(exception)}`;
-      this.logger.error(`[${requestId}] ${resolved.code} ${name}${suffix}`);
+      this.logFailure(requestId, resolved.status, resolved, exception);
     }
 
     response.status(resolved.status).json(this.body(resolved, requestId));
+  }
+
+  /**
+   * Logs four fields and nothing else: correlation, status, contract code, and the
+   * exception's class name. `exception.message` is not in that list because it is
+   * unbounded text a library wrote — a Prisma error carries the failing SQL, and a
+   * driver error carries the DSN. `stack` is not either: frames name internal
+   * paths and inline values. The sanitised response and this line must not
+   * disagree about what may leave the process, so production and development log
+   * the same fields; debugging uses the request id to correlate with the client's
+   * report, not a leaked stack.
+   */
+  private logFailure(
+    requestId: string,
+    status: number,
+    resolved: Resolved,
+    exception: unknown,
+  ): void {
+    const fields: Record<string, LogField> = {
+      requestId,
+      status,
+      code: resolved.code,
+      exception: exception instanceof Error ? exception.name : typeof exception,
+      env: this.config.nodeEnv,
+    };
+
+    const line = Object.entries(fields)
+      .map(([key, value]) => `${key}=${String(value)}`)
+      .join(" ");
+
+    this.logger.error(line);
   }
 
   private body(resolved: Resolved, requestId: string): ErrorResponse {

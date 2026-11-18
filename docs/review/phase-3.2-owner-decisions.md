@@ -2,11 +2,11 @@
 
 | Field | Value |
 |---|---|
-| Status | **OWNER DECISIONS RECORDED** — 4 of 4 decided on 2026-11-18 |
+| Status | **OWNER DECISIONS RECORDED** — 4 of 4 decided on 2026-11-18, plus 2 follow-ups (`IG-5-A1`, `IG-12`) recorded 2026-11-18 |
 | Prepared from | `8799160` (`docs(review): split approval from implementation dependency`) |
 | Authoritative source | `docs/review/phase-3.2-design-review.md` (verdict: `READY FOR OWNER DECISIONS`) |
 | Decisions requested | 4 — `AG-1`, `AG-2`, `IG-5`, `IG-11` |
-| Owner decisions made so far | **4 of 4** |
+| Owner decisions made so far | **4 of 4**, plus `IG-5-A1` (amendment) and `IG-12` (new gate) |
 | Implementation started | **No** — a decision is not a line of code, a migration, or an ADR |
 | `OPEN-nn` dispositions changed | **No** — `OPEN-01` and `OPEN-13` remain unresolved |
 
@@ -27,7 +27,18 @@ approval. Until then the register's dispositions are unchanged.
 | `AG-1` | **A** — dedicated `app_auth` role, column grants on `app.users` only | 2026-11-18 | Repository owner |
 | `AG-2` | **A** — PostgreSQL `app.sessions`, preserving `ADR-002` D5 | 2026-11-18 | Repository owner |
 | `IG-5` | **A / C-1** — shared envelope plus one new code, `DEPENDENCY_UNAVAILABLE` | 2026-11-18 | Repository owner |
+| `IG-5-A1` | **Add `INTERNAL_ERROR`** (500) — amendment to `IG-5`, recorded 2026-11-18 during S2; `DEPENDENCY_UNAVAILABLE` unchanged | 2026-11-18 | Repository owner |
 | `IG-11` | **`node:test`** for `apps/api` | 2026-11-18 | Repository owner |
+| `IG-12` | **Zod-only request validation**, bound per controller parameter; no global pipe | 2026-11-18 | Repository owner |
+
+`IG-5-A1` is an amendment, not a fifth gate: it extends `IG-5`'s code set and changes
+no other decision. The original four approvals are untouched, and `IG-5`'s text still
+reads "exactly one new code" because that is what was approved at the time. See
+"Amendment 1" after Decision 3.
+
+`IG-12` is a new implementation gate raised during S2, not an amendment: the validation
+engine is not part of the error contract, so it is not an `IG-5` footnote. See
+"Amendment 2" immediately after Amendment 1.
 
 ## Reading legend
 
@@ -669,6 +680,154 @@ Approved by: Repository owner   Date: 2026-11-18
 
 ---
 
+# Amendment 1 — 2026-11-18: `INTERNAL_ERROR` (extends `IG-5`)
+
+**Not part of the original `IG-5` approval.** Decision 3 above added exactly one code,
+`DEPENDENCY_UNAVAILABLE`, and that text is unchanged — including the words "exactly one
+code", which were true of what was approved. This amendment records a second code,
+decided during the S2 implementation review because the gap became concrete there rather
+than remaining hypothetical.
+
+## What was missing
+
+`IG-5` fixed the *authentication* failure vocabulary. It did not say what `500` returns,
+because the table had no `500`: every documented code was a 4xx or one of the two 503s.
+`errorResponseSchema` is a strict object and `errorCodeSchema` is closed, so an
+unexpected exception had no contract-valid body it could produce. S2 requires exactly
+that — "unknown exceptions must fail closed and return a generic internal error
+response" — and the filter could only satisfy it by violating the contract.
+
+| Option | Outcome | Verdict |
+|---|---|---|
+| Reuse `DEPENDENCY_UNAVAILABLE` with `503` | A programming error is reported as an infrastructure outage and becomes retryable; clients retry something that will fail identically | rejected |
+| Emit `500` with an off-contract code | Breaks the closed set and every client's exhaustive switch | rejected |
+| Add one code for `500` | A bug stays a bug and an outage stays an outage | **selected** |
+
+The reason this is a decision rather than an implementation detail is the same reason
+`IG-5` existed: a code that appears first in a `throw` becomes the contract by default.
+
+## The decision
+
+| Field | Value |
+|---|---|
+| ID | `IG-5-A1` |
+| Extends | `IG-5` (A / C-1) — does not replace, reinterpret, or reopen it |
+| Decision | `INTERNAL_ERROR` added to `singletonErrorCodeSchema`; HTTP status `500` |
+| Approved by | Repository owner |
+| Date | 2026-11-18 |
+| Basis | S2 remediation review: the filter cannot fail closed at `500` with the original set |
+| Contract effect | One new singleton code; `NotFoundErrorCode` brand, envelope shapes, and all other codes unchanged |
+
+Conditions attached to it:
+
+1. `INTERNAL_ERROR` maps to `500` and to nothing else. It is not retryable, and no
+   client should treat it as a signal to retry.
+2. It exposes no internal detail — no stack, no SQL, no DSN, no exception message,
+   no submitted value — in the response body **or** in the log. The log line carries
+   `requestId`, `status`, `code`, exception class name, and environment only.
+3. It never displaces a more specific code a handler can justify. A handler that knows
+   what failed maps to the 4xx or 503 that says so; `INTERNAL_ERROR` is the residue.
+4. `PROVIDER_UNAVAILABLE` and `DEPENDENCY_UNAVAILABLE` keep the meanings approved in
+   Decision 3. Nothing here merges or widens them.
+
+## Counts after the amendment
+
+| Field | Value |
+|---|---|
+| Original decisions | **4** — `AG-1`, `AG-2`, `IG-5`, `IG-11` |
+| Amendments | **1** — `IG-5-A1` |
+| Entries in the recorded-decisions table | **5** |
+| `OPEN-nn` dispositions changed | **No** — `OPEN-01` and `OPEN-13` remain unresolved |
+| Other `IG-nn` approved | **None** — `IG-1`–`IG-4` and `IG-6`–`IG-10` remain unanswered |
+
+An amendment is not a new gate and does not unblock anything: `S1` and `S2` were already
+unblocked by `IG-5` and `IG-11`. It narrows what `S2` may emit.
+
+---
+
+# Amendment 2 — 2026-11-18: request validation engine (`IG-12`)
+
+This is a **new implementation gate**, not an `IG-5` amendment. Validation is not part of
+the error contract; it produces an error, but the engine that produces it is a separate
+choice. It is recorded here because this file is the Phase 3.2 decision log.
+
+## What was inconsistent
+
+The architecture already said Zod twice, in prose:
+
+| Fact | Evidence |
+|---|---|
+| `api-conventions.md` names Zod as the request-validation mechanism and promises OpenAPI generated from Zod | `[V]` `docs/architecture/api-conventions.md` §12, §11 |
+| `packages/contracts` defines every shared schema in Zod and is consumed by `apps/api` | `[V]` `packages/contracts/src/*` |
+| S2 shipped a NestJS `ValidationPipe` over `class-validator` decorators instead | `[V]` `ad6235b`, `apps/api/src/http/validation.pipe.ts` at that commit |
+| The design review's own S2 row named that global pipe | `[V]` `phase-3.2-design-review.md:761`, §18 |
+
+Two validation systems in one repository means two error vocabularies, two places to
+change a rule, and an OpenAPI document generated from schemas that are not the ones the
+server enforces. The review row predates implementation and was written before anyone
+had to choose; implementation then chose the wrong side of it.
+
+## The decision
+
+| Field | Value |
+|---|---|
+| ID | `IG-12` |
+| Decision | **Zod is the only request-validation engine.** No global pipe; the schema is bound per controller parameter with `ZodValidationPipe` |
+| Approved by | Repository owner |
+| Date | 2026-11-18 |
+| Applies to | `apps/api`, and any future consumer of `packages/contracts` schemas |
+| Not applied to | the response envelope, error codes, or any migration — this decision adds no schema and no table |
+
+Conditions attached:
+
+1. **One engine.** `class-validator` and `class-transformer` are not dependencies of
+   `apps/api` and must not be reintroduced. A second engine would have to be kept in
+   agreement with the Zod schemas by hand, and would eventually disagree.
+2. **Explicit binding.** `new ZodValidationPipe(schema)` at `@Body`, `@Query`, or
+   `@Param`. A global pipe cannot know which schema belongs to which argument; one that
+   validates without a schema validates nothing, which is worse than visible absence
+   because it looks like coverage.
+3. **Shared schemas first.** Where a shape is also part of the API document, the schema
+   lives in `packages/contracts` — the document and the runtime check are then the same
+   object. Local schemas are for shapes only one endpoint has.
+4. **Strict by schema, not by option.** Unknown keys are rejected because the object is
+   strict. Coercion exists only where a field declares `z.coerce.*`; query parameters
+   arrive as strings and each non-string field says so itself.
+5. **Sanitised details.** `details` carries `{ path, issue }` only — Zod's code and a
+   dotted path. Zod's `message` and `issue.input` are dropped, because a custom message
+   can embed a submitted value and `input` *is* the value.
+
+## Accepted risk
+
+A controller that forgets to bind the pipe performs **no validation on that input**. There
+is no global net to catch it. The mitigation is review plus the rule that every handler
+taking input names a schema at the parameter; a future lint or a spec-generation step
+that fails on an unbound input would close it properly, and neither exists yet.
+
+## Reconciliation of the design review
+
+Two rows in `phase-3.2-design-review.md` described the discarded design: §10's
+`ValidationPipe` row and §18's S2 row. Both were updated to name `ZodValidationPipe`
+bound per parameter, and the file carries a dated reconciliation note at the top so the
+edit is visible rather than silent. No other part of that review was changed — including
+finding F6, which records what was absent at `bf0e593` and remains true of that commit.
+
+## Counts after Amendment 2
+
+| Field | Value |
+|---|---|
+| Original decisions | **4** — `AG-1`, `AG-2`, `IG-5`, `IG-11` |
+| Amendments | **1** — `IG-5-A1` |
+| New gates recorded after the original round | **1** — `IG-12` |
+| Entries in the recorded-decisions table | **6** |
+| `OPEN-nn` dispositions changed | **No** — `OPEN-01` and `OPEN-13` remain unresolved |
+| Other `IG-nn` approved | **None** — `IG-1`–`IG-4`, `IG-6`–`IG-10` remain unanswered |
+
+`IG-12` does not unblock anything. `S2` was already unblocked; it now has one permitted
+validation mechanism instead of a choice.
+
+---
+
 # Decision 4 — IG-11: API Test Runner
 
 **Gate:** implementation gate. Design review §15.2.
@@ -842,7 +1001,7 @@ satisfied — not that the step is complete.
 | S0a | Answer `AG-1`, `AG-2` | — | this document |
 | S0b | Answer `IG-5`, `IG-11` | — | this document |
 | S1 | Contracts: response/error envelope, error-code enum, `requestId` | `IG-5`, `IG-11` | `IG-5` + `IG-11` |
-| S2 | API plumbing: `/v1` prefix, `ValidationPipe`, exception filter, request-id, cookie parser, helmet, trust-proxy, CORS, database client | `IG-11` | `IG-11` (filter needs `IG-5`) |
+| S2 | API plumbing: `/v1` prefix, `ZodValidationPipe` per parameter (`IG-12`), exception filter, request-id, cookie parser, helmet, trust-proxy, CORS, database client | `IG-11`, `IG-12` | `IG-11`, `IG-12` (filter needs `IG-5`) |
 | S3 | Bootstrap `app_auth`: role, secret map, `connections.mjs`, `.env.example` | `AG-1` | `AG-1` |
 | S4 | Migration `auth_boundary`: 2 policies, 2 column grants | S3 | `AG-1` + S3 |
 | S5 | Migration `sessions` + policies + grants + purge function | `AG-2`, S4 | `AG-2` + S4 |

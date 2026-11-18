@@ -41,6 +41,17 @@ const DATABASE_DEFAULTS = {
 
 const DEVELOPMENT_CORS_ORIGIN = "http://localhost:5173";
 
+/** The only role the API may run as. See `assertRuntimeRole`. */
+const RUNTIME_ROLE = "app_api";
+
+/** Roles this project defines that are explicitly not runtime identities. */
+const NON_RUNTIME_ROLES: ReadonlySet<string> = new Set([
+  "migration_owner",
+  "app_system",
+  "app_auth",
+  "postgres",
+]);
+
 /** Trusted-proxy tokens Express understands, minus the unsafe `true`. */
 const TRUST_PROXY_TOKENS = new Set(["loopback", "linklocal", "uniquelocal"]);
 
@@ -85,7 +96,7 @@ function parsePort(value: string | undefined): number {
 function parseDatabaseUrl(env: EnvironmentInput, nodeEnv: NodeEnvironment): string {
   const explicit = env["APP_API_DATABASE_URL"];
   if (explicit !== undefined && explicit !== "") {
-    assertPostgresUrl(explicit, "APP_API_DATABASE_URL");
+    assertRuntimeRole(parsePostgresUrl(explicit, "APP_API_DATABASE_URL"));
     return explicit;
   }
 
@@ -105,10 +116,10 @@ function parseDatabaseUrl(env: EnvironmentInput, nodeEnv: NodeEnvironment): stri
   const host = env["POSTGRES_HOST"] ?? DATABASE_DEFAULTS.host;
   const port = env["POSTGRES_PORT"] ?? DATABASE_DEFAULTS.port;
   const database = env["POSTGRES_DB"] ?? DATABASE_DEFAULTS.database;
-  return `postgresql://app_api:${encodeURIComponent(password)}@${host}:${port}/${database}?schema=app`;
+  return `postgresql://${RUNTIME_ROLE}:${encodeURIComponent(password)}@${host}:${port}/${database}?schema=app`;
 }
 
-function assertPostgresUrl(value: string, variable: string): void {
+function parsePostgresUrl(value: string, variable: string): URL {
   let url: URL;
   try {
     url = new URL(value);
@@ -118,6 +129,40 @@ function assertPostgresUrl(value: string, variable: string): void {
   if (url.protocol !== "postgresql:" && url.protocol !== "postgres:") {
     throw new ConfigurationError(`${variable} must use the postgresql: scheme`);
   }
+  return url;
+}
+
+/**
+ * The runtime identity is not a convention, it is the boundary.
+ *
+ * `app_api` is the role the RLS policies and column grants in `ADR-003` are
+ * written against. A URL naming any other role — `migration_owner` (schema owner),
+ * `app_system` (`BYPASSRLS`), `app_auth`, or a superuser — would hand the
+ * tenant-facing process exactly the privilege the design keeps away from it. A
+ * wrong credential must stop the boot, never be rewritten to the right one.
+ *
+ * Only the role name is ever named in an error. The username is percent-decoded
+ * first because `app%5Fapi` is the same role, and the password is never read.
+ */
+function assertRuntimeRole(url: URL): void {
+  let username: string;
+  try {
+    username = decodeURIComponent(url.username);
+  } catch {
+    throw new ConfigurationError("APP_API_DATABASE_URL has a malformed username");
+  }
+
+  if (username === RUNTIME_ROLE) return;
+
+  if (NON_RUNTIME_ROLES.has(username)) {
+    throw new ConfigurationError(
+      `APP_API_DATABASE_URL must connect as ${RUNTIME_ROLE}; ${username} is not a runtime identity`,
+    );
+  }
+
+  throw new ConfigurationError(
+    `APP_API_DATABASE_URL must connect as ${RUNTIME_ROLE}; refusing an unrecognised role`,
+  );
 }
 
 function parseCorsOrigins(env: EnvironmentInput, nodeEnv: NodeEnvironment): readonly string[] {

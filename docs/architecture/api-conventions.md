@@ -49,10 +49,13 @@ the shape.
 
 | Status | Code family | Meaning |
 |---|---|---|
-| 400 | `VALIDATION_FAILED` | Zod rejected the body/query |
+| 400 | `VALIDATION_FAILED` | the request body, query, or shape was rejected |
 | 401 | `UNAUTHENTICATED` | no/expired session |
 | 403 | `FORBIDDEN` | authenticated, not owner |
 | 404 | `*_NOT_FOUND` | missing or not owned (never distinguish the two) |
+| 405 | `VALIDATION_FAILED` | method not supported by that path; rejected before any handler ran |
+| 406 | `VALIDATION_FAILED` | no acceptable response representation; rejected before any handler ran |
+| 415 | `VALIDATION_FAILED` | unsupported request media type; rejected before any handler ran |
 | 409 | `CONFLICT` | duplicate slug, published profile edit |
 | 422 | `INSUFFICIENT_DATA` | agronomic input missing; body lists `missingInputs[]` |
 | 429 | `RATE_LIMITED` | with `Retry-After` |
@@ -74,10 +77,16 @@ and one shared shape would either drop fields or describe them wrongly.
 `RESOURCE_NOT_FOUND` is the family's generic member, used when a path names no
 resource at all. It is not an endpoint's code; a handler that knows which noun is
 missing returns that noun (`FIELD_NOT_FOUND`), validated through
-`notFoundErrorCodeSchema`. The filter also keeps `405`/`406`/`415` with their own
-status and falls back to `VALIDATION_FAILED` — the request, not the server, was
-unacceptable — and maps every other unmapped status to `500 INTERNAL_ERROR` rather
-than inventing a code for it.
+`notFoundErrorCodeSchema`.
+
+`VALIDATION_FAILED` therefore appears against four statuses, and the relationship is
+stated rather than implied: the **code names the category** — the request itself was
+unusable — and the **status refines it**. `400` is the ordinary case; `405`, `406`, and
+`415` are raised by Nest or `body-parser` before any handler runs, and they keep their
+transport meaning instead of being flattened to `400`. The alternatives were worse:
+collapsing them deletes a fact the transport already knows, and three new codes would
+grow a closed set to describe three conditions no v1 endpoint chooses. Every other
+unmapped status becomes `500 INTERNAL_ERROR` rather than inventing a code for it.
 
 `DATA_STALE` is **not** an error status. Stale-but-usable data returns `200` with `freshness.dataAvailability = "stale"` and its reason. Mapping staleness to `503` would train clients to retry a request that can be answered, and would hide the distinction between "old" and "absent". Full matrix in `provenance-contract.md` §7.
 
@@ -252,15 +261,35 @@ The API exposes `engineVersion`, `profileVersionId`, `derivationVersion`, `input
 Implemented in `apps/api` (Phase 3.2, step S2). Nothing here changes the response
 contract above; it fixes how a request becomes a response.
 
-- **Validation.** One global `ValidationPipe`: `whitelist`, `forbidNonWhitelisted`,
-  `transform`, and `enableImplicitConversion: false`. An unknown property is a `400`
-  `VALIDATION_FAILED`, not a silently dropped field, and a query string `"3"` stays a
-  string until a DTO declares otherwise. `details` carries `{ path, issue }` entries
-  describing the failure — never the submitted value.
+- **Validation.** Zod is the only validation engine; `class-validator` and
+  `class-transformer` are not dependencies of `apps/api`. There is **no global pipe**,
+  because a global pipe would have to guess which schema applies to which argument, and
+  one that validates without a schema validates nothing. A controller binds
+  `new ZodValidationPipe(schema)` at the parameter boundary, and the schema is either a
+  shared one from `packages/contracts` — the same schema the OpenAPI document is
+  generated from — or a local one for a query shape only that endpoint uses.
+  - Unknown keys are rejected because the schema is a strict object, not because a pipe
+    option says so. Nothing is stripped silently.
+  - Coercion is opt-in per field (`z.coerce.number()`). Without it `"3"` stays a string
+    and fails an integer rule; nothing converts implicitly. Query parameters arrive as
+    strings, so every non-string query field declares its own conversion.
+  - The pipe returns Zod's parsed output, so a schema's `.transform()` is part of the
+    value the handler receives.
+  - `details` is `[{ path, issue }]`: `issue` is Zod's code (`invalid_type`,
+    `unrecognized_keys`, `too_small`, `invalid_format`, …) and `path` is dotted with
+    `[n]` for array indices and `(root)` for the whole value. Zod's message and
+    `issue.input` are both dropped — a custom message can embed a submitted value, and
+    `input` is the value.
+  - Entries are sorted by path then code, so the same input produces the same list
+    regardless of key order.
 - **Errors.** One global exception filter. It is the only place an HTTP status is
   chosen, it validates what it is about to send against `errorResponseSchema`, and it
   falls back to `500 INTERNAL_ERROR` if that validation fails. Unrecognised
-  exceptions never contribute their message.
+  exceptions never contribute their message. A `5xx` writes exactly one log line —
+  `requestId`, `status`, `code`, the exception's class name, and the environment — and
+  never the message, the stack, a SQL statement, a DSN, or a submitted value.
+  Production and development log the same fields, because the response is sanitised
+  and the log must not become the path that was closed.
 - **CORS.** Explicit allowlist from `CORS_ORIGINS` (comma-separated). Credentials are
   not enabled — no cookie is issued by this phase. In production the variable is
   required; in development it defaults to `http://localhost:5173`. An invalid entry
@@ -274,12 +303,19 @@ contract above; it fixes how a request becomes a response.
   of this phase, and a secret would imply a trust decision nobody has made yet.
 - **Database.** The API connects as `app_api` through `APP_API_DATABASE_URL`. Outside
   development that variable is required; inside development it is derived from
-  `APP_API_PASSWORD` and the shared database defaults. `MIGRATION_DATABASE_URL` is
-  never read by the API — it carries schema-owner privileges the runtime must not hold.
-  Missing configuration fails startup rather than falling back to another role.
-- **Readiness.** `/health/ready` runs `SELECT 1` through the pooled client under a
-  bounded timeout and returns `503 DEPENDENCY_UNAVAILABLE` when it fails or times out.
-  Redis is not checked because it is not provisioned.
+  `APP_API_PASSWORD` and the shared database defaults. The role is enforced, not
+  assumed: a URL naming `migration_owner`, `app_system`, `app_auth`, `postgres`, or any
+  other username fails startup. It is rejected rather than rewritten to `app_api`,
+  because a wrong credential is a fact an operator needs to see, not something to
+  paper over. `MIGRATION_DATABASE_URL` is never read by the API — it carries
+  schema-owner privileges the runtime must not hold. Missing configuration fails
+  startup rather than falling back to another role.
+- **Readiness.** `/health/ready` runs `SELECT 1` inside a transaction whose
+  `statement_timeout` is the readiness bound, so PostgreSQL cancels the statement
+  itself; Prisma's `maxWait` bounds the wait for a connection and its `timeout`
+  bounds and rolls back the transaction. Waiting for a connection is bounded on the
+  client side only — the pool's own connect attempt is not aborted. Redis is not
+  checked because it is not provisioned.
 - **Tests.** `pnpm --filter @agroclimate/api test` builds and runs `node --test`. HTTP
   plumbing tests do not need a live PostgreSQL; the database token is replaced with a
   controlled double. A double proves lifecycle wiring, not connectivity or privilege.

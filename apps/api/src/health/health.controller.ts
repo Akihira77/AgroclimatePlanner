@@ -39,35 +39,47 @@ export class HealthController {
   }
 
   /**
-   * Readiness, including the database. `SELECT 1` through the pooled client is
-   * the cheapest statement that proves a connection can be obtained — a pool
-   * that exists but cannot connect is exactly the failure this must not miss.
+   * Readiness, including the database.
+   *
+   * Three bounds, and they cover different things:
+   *
+   * - `SET LOCAL statement_timeout` is the only one that bounds *the database
+   *   doing the work*. PostgreSQL aborts the statement at the deadline and returns
+   *   `57014`, so the server stops executing; the connection is then free. This was
+   *   verified against the development server, not assumed: `SET LOCAL
+   *   statement_timeout = 200; SELECT pg_sleep(1);` returns
+   *   `ERROR: canceling statement due to statement timeout`.
+   * - `maxWait` bounds waiting for a pooled connection. It is a client-side
+   *   rejection: the pool's own connect attempt is not aborted by it, so a host
+   *   that blackholes SYNs can still leave one pending attempt behind. It
+   *   eventually fails on TCP timeout.
+   * - `timeout` bounds the transaction as a whole and makes Prisma roll it back,
+   *   which is what releases the connection back to the pool.
+   *
+   * `Promise.race` was the previous mechanism and bounded only how long the HTTP
+   * response waited; the query kept running. `SET LOCAL` is scoped to the
+   * transaction, so it cannot leak into any other borrower of the same connection.
    *
    * Redis is not checked: it is not provisioned, and reporting on a dependency
-   * that does not exist would be a lie that is permanently red.
+   * that does not exist would be permanently red.
    */
   @Get("ready")
   async ready(): Promise<ReadyResponse> {
     try {
-      await withTimeout(this.client.$queryRaw`SELECT 1`, READINESS_TIMEOUT_MS);
+      await this.client.$transaction(
+        async (tx) => {
+          // A constant from this file, never a caller value, so interpolation is
+          // safe; `SET` does not accept bind parameters.
+          await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = ${READINESS_TIMEOUT_MS}`);
+          await tx.$queryRaw`SELECT 1`;
+        },
+        { timeout: READINESS_TIMEOUT_MS, maxWait: READINESS_TIMEOUT_MS },
+      );
     } catch {
-      // The reason stays in the log at the filter level; a probe response is not
-      // the place to describe a connection string to an unauthenticated caller.
+      // The reason stays out of the probe response; the filter logs the code and
+      // the request id, nothing more.
       throw new ServiceUnavailableException({ code: "DEPENDENCY_UNAVAILABLE" });
     }
     return { status: "ok", checks: { database: "ok" } };
-  }
-}
-
-async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new Error(`readiness check exceeded ${ms} ms`)), ms);
-  });
-
-  try {
-    return await Promise.race([work, timeout]);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
   }
 }

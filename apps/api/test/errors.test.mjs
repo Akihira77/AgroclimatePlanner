@@ -15,8 +15,14 @@ import { ApiExceptionFilter } from "../dist/http/api-exception.filter.js";
 import { testConfig } from "./helpers.mjs";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DEFAULT_REQUEST_ID = "0b1f5e2a-9d3c-4a5b-8c7d-6e5f4a3b2c1d";
 
-function run(exception, requestId = "0b1f5e2a-9d3c-4a5b-8c7d-6e5f4a3b2c1d") {
+function recordLog() {
+  const lines = [];
+  return { lines, logger: { error: (message) => lines.push(message) } };
+}
+
+function run(exception, requestId = DEFAULT_REQUEST_ID, logger) {
   // `null` means "the middleware never ran", so the property is absent rather
   // than undefined.
   const request = requestId === null ? {} : { requestId };
@@ -44,7 +50,12 @@ function run(exception, requestId = "0b1f5e2a-9d3c-4a5b-8c7d-6e5f4a3b2c1d") {
     }),
   };
 
-  new ApiExceptionFilter(testConfig()).catch(exception, host);
+  const filter =
+    logger === undefined
+      ? new ApiExceptionFilter(testConfig(), { error: () => {} })
+      : new ApiExceptionFilter(testConfig(), logger);
+
+  filter.catch(exception, host);
 
   assert.equal(
     errorResponseSchema.safeParse(response.body).success,
@@ -80,6 +91,16 @@ describe("exception filter", () => {
     const provider = run(new ServiceUnavailableException({ code: "PROVIDER_UNAVAILABLE" }));
     assert.equal(provider.statusCode, 503);
     assert.equal(provider.body.error.code, "PROVIDER_UNAVAILABLE");
+  });
+
+  it("keeps transport 4xx statuses and documents VALIDATION_FAILED as their code", () => {
+    // The contract says the code names the category (the request was unusable)
+    // and the status refines it. These three are raised before a handler runs.
+    for (const status of [405, 406, 415]) {
+      const response = run(new HttpException("transport rejection", status));
+      assert.equal(response.statusCode, status);
+      assert.equal(response.body.error.code, "VALIDATION_FAILED");
+    }
   });
 
   it("ignores a code outside the contract", () => {
@@ -130,5 +151,53 @@ describe("exception filter", () => {
     const response = run(new Error("boom"), null);
     assert.match(response.body.error.requestId, UUID);
     assert.equal(response.headers["x-request-id"], response.body.error.requestId);
+  });
+});
+
+describe("exception filter logging", () => {
+  it("never writes the exception message, the stack, or a submitted value", () => {
+    const error = new Error(
+      'relation "app.users" does not exist; postgresql://app_api:hunter2@db/app',
+    );
+    error.stack =
+      "Error: boom\n    at handler (SELECT password_hash FROM app.users WHERE email='a@b.c')";
+
+    const { lines, logger } = recordLog();
+    run(error, DEFAULT_REQUEST_ID, logger);
+
+    assert.equal(lines.length, 1, "one line per failure");
+    const line = lines[0];
+
+    for (const leak of [
+      "hunter2",
+      "app.users",
+      "password_hash",
+      "SELECT",
+      "at handler",
+      "a@b.c",
+      "boom",
+    ]) {
+      assert.equal(line.includes(leak), false, `logged ${leak}`);
+    }
+
+    assert.equal(line.includes(error.message), false);
+    assert.equal(error.stack === undefined || line.includes(error.stack), false);
+  });
+
+  it("keeps the correlation fields an operator needs", () => {
+    const { lines, logger } = recordLog();
+    run(new Error("boom"), DEFAULT_REQUEST_ID, logger);
+
+    const line = lines[0];
+    assert.equal(line.includes(`requestId=${DEFAULT_REQUEST_ID}`), true);
+    assert.equal(line.includes("status=500"), true);
+    assert.equal(line.includes("code=INTERNAL_ERROR"), true);
+    assert.equal(line.includes("exception=Error"), true);
+  });
+
+  it("stays silent for a client error", () => {
+    const { lines, logger } = recordLog();
+    run(new BadRequestException(), DEFAULT_REQUEST_ID, logger);
+    assert.equal(lines.length, 0);
   });
 });

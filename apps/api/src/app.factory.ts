@@ -12,7 +12,6 @@ import { AppModule } from "./app.module.js";
 import type { RuntimeConfig } from "./config/runtime-config.js";
 import { ApiExceptionFilter } from "./http/api-exception.filter.js";
 import { requestIdMiddleware } from "./http/request-id.middleware.js";
-import { createValidationPipe } from "./http/validation.pipe.js";
 
 export interface CreateApplicationOptions {
   readonly config: RuntimeConfig;
@@ -69,7 +68,9 @@ export async function createApplication(
     maxAge: 600,
   });
 
-  app.useGlobalPipes(createValidationPipe());
+  // No global validation pipe: Zod schemas are bound per parameter with
+  // `ZodValidationPipe`, because a global pipe has no way to know which schema
+  // belongs to which argument and would silently validate nothing.
   app.useGlobalFilters(new ApiExceptionFilter(config));
 
   // Probes stay outside the version prefix: a version bump must not break the
