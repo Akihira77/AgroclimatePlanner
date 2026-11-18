@@ -299,6 +299,15 @@ contract above; it fixes how a request becomes a response.
     path had to be cut at a segment boundary to stay inside 200 characters.
     `validationIssueSchema` rejects everything else — free text, a newline, a
     non-canonical index (`[007]`), a truncation marker that is not last.
+  - Separators are part of the grammar, not decoration. A `.` only separates two
+    identifiers, so `a.[0]`, `[0].`, and `a..b` are rejected: a bracket token needs no
+    separator (that is why `items[0][1]` is legal — an index is not a member name and
+    cannot be mistaken for one), and a path cannot open or end with a dot.
+  - A numeric segment is rendered as `[n]` only if it is a canonical index — a
+    non-negative integer of at most ten digits. `toIssues` is exported, so the segment
+    is not guaranteed to have come from Zod, and a negative, fractional, non-finite, or
+    over-long number falls back to the same `[…n]` marker as an unprintable name
+    instead of being interpolated into a path the contract would refuse.
   - That matters because `ValidationFailedException` is a class inside the process, not
     a capability: a caller can construct one without ever passing through Zod. A path
     outside the grammar costs the response its `details` and nothing else — the `400

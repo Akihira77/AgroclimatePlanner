@@ -451,8 +451,8 @@ approvals, one amendment `IG-5-A1`, one later gate `IG-12`).
 
 | Step | Status | Commit | What exists |
 |---|---|---|---|
-| S1 — contracts | **implemented** | `c44cf5b`, `0bb9792`, `c762171` | response and error envelopes, `errorCodeSchema` with the branded `NotFoundErrorCode`, `requestIdSchema`, and `validationDetailsSchema` with the bounded path grammar |
-| S2 — API plumbing | **implemented and remediated** | `ad6235b`, `6d36741`, `c762171` | `/v1` prefix, request-id middleware, exception filter, `ZodValidationPipe` bound per parameter, `cookie-parser`, helmet, explicit CORS allowlist, explicit trust proxy, database client + lifecycle, `/health` and `/health/ready` |
+| S1 — contracts | **implemented** | `c44cf5b`, `0bb9792`, `c762171`, `38486fd` | response and error envelopes, `errorCodeSchema` with the branded `NotFoundErrorCode`, `requestIdSchema`, and `validationDetailsSchema` — bounded details at `c762171`, the encoded path grammar enforced in the contract at `38486fd` |
+| S2 — API plumbing | **implemented and remediated** | `ad6235b`, `6d36741`, `c762171`, `38486fd` | `/v1` prefix, request-id middleware, exception filter, `ZodValidationPipe` bound per parameter, `cookie-parser`, helmet, explicit CORS allowlist, explicit trust proxy, database client + lifecycle, `/health` and `/health/ready` |
 | S3 — `app_auth` bootstrap | not started | — | — |
 | S4 — `auth_boundary` migration | not started | — | — |
 | S5 — `sessions` migration | not started | — | — |
@@ -469,14 +469,18 @@ What S2 deliberately does not contain: an auth endpoint, session issuance, an
 unresolved — an approval and an implementation are not a migration, and the ADRs
 that would move them are not written.
 
-Verification at `c762171` (the S2 path-hardening commit; `6d36741` was green before it),
-run rather than assumed:
+Verification history, kept in order because the three commits fixed different things:
+`6d36741` was green on its own, `c762171` bounded the `details` boundary and the
+generated path, `38486fd` moved the grammar into the contract and made producer and
+contract agree. The parser and numeric-segment hardening that follows `38486fd` is
+still an uncommitted working tree, verified but not yet reviewed; the numbers below
+are from that tree and separately from `38486fd` where they differ.
 
 | Check | Result |
 |---|---|
 | `pnpm install --frozen-lockfile` | exit 0 |
 | `pnpm build` / `typecheck` / `lint` | 0 / 0 / 0 |
-| `pnpm test` | 0 — api 72, database 9, contracts 182, 0 failing |
+| `pnpm test` | 0 — api 76 (`38486fd`: 72), database 9, contracts 187 (`38486fd`: 182), 0 failing |
 | `pnpm exec prettier --check .` | 0 |
 | `git diff --check` | 0 |
 

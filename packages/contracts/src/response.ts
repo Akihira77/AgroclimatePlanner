@@ -129,8 +129,24 @@ const WORD_CHARACTER = /[_\p{L}\p{N}]/uy;
 /** No leading zeros: `[0]` and `[10]` are indexes, `[007]` is neither one thing nor the other. */
 const CANONICAL_INDEX = /^(0|[1-9][0-9]{0,9})$/;
 
+/** The largest index the grammar's ten digits can spell, so both forms describe one set. */
+const MAX_ARRAY_INDEX = 9_999_999_999;
+
 export function isSafeIdentifierSegment(segment: string): boolean {
   return IDENTIFIER_SEGMENT.test(segment);
+}
+
+/**
+ * The numeric counterpart of `CANONICAL_INDEX`, exported because the producer holds
+ * a number and the parser holds digits.
+ *
+ * It is deliberately not `Number.isInteger` alone: `1e21` is an integer whose
+ * `String()` is `"1e+21"`, which is neither a canonical index nor a valid path
+ * segment. Rejecting here is what keeps the producer from emitting a path the
+ * contract would refuse.
+ */
+export function isCanonicalArrayIndex(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0 && value <= MAX_ARRAY_INDEX;
 }
 
 /**
@@ -155,46 +171,85 @@ export function isSafeValidationPath(path: string): boolean {
   if (path === VALIDATION_ROOT_PATH) return true;
   if (path.length === 0 || path.length > MAX_VALIDATION_PATH_LENGTH) return false;
 
+  // Where the reader is, not what it has seen. Three states are enough because the
+  // grammar only ever asks one question at a time: which token may come next.
+  // `expect-separator` is also the only acceptable resting state, so a trailing dot
+  // or a trailing bracket run that half-parses cannot fall out of the loop as valid.
+  let state: PathState = "expect-token";
   let index = 0;
-  let first = true;
 
   while (index < path.length) {
+    // Checked before the bracket branch: after a dot, a bracket is not a token that
+    // may follow, and the identifier read is what refuses it — a dot separates two
+    // identifiers and nothing else.
+    if (state === "expect-identifier") {
+      const start = index;
+      index = readWord(path, index);
+      if (!isSafeIdentifierSegment(path.slice(start, index))) return false;
+      state = "expect-separator";
+      continue;
+    }
+
+    // Legal here and only here: as the last token. A marker with anything after it
+    // would claim the path continues past a cut that cannot be resumed.
     if (path.startsWith(VALIDATION_TRUNCATION_MARKER, index)) {
       return index + VALIDATION_TRUNCATION_MARKER.length === path.length;
     }
 
-    if (path[index] === "[") {
-      const ordinal = path.startsWith("[…", index);
-      const digitsStart = index + (ordinal ? 2 : 1);
-      let cursor = digitsStart;
-
-      while (cursor < path.length) {
-        const code = path.charCodeAt(cursor);
-        if (code < 48 || code > 57) break;
-        cursor += 1;
-      }
-
-      if (cursor === digitsStart || path[cursor] !== "]") return false;
-      if (!CANONICAL_INDEX.test(path.slice(digitsStart, cursor))) return false;
-
-      index = cursor + 1;
-      first = false;
+    if (state === "expect-separator" && path[index] === ".") {
+      index += 1;
+      state = "expect-identifier";
       continue;
     }
 
-    if (!first) {
-      if (path[index] !== ".") return false;
-      index += 1;
+    // Brackets need no separator of their own, which is why `items[0][1]` is legal:
+    // an index is not a member name and cannot be confused with one.
+    if (path[index] === "[") {
+      const end = readBracket(path, index);
+      if (end < 0) return false;
+      index = end;
+      state = "expect-separator";
+      continue;
     }
 
-    const segmentStart = index;
-    index = readWord(path, index);
-    if (!isSafeIdentifierSegment(path.slice(segmentStart, index))) return false;
+    if (state === "expect-token") {
+      const start = index;
+      index = readWord(path, index);
+      if (!isSafeIdentifierSegment(path.slice(start, index))) return false;
+      state = "expect-separator";
+      continue;
+    }
 
-    first = false;
+    // In `expect-separator` with something that is not a separator: `a b`, `[0]a`.
+    return false;
   }
 
-  return true;
+  return state === "expect-separator";
+}
+
+/** `expect-token` only until the first token is read; `expect-identifier` only after a `.`. */
+type PathState = "expect-token" | "expect-separator" | "expect-identifier";
+
+/**
+ * Reads `[n]` or `[…n]` and returns the index just past the closing bracket, or `-1`
+ * when the token is unreadable. Both forms are one branch because they differ only
+ * in where the digits start and how many punctuation characters precede them.
+ */
+function readBracket(path: string, start: number): number {
+  const ordinal = path.startsWith("[…", start);
+  const digitsStart = start + (ordinal ? 2 : 1);
+  let cursor = digitsStart;
+
+  while (cursor < path.length) {
+    const code = path.charCodeAt(cursor);
+    if (code < 48 || code > 57) break;
+    cursor += 1;
+  }
+
+  if (cursor === digitsStart || path[cursor] !== "]") return -1;
+  if (!CANONICAL_INDEX.test(path.slice(digitsStart, cursor))) return -1;
+
+  return cursor + 1;
 }
 
 /** Advances over the identifier tail, one code point at a time. */

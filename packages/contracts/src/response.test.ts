@@ -4,6 +4,7 @@ import {
   envelopeSchema,
   errorCodeSchema,
   errorResponseSchema,
+  isCanonicalArrayIndex,
   MAX_VALIDATION_ISSUES,
   MAX_VALIDATION_PATH_LENGTH,
   notFoundErrorCodeSchema,
@@ -213,6 +214,22 @@ describe("validationDetailsSchema", () => {
     }
   });
 
+  it("allows adjacent bracket tokens, which the producer emits for nested arrays", () => {
+    for (const path of ["items[0][1]", "a[…1][2]", "[0][1]", "items[0][1].id", "[0][1][2]"]) {
+      const result = validationIssueSchema.safeParse({ path, issue: "invalid_type" });
+      expect(result.success, JSON.stringify(path)).toBe(true);
+    }
+  });
+
+  it("does not let a dot introduce a bracket token", () => {
+    // A dot separates two identifiers. `a.[0]` would claim the array index is a
+    // member name, which the producer never emits and the reader cannot interpret.
+    for (const path of ["[0].", "[0]..a", "a.[0]", "a.[…1]", "items[0].", "items[0]..id"]) {
+      const result = validationIssueSchema.safeParse({ path, issue: "invalid_type" });
+      expect(result.success, JSON.stringify(path)).toBe(false);
+    }
+  });
+
   it("accepts a path at the length limit and rejects one past it", () => {
     const atLimit = Array.from({ length: 67 }, () => "ab").join(".");
     expect(atLimit).toHaveLength(MAX_VALIDATION_PATH_LENGTH);
@@ -298,5 +315,25 @@ describe("validationDetailsSchema", () => {
       issue: "invalid_type",
     }));
     expect(validationDetailsSchema.safeParse(tooMany).success).toBe(false);
+  });
+});
+
+describe("isCanonicalArrayIndex", () => {
+  it("accepts the indexes the grammar can spell", () => {
+    for (const value of [0, 1, 12, 1234567890, 9_999_999_999]) {
+      expect(isCanonicalArrayIndex(value), String(value)).toBe(true);
+    }
+  });
+
+  it("rejects numbers that would render outside the grammar", () => {
+    for (const value of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(isCanonicalArrayIndex(value), String(value)).toBe(false);
+    }
+  });
+
+  it("rejects a value past the ten-digit limit, before `String()` turns it into an exponent", () => {
+    expect(isCanonicalArrayIndex(10_000_000_000)).toBe(false);
+    expect(isCanonicalArrayIndex(1e21)).toBe(false);
+    expect(String(1e21)).toBe("1e+21");
   });
 });

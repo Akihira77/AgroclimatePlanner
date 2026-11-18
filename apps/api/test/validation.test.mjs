@@ -301,3 +301,48 @@ describe("validation path safety", () => {
     ]);
   });
 });
+
+describe("producer and contract agree on numeric segments", () => {
+  const rendered = (path) => toIssues([{ code: "invalid_type", path, message: "m" }]);
+
+  it("renders canonical indexes as array indexes", () => {
+    assert.equal(rendered([0])[0].path, "[0]");
+    assert.equal(rendered([1])[0].path, "[1]");
+    assert.equal(rendered([12])[0].path, "[12]");
+    assert.equal(rendered([0, 1])[0].path, "[0][1]");
+    assert.equal(rendered(["items", 0, "id"])[0].path, "items[0].id");
+  });
+
+  it("never interpolates a number the contract would refuse", () => {
+    // `toIssues` is exported, so the segment is not necessarily one Zod produced.
+    const cases = [
+      [-1, "[…1]"],
+      [1.5, "[…1]"],
+      [Number.NaN, "[…1]"],
+      [Number.POSITIVE_INFINITY, "[…1]"],
+      [Number.NEGATIVE_INFINITY, "[…1]"],
+      [1_000_000_000_000, "[…1]"],
+    ];
+
+    for (const [segment, expected] of cases) {
+      const details = rendered([segment]);
+
+      assert.equal(details[0].path, expected, String(segment));
+      assert.equal(details[0].path.includes(String(segment)), false, `leaked ${segment}`);
+      assert.equal(validationDetailsSchema.safeParse(details).success, true);
+    }
+  });
+
+  it("keeps mixed and adjacent segments renderable", () => {
+    assert.equal(rendered(["a", -1, "b"])[0].path, "a[…1].b");
+    assert.equal(rendered([-1, 0, Number.NaN])[0].path, "[…1][0][…2]");
+    assert.equal(validationDetailsSchema.safeParse(rendered([-1, 0, Number.NaN])).success, true);
+  });
+
+  it("still truncates at a token boundary once a path outgrows the limit", () => {
+    const long = rendered(Array.from({ length: 40 }, () => "abcdefghij"));
+    assert.equal(long[0].path.length, 200);
+    assert.equal(long[0].path.endsWith("[…]"), true);
+    assert.equal(validationDetailsSchema.safeParse(long).success, true);
+  });
+});

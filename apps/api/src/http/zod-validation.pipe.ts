@@ -1,6 +1,7 @@
 import type { ArgumentMetadata, PipeTransform } from "@nestjs/common";
 import type { ValidationIssue } from "@agroclimate/contracts";
 import {
+  isCanonicalArrayIndex,
   isSafeIdentifierSegment,
   MAX_VALIDATION_ISSUES,
   MAX_VALIDATION_PATH_LENGTH,
@@ -120,7 +121,17 @@ function chunksFor(path: readonly PropertyKey[]): string[] {
 
   for (const segment of path) {
     if (typeof segment === "number") {
-      chunks.push(`[${segment}]`);
+      // Zod puts array indexes here and they are always canonical, but `toIssues`
+      // is exported: a negative, fractional, non-finite, or over-long number would
+      // otherwise be interpolated into a path the contract must reject. It falls
+      // through to the same ordinal marker as an unprintable name.
+      if (isCanonicalArrayIndex(segment)) {
+        chunks.push(`[${segment}]`);
+        continue;
+      }
+
+      unnamed += 1;
+      chunks.push(`[…${unnamed}]`);
       continue;
     }
 
