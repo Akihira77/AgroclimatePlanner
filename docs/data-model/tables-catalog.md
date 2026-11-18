@@ -10,8 +10,9 @@ already given (`domain-model.md` §3 invariant).
 
 **No agronomic threshold is invented in this document.** Every value that appears
 below is a *column definition*, not a number. The values themselves come from
-`docs/research/agronomic-reference-matrix.md`, are graded A–D there, and are
-seeded in Phase 3 with their `source_refs`.
+`docs/research/agronomic-reference-matrix.md`, are graded A–D there, and are seeded
+later with their `source_refs`. Phase 3 created the tables; it did not seed them,
+and the catalog is empty.
 
 ---
 

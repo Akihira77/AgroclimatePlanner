@@ -114,7 +114,7 @@ Rejected: a separate `contextHash` for briefings (R14), one descriptor shape wit
 
 Phase 2 readiness: **yes, and no further architecture pass is warranted**. Remaining uncertainty is implementation, which documents cannot resolve.
 
-## Phase 2 — Implementation (in progress)
+## Phase 2 — Implementation (**complete**)
 
 | Sub-phase | Outcome | Evidence |
 |---|---|---|
@@ -130,6 +130,8 @@ Phase 2 readiness: **yes, and no further architecture pass is warranted**. Remai
 | 2.3 physical data model specification | **done (specification only), approval withheld** | `docs/data-model/` (16 files: 13 numbered + 2 supporting + README), `docs/adr/ADR-003-trusted-tenant-context.md`; no migration, no schema change |
 | 2.3.x documentation corrections | done, documentation-only | severity scheme reconciled (no P0), `OPEN-26` added to the blocker matrix, geometry-hash terminology corrected, `area_ha` nullability corrected to the measured DDL, cross-reference and count audit |
 | 2.3.x.1 blocker classification | done, documentation-only | all 14 P1 items classified in one matrix: 1 `Phase 3 DDL` (`OPEN-09`), 12 `after Phase 3`, 1 `not blocking`; `OPEN-09`'s DDL dependency found and recorded; "ingestion can proceed" corrected |
+| 2.4 decision closure | done, documentation-only | every `OPEN-nn` given one disposition — 0 `RESOLVED`, 20 `DEFERRED`, 9 `BLOCKED_EXTERNAL_INPUT`, 0 `NOT_APPLICABLE`; `D26` removes the last `Phase 3 DDL` blocker by omission; blocking split from severity |
+| 3 physical database implementation | done, runtime-verified | `20261118030000_domain_tables`: 19 tables → 22 total, 36 FK, 116 `CHECK`, 20 policies, `app_system` still default-deny on tenant data; 355 `db:verify` assertions, 39 RLS tests, 12 schema-conformance tests, clean-volume install |
 
 ### Phase 2.1 outcome
 

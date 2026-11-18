@@ -146,6 +146,22 @@ during a production index addition on the largest table in the model.
 
 ## §8 — Blocker matrix and verdict
 
+**Amended after Phase 3 shipped.** The verdict below is the Phase 2.3 record and is
+kept as written, because rewriting a historical verdict hides how the register
+moved. Three things have changed since:
+
+1. Phase 2.4 gave every `OPEN` id an explicit disposition (`open-decisions.md` §5):
+   0 `RESOLVED`, 20 `DEFERRED`, 9 `BLOCKED_EXTERNAL_INPUT`, 0 `NOT_APPLICABLE`.
+2. `D26` removed the one `Phase 3 DDL` item by **omission** rather than by answer:
+   `plantings.status` ships with no `DEFAULT` and `plantings_active_idx` is not
+   created, so `OPEN-09` no longer changes what the migration must contain. It is
+   still P1 and still blocks the first writer of a `plantings` row.
+3. Phase 3 then shipped all 19 tables, their constraints and indexes, the 20
+   policies and the grants. Nothing in the register gated it.
+
+So the live classification is `open-decisions.md` §1.1 (matrix) and §5
+(dispositions). What follows is what was true before that.
+
 **Phase 2.3 specification: complete.** Every table, relationship, index, policy,
 and contract-storage decision that could be derived from the existing normative
 documents has been derived and written down.
@@ -154,7 +170,8 @@ documents has been derived and written down.
 and **no item is P0**, because Phase 3's deliverables — 19 tables, their
 constraints and indexes, the policies, the grants — can all be created today, with
 exactly one exception: `OPEN-09` decides whether `plantings` ships a status default
-and the partial index that names it. Widening a subsystem blocker to a phase-wide
+and the partial index that names it. *(That exception is the one `D26` closed by
+omission; see the amendment above.)* Widening a subsystem blocker to a phase-wide
 stop would overstate it; narrowing this one to nothing would be dishonest.
 
 The authoritative matrix is `open-decisions.md` §1.1: all 14 P1 items, each with
@@ -162,7 +179,7 @@ what it blocks, what continues, and whether it applies to the Phase 3 DDL or to 
 later slice. It is **not** reproduced here, because two copies of a matrix drift;
 what follows is the one thing this checklist needs to say about it.
 
-| Category | Count | Items | Meaning for Phase 3 |
+| Category *(measured in Phase 2.3; the amendment above supersedes the first row)* | Count | Items | Meaning for Phase 3 |
 |---|---|---|---|
 | `Phase 3 DDL` | **1** | `OPEN-09` | the migration's `plantings.status` default and `plantings_active_idx` predicate would encode an undecided vocabulary; omit them, or decide it |
 | `after Phase 3` | **12** | `OPEN-01`, `-13` (auth) · `OPEN-17`, `-21` (snapshot) · `OPEN-18` (ingest/resolution) · `OPEN-26` (window write) · `OPEN-27` (worker) · `OPEN-11` (AI) · `OPEN-04` (lifecycle) · `OPEN-03`, `-05` (deployment/retention) · `OPEN-28` (hardening) | none changes the Phase 3 DDL; each stops the first slice that consumes it |

@@ -1,14 +1,15 @@
 # Physical Data Model
 
-Status: **Phase 2.3 — specification only.** No table, migration, Prisma model, or
-runtime behaviour is created by this phase. `docs/data-model/` is the normative
-physical contract that Phase 3 implements.
+Status: **implemented.** Phase 2.3 produced this specification, Phase 2.4 audited
+and classified every remaining decision, and Phase 3 created the nineteen tables
+it describes. The `app` schema now holds **22 domain tables**; the SQL in
+`packages/database/prisma/migrations/` is authoritative and this directory
+documents it, not the other way round.
 
-Three tables already exist in the running database (`app.users`, `app.farms`,
-`app.fields`, Phase 2.2.3). This model describes them exactly as implemented and
-extends around them. Where a document here disagrees with the implemented schema,
-the disagreement is listed in `consistency-checklist.md` — it is a defect, not a
-preference.
+Three tables predate the specification (`app.users`, `app.farms`, `app.fields`,
+Phase 2.2.3) and are described here exactly as implemented. Where a document here
+disagrees with the implemented database, the disagreement is listed in
+`consistency-checklist.md` — it is a defect, not a preference.
 
 ## 1. Which documents are normative
 
@@ -79,10 +80,12 @@ Severity describes **scope**, not urgency:
 
 No `OPEN-nn` is currently P0. The register is **29 items: 14 P1, 15 P2**.
 `open-decisions.md` §1.1 classifies **all 14 P1 items** — what each blocks, what
-continues independently, and whether it changes the Phase 3 DDL or a later slice.
-Exactly one (`OPEN-09`) changes the Phase 3 DDL; twelve block a slice built on top
-of it; one (`OPEN-02`) blocks nothing because a labelled fallback ships. Every
-other document points at that matrix instead of restating it.
+continues independently, and whether it changes a migration or a later slice. As of
+`D26` **none of them changes Phase 3 any more**: `OPEN-09` was the only one, and it
+is settled by omission (no default, no partial index) rather than by choosing the
+vocabulary. Twelve block a slice built on top of Phase 3; one (`OPEN-02`) blocks
+nothing because a labelled fallback ships. Every other document points at that
+matrix instead of restating it.
 
 ## 4. Scope
 

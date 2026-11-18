@@ -1,11 +1,11 @@
 # Domain Model (conceptual)
 
-Status: Phase 1. Physical schema is Phase 3 (`docs/data-model/`, which does not
-exist yet), but the invariants here are binding on it. Exception, recorded rather
-than implied: `users`, `farms`, and `fields` were materialised early in Phase
-2.2.3 because row isolation cannot be demonstrated without real tenant-owned
-tables. Their physical columns come from §2 below and nothing else — the derived
-entities (§3–§6) remain unspecified and unmaterialised.
+Status: Phase 1. The physical schema these invariants bind is now implemented —
+`docs/data-model/` was specified in Phase 2.3 and built in Phase 3 (22 tables).
+Exception, recorded rather than implied: `users`, `farms`, and `fields` were
+materialised early in Phase 2.2.3 because row isolation cannot be demonstrated
+without real tenant-owned tables, and their physical columns come from §2 below and
+nothing else.
 
 ## 1. Aggregate map
 

@@ -17,33 +17,34 @@ boundary of this phase.
 
 ## 1. Specified tables
 
-22 tables. `impl` = already exists (Phase 2.2.3) · `spec` = specified here, created
-in Phase 3.
+22 tables, all implemented. Three since Phase 2.2.3 (`users`, `farms`, `fields`);
+the other nineteen since Phase 3, in migration `20261118030000_domain_tables`. The
+`State` column records when each arrived, not whether it exists.
 
 | # | Table | Logical entity | Class | Ownership key | RLS | State | Specified in |
 |---|---|---|---|---|---|---|---|
-| 1 | `app.users` | `User` | `identity` | `id` | yes | impl | `tables-identity.md` §1 |
-| 2 | `app.farms` | `Farm` | `tenant` | `user_id` | yes | impl | `tables-identity.md` §2 |
-| 3 | `app.fields` | `Field` | `tenant` | `user_id` | yes | impl | `tables-identity.md` §3 |
-| 4 | `app.field_outlook_cells` | field → cell resolution | `tenant` | `user_id` | yes | spec | `tables-identity.md` §4 |
-| 5 | `app.field_observations` | `FieldObservation` | `tenant` | `user_id` | yes | spec | `tables-identity.md` §5 |
-| 6 | `app.plantings` | `Planting` | `tenant` | `user_id` | yes | spec | `tables-identity.md` §6 |
-| 7 | `app.harvests` | `Harvest` | `tenant` | `user_id` | yes | spec | `tables-identity.md` §7 |
-| 8 | `app.crops` | `Crop` | `reference` | — | no | spec | `tables-catalog.md` §1 |
-| 9 | `app.cultivars` | `Cultivar` | `reference` | — | no | spec | `tables-catalog.md` §2 |
-| 10 | `app.crop_profile_versions` | `CropProfileVersion` | `reference` | — | no | spec | `tables-catalog.md` §3 |
-| 11 | `app.growth_stages` | `GrowthStage` | `reference` | — | no | spec | `tables-catalog.md` §4 |
-| 12 | `app.constraints` | `Constraint` | `reference` | — | no | spec | `tables-catalog.md` §5 |
-| 13 | `app.source_refs` | `SourceRef` | `reference` | — | no | spec | `tables-catalog.md` §6 |
-| 14 | `app.outlook_cells` | `OutlookCell` | `global` | — | no | spec | `tables-climate.md` §1 |
-| 15 | `app.forecast_runs` | `ForecastRun` | `global` | — | no | spec | `tables-climate.md` §2 |
-| 16 | `app.ingestion_runs` | `IngestionRun` | `global` | — | no | spec | `tables-climate.md` §3 |
-| 17 | `app.weather_records` | `WeatherRecord` | `global` | — | no | spec | `tables-climate.md` §4 |
-| 18 | `app.monthly_outlooks` | `MonthlyOutlook` | `global` | — | no | spec | `tables-climate.md` §5 |
-| 19 | `app.climatology_normals` | climatology baseline | `global` | — | no | spec | `tables-climate.md` §6 |
-| 20 | `app.suitability_runs` | `SuitabilityRun` | `tenant-derived` | `user_id` | yes | spec | `tables-derived.md` §1 |
-| 21 | `app.planting_windows` | `PlantingWindow` | `tenant-derived` | `user_id` | yes | spec | `tables-derived.md` §2 |
-| 22 | `app.ai_briefings` | `AiBriefing` | `tenant-derived` | `user_id` | yes | spec | `tables-derived.md` §3 |
+| 1 | `app.users` | `User` | `identity` | `id` | yes | Phase 2.2.3 | `tables-identity.md` §1 |
+| 2 | `app.farms` | `Farm` | `tenant` | `user_id` | yes | Phase 2.2.3 | `tables-identity.md` §2 |
+| 3 | `app.fields` | `Field` | `tenant` | `user_id` | yes | Phase 2.2.3 | `tables-identity.md` §3 |
+| 4 | `app.field_outlook_cells` | field → cell resolution | `tenant` | `user_id` | yes | Phase 3 | `tables-identity.md` §4 |
+| 5 | `app.field_observations` | `FieldObservation` | `tenant` | `user_id` | yes | Phase 3 | `tables-identity.md` §5 |
+| 6 | `app.plantings` | `Planting` | `tenant` | `user_id` | yes | Phase 3 | `tables-identity.md` §6 |
+| 7 | `app.harvests` | `Harvest` | `tenant` | `user_id` | yes | Phase 3 | `tables-identity.md` §7 |
+| 8 | `app.crops` | `Crop` | `reference` | — | no | Phase 3 | `tables-catalog.md` §1 |
+| 9 | `app.cultivars` | `Cultivar` | `reference` | — | no | Phase 3 | `tables-catalog.md` §2 |
+| 10 | `app.crop_profile_versions` | `CropProfileVersion` | `reference` | — | no | Phase 3 | `tables-catalog.md` §3 |
+| 11 | `app.growth_stages` | `GrowthStage` | `reference` | — | no | Phase 3 | `tables-catalog.md` §4 |
+| 12 | `app.constraints` | `Constraint` | `reference` | — | no | Phase 3 | `tables-catalog.md` §5 |
+| 13 | `app.source_refs` | `SourceRef` | `reference` | — | no | Phase 3 | `tables-catalog.md` §6 |
+| 14 | `app.outlook_cells` | `OutlookCell` | `global` | — | no | Phase 3 | `tables-climate.md` §1 |
+| 15 | `app.forecast_runs` | `ForecastRun` | `global` | — | no | Phase 3 | `tables-climate.md` §2 |
+| 16 | `app.ingestion_runs` | `IngestionRun` | `global` | — | no | Phase 3 | `tables-climate.md` §3 |
+| 17 | `app.weather_records` | `WeatherRecord` | `global` | — | no | Phase 3 | `tables-climate.md` §4 |
+| 18 | `app.monthly_outlooks` | `MonthlyOutlook` | `global` | — | no | Phase 3 | `tables-climate.md` §5 |
+| 19 | `app.climatology_normals` | climatology baseline | `global` | — | no | Phase 3 | `tables-climate.md` §6 |
+| 20 | `app.suitability_runs` | `SuitabilityRun` | `tenant-derived` | `user_id` | yes | Phase 3 | `tables-derived.md` §1 |
+| 21 | `app.planting_windows` | `PlantingWindow` | `tenant-derived` | `user_id` | yes | Phase 3 | `tables-derived.md` §2 |
+| 22 | `app.ai_briefings` | `AiBriefing` | `tenant-derived` | `user_id` | yes | Phase 3 | `tables-derived.md` §3 |
 
 Tenant-owned (RLS): 10 tables — rows 1–7 and 20–22.
 Global/reference (no RLS, no `user_id`): 12 tables — rows 8–19.

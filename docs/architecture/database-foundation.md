@@ -529,11 +529,15 @@ rather than guessing.
 
 ### Not in this phase
 
-`docs/data-model/` does not exist, and `domain-model.md` §3–§6 name derived
-entities (`suitability_runs`, `planting_windows`, `ai_briefings`,
+*(True of Phase 2.2.3 and superseded since: `docs/data-model/` was written in
+Phase 2.3 and the 19 tables it specifies were created in Phase 3. Recorded rather
+than rewritten, so this section stays a record of what 2.2.3 did and did not do.)*
+
+`docs/data-model/` did not exist at the time, and `domain-model.md` §3–§6 name
+derived entities (`suitability_runs`, `planting_windows`, `ai_briefings`,
 `weather_records`) whose columns are discriminated unions and typed segments.
-Creating them here would mean inventing the physical schema the documents have
-not specified. They remain Phase 3.
+Creating them here would have meant inventing the physical schema the documents had
+not specified. They remained Phase 3.
 
 
 

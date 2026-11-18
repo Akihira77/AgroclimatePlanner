@@ -139,7 +139,7 @@ the policy is what stands between "read your own account" and "read every
 account's password hash". Removing it because the grant is absent would make the
 next grant a one-line privilege escalation.
 
-## 4. Grants to write in Phase 3
+## 4. The grants Phase 3 wrote
 
 ```sql
 -- tenant-owned
@@ -221,9 +221,10 @@ property. `ADR-003-trusted-tenant-context` records the measurement, the threat
 classes that are and are not protected, and the options. No RLS code changes as
 a result of it.
 
-## 7. What must be verified in Phase 3
+## 7. What was verified in Phase 3
 
-Per table, the Phase 2.2.2.x probe pattern extends mechanically:
+Per table, the Phase 2.2.2.x probe pattern extends mechanically. This is the list
+the suites were written against; the closing paragraph says which of them now run:
 
 1. `SELECT` with no context → 0 rows, no error.
 2. `SELECT` with another tenant's id → 0 rows.
@@ -243,3 +244,14 @@ Per table, the Phase 2.2.2.x probe pattern extends mechanically:
 Checks 10 and 11 are the ones a generic "can this role do this" harness misses,
 because both are about a *partial* grant and a *policy exemption* rather than a
 binary allow/deny.
+
+**Where they run now.** 1, 2, 6, 7, 8, 9 and 10 are asserted by `db:verify`
+(355 assertions) and the tenant-isolation suite (39 tests, as `app_api` through
+`withTenant`). 10 is also probed behaviourally as the real role: the three-column
+`INSERT` succeeds with `served_lat` NULL and naming `served_lat` returns `42501`.
+Check 5 — moving a row's `user_id` — is **not** separately tested: the suite proves
+another tenant's row is invisible, which is a different failure mode (0 rows rather
+than `42501` on `WITH CHECK`), and it is the one gap in this list. Check 3 is
+covered indirectly: an `INSERT` with no context has no parent to reference, so the
+suite asserts the zero-row `SELECT` and the composite-FK `23503` instead of a
+standalone `42501`.

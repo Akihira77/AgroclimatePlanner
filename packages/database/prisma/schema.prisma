@@ -1,16 +1,23 @@
-// Phase 2.2.1 — foundation only. No domain tables yet; Phase 3 owns those.
+// The Prisma representation of the 22-table `app` schema. This file is a
+// representation, not the source of truth: `prisma/migrations` is authoritative.
 //
-// Migrations are hand-written SQL, applied with `prisma migrate deploy`.
+// Migrations are hand-written SQL, applied with `prisma migrate deploy`. Three
+// so far: `init_extensions`, `20261118020000_tenant_tables` (Phase 2.2.3), and
+// `20261118030000_domain_tables` (Phase 3, the other nineteen tables).
+//
 // `prisma migrate dev` is deliberately not used: it replays history into a
 // shadow database and diffs the result against this file, and PostGIS alone
 // materialises hundreds of tables and functions in `public`. The diff would be
 // enormous, permanent drift, and every future model change would be blamed on
-// it. Roles, grants, and RLS policies (Phase 2.2.2+) are also SQL that a
-// schema-only diff cannot represent.
+// it. Roles, grants, RLS policies, CHECK constraints, and partial indexes
+// (Phase 2.2.2+) are also SQL that a schema-only diff cannot represent — they
+// are verified by `db:verify` and the test suites, never by Prisma.
 //
 // The consequence, stated plainly: this file and prisma/migrations must be kept
 // consistent by hand. `pnpm --filter @agroclimate/database db:status` reports
-// applied-versus-pending; nothing diffs them for you.
+// applied-versus-pending; nothing diffs them for you. `prisma validate` and
+// `prisma generate` prove this file is well-formed and that the client matches
+// it, not that it matches the database.
 
 generator client {
   provider = "prisma-client"
@@ -107,9 +114,9 @@ model Field {
   @@map("fields")
 }
 
-// Phase 3 — the nineteen remaining domain tables. The SQL in
-// prisma/migrations/20261118030000_domain_tables is authoritative: this file is
-// kept in sync by hand.
+// Phase 3 — the nineteen domain tables added by the second tenant migration. The
+// SQL in prisma/migrations/20261118030000_domain_tables is authoritative: this
+// file is kept in sync by hand.
 //
 // Two things are out of Prisma's reach and live in SQL only:
 //
