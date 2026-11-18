@@ -127,6 +127,7 @@ Phase 2 readiness: **yes, and no further architecture pass is warranted**. Remai
 | 2.2.2 roles and privilege boundary | done, runtime-verified | `bootstrap/roles.sql`, `db:bootstrap`, `db:verify` (61 assertions as the real roles) |
 | 2.2.2.x role boundary hardening | done, runtime-verified | per-run probe names, `db:verify:probes`, bootstrap idempotency, fresh-volume reset in an isolated Compose project (65 assertions) |
 | 2.2.3 tenant tables, RLS, `withTenant` | done, runtime-verified | `app.users`/`app.farms`/`app.fields`, 3 RLS policies, `createTenantScope`, 10 RLS tests + 9 unit tests, 118 assertions in `db:verify` |
+| 2.3 physical data model specification | **done (specification only), approval withheld** | `docs/data-model/` (12 documents), `docs/adr/ADR-003-trusted-tenant-context.md`; no migration, no schema change |
 
 ### Phase 2.1 outcome
 
@@ -262,3 +263,33 @@ Verified by running, not by reading:
 Two defects were found by running it, both in the setup rather than the design: the migration first failed with `type "geometry" does not exist` because the migration connection's `search_path` is `app`, not `public` — every PostGIS type and function in the migration is now schema-qualified; and Prisma asked for `public.farms` until the schema file declared `schemas = ["app"]`.
 
 Not verified: `app_system` reading `planting_windows`/`suitability_runs`/`ai_briefings` columns, because those tables do not exist. Not implemented: authentication lookup for `app.users`, and any `app_system` grant.
+
+### Phase 2.3 outcome — physical data model specified, not implemented
+
+Documentation only. No migration, no Prisma model, no policy, no grant, no runtime change, and no destructive operation on the database.
+
+| Deliverable | Content |
+|---|---|
+| `docs/data-model/README.md` | document order, precedence rules, and the non-negotiables inherited from earlier phases |
+| `entity-catalog.md` | 22 tables — 3 implemented, 19 specified — with ownership class and state; 9 entities deliberately not specified, with the reason |
+| `physical-model.md` | the grammar every table is written in: naming, `uuidv7()` ids, time types, numeric precision (no storage-layer rounding), enums as `text` + `CHECK`, hash columns, the JSONB test, standard columns |
+| `tables-identity.md` | `users`, `farms`, `fields`, `field_outlook_cells`, `field_observations`, `plantings`, `harvests` |
+| `tables-catalog.md` | `crops`, `cultivars`, `crop_profile_versions`, `growth_stages`, `constraints`, `source_refs` |
+| `tables-climate.md` | `outlook_cells`, `forecast_runs`, `ingestion_runs`, `weather_records`, `monthly_outlooks`, `climatology_normals` |
+| `tables-derived.md` | `suitability_runs`, `planting_windows`, `ai_briefings` |
+| `relationships.md` | every FK, the composite ownership keys, the self-referencing supersession chains, and the relationships that are deliberately refused |
+| `ownership-and-rls.md` | the 22-table privilege matrix, the policy text, the login-lookup problem with three options and no decision |
+| `spatial-model.md` | the single geometry column, `area_ha`, the GiST index, coordinates that are not geometry, and `geometryHash` |
+| `provenance-storage.md` | how each contract type is stored, and the three places the answer is "not as a column" |
+| `temporal-and-weather-semantics.md` | every date/timestamp meaning, the horizon map, freshness thresholds, and five distinct missing-data representations |
+| `indexes-and-query-patterns.md` | 25 named queries and every index justified by one |
+| `lifecycle-and-retention.md` | three removal mechanisms and no others; append-and-supersede in full |
+| `open-decisions.md` | 25 decisions taken, 25 questions left open with severity and what would settle each |
+| `consistency-checklist.md` | 50+ cross-document checks, three defects found in other documents, and the withheld approval |
+| `docs/adr/ADR-003-trusted-tenant-context.md` | what `app.user_id` actually guarantees, measured |
+
+The measurement that changed a claim into a fact: `app_api` can set `app.user_id` to any tenant. Transaction-scoped `set_config(..., true)` dies with the transaction (autocommit: the next statement sees nothing); a session-scoped `SET` survives it and would hand one request's tenant to the next request on a pooled connection. A `SECURITY DEFINER` helper reads the caller's setting, so it cannot validate it. No privilege mechanism exists to restrict a custom GUC — the parameter is created by whichever role first sets it and does not even appear in `pg_settings` while unset. RLS is therefore documented as containment of forgotten filters, not as protection against a holder of `app_api` credentials, and the current `withTenant` is confirmed to be on the safe side of both hazards.
+
+**Approval withheld** on `OPEN-01` (the authentication lookup cannot be built against this schema), `OPEN-17` (a `POINT` field has `area_ha = 0` and cannot satisfy `FieldSnapshotPayload.areaHa: positive()`), and `OPEN-27` (the recompute fan-out reads a tenant-owned table with a credential that has no grant on it). No answer was invented for any of the three.
+
+Next: resolve `OPEN-01`, `OPEN-17`, `OPEN-27`, then Phase 3 creates the 19 specified tables as hand-written SQL applied with `prisma migrate deploy`.
