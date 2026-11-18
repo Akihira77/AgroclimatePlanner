@@ -58,15 +58,28 @@ interface EvidenceSegment {
 // Discriminated: an entry cannot claim a run id it does not have.
 type SegmentProvenance =
   | { kind: "forecast";                     // weather / subseasonal / seasonal / annual_outlook
-      forecastRunIds: [string, ...string[]]; // at least one; a segment may span two runs
+      forecastRunIds: [string, ...string[]]; // a segment may span two runs
+      ingestionRunIds: [string, ...string[]];// which processing produced the values used
       initializedAt: string }
   | { kind: "climatology";                  // baselines are not runs
       baselineVersion: string }             // e.g. "ERA5:1991-2020:v1"
   | { kind: "observation";                  // user-entered measurements only
       observationIds: [string, ...string[]] }
   | { kind: "dataset";                      // reanalysis, satellite_estimate
-      datasetVersion: string };
+      datasetVersion: string;
+      ingestionRunIds: [string, ...string[]] };
 ```
+
+### Forecast run vs ingestion run, per level
+
+Both levels name both ids, deliberately, because they answer different questions and a segment must be answerable on its own:
+
+- `forecastRunIds` — **which model output** covers these days. Stable across reprocessing; what the user-facing "initialized 5 November" refers to.
+- `ingestionRunIds` — **which normalization produced the numbers actually shown**. Not stable: a `normalizerVersion` bump supersedes `WeatherRecord` rows, so the same forecast run can yield different values. A segment that named only the forecast run would be unable to explain why last week's number for the same day changed.
+
+Arrays, not scalars, because a segment can legitimately span a run boundary or a partial re-ingest of a subset of cells. `[string, ...string[]]` forbids the empty array that used to mean "climatology".
+
+This is not redundant with `DerivationProvenance.inputRefs`: `inputRefs` describes the artifact's inputs as a set, while segments attribute specific date ranges to specific sources. A 12-month window has one `inputRefs` list and four segments; the mapping from dates to sources lives only in the segments. Climatology needs no ingestion id — a baseline is a stored artifact rebuilt only by version bump.
 
 `evidenceClass` remains a separate field rather than being derived from `kind`, because `reanalysis` and `satellite_estimate` are distinct classes that share a provenance shape, and `weather_forecast`/`subseasonal_forecast`/`seasonal_forecast` likewise. One field answers "what kind of evidence", the other "where exactly did it come from".
 
@@ -207,32 +220,58 @@ interface DerivationProvenance {
 A baseline is not a run. An observation set is not a run. Forcing all three into `{ forecastRunId, ingestionRunId }` produced a type that could only be satisfied by writing `null` into required fields — which is exactly what happened before this correction.
 
 ```ts
+// `purpose` separates WHY an input was consumed from WHAT it is. Verification
+// truth is a purpose, not a data class: CHIRPS and IMERG are satellite_estimate,
+// a later forecast run is weather_forecast. Classifying either as "forecast"
+// because the word "verification" appeared would be a lie in the provenance record.
+type InputPurpose = "input" | "verification_truth";
+
 type DataInputRef =
   | { kind: "forecast";
-      role: "short_range" | "subseasonal" | "seasonal" | "verification_truth";
+      role: "short_range" | "subseasonal" | "seasonal" | "annual_outlook";
+      purpose: InputPurpose;
       forecastRunIds: [string, ...string[]];
       ingestionRunIds: [string, ...string[]];
       recordSetHash: string }         // over the exact records consumed
   | { kind: "baseline";
       role: "climatology";
+      purpose: InputPurpose;          // always "input" today; kept for symmetry
       baselineVersion: string;        // "ERA5:1991-2020:v1"
       baselineHash: string;           // over the stored monthly normals used
       cellKeys: [string, ...string[]] }
   | { kind: "observation";
       role: "field_observation";
+      purpose: InputPurpose;
       observationIds: [string, ...string[]];  // user-entered measurements
       recordSetHash: string }
   | { kind: "dataset";
       role: "reanalysis" | "satellite_estimate";
+      purpose: InputPurpose;          // "verification_truth" for CHIRPS/IMERG scoring
       datasetVersion: string;         // "ERA5:0.25deg:v1" | "CHIRPS:v3.0"
       recordSetHash: string };
 ```
 
+### Role → `dataClass` mapping
+
+Every role maps to exactly one class; the mapping is asserted at persist time, so a role can never disagree with the evidence it claims.
+
+| `kind` | `role` | `dataClass` |
+|---|---|---|
+| `forecast` | `short_range` | `weather_forecast` |
+| `forecast` | `subseasonal` | `subseasonal_forecast` |
+| `forecast` | `seasonal` | `seasonal_forecast` |
+| `forecast` | `annual_outlook` | `annual_outlook` |
+| `baseline` | `climatology` | `climatology` |
+| `observation` | `field_observation` | `field_observation` |
+| `dataset` | `reanalysis` | `reanalysis` |
+| `dataset` | `satellite_estimate` | `satellite_estimate` |
+
 Rules:
 
 1. `kind: "baseline"` carries no run ids and no `initializedAt` — climatology has no initialization. Any artifact that renders a climatology value and also names an `initializedAt` is mislabelled.
-2. `role` is not free text. Every role maps to exactly one `dataClass`, and the mapping is asserted at persist time.
-3. `recordSetHash` = SHA-256 over the canonical JSON of the consumed records, each as `(cellKey, variable, validAt, ensembleMember|null, value, unit, dataClass)`, sorted. It answers "which numbers", not just "which run" — two runs can be fetched differently and still be the same run.
+2. `purpose` is orthogonal to `role`. `{kind:"dataset", role:"satellite_estimate", purpose:"verification_truth"}` is CHIRPS used as truth; `{kind:"forecast", role:"seasonal", purpose:"verification_truth"}` is a later SEAS5 run used as truth. Neither is misclassified, and neither can be written as `role:"verification_truth"` because no such role exists.
+3. Verification artifacts (`verify` jobs, skill scores) are **not** `PlantingWindow` inputs. They never appear in a recommendation's `inputRefs` with `purpose = "verification_truth"`; they live in the scoring tables. The purpose field exists so that a future backtest artifact can record them honestly without inventing a class.
+4. `recordSetHash` = SHA-256 over the canonical JSON of the consumed records, each as `(cellKey, variable, validAt, ensembleMember|null, value, unit, dataClass)`, sorted. It answers "which numbers", not just "which run" — two runs can be fetched differently and still be the same run.
 
 ### `FieldSnapshot` — the agronomic inputs that are not weather
 
@@ -262,19 +301,35 @@ interface FieldSnapshot {
 
 ### Snapshot hash definition
 
-`inputSnapshotHash` = SHA-256 of the canonical JSON of:
+`inputSnapshotHash` = SHA-256 of the canonical JSON of **one** of these two descriptors, depending on the artifact. `inputRefs` is the field name at both levels — the earlier `dataInputRefs` alias is gone.
 
+```jsonc
+// MonthlyOutlook
+{ "artifact": "monthly_outlook",
+  "inputRefs": [ … sorted by (kind, role, first id) … ],
+  "derivationVersion": "1" }
+
+// SuitabilityRun | PlantingWindow | AiBriefing
+{ "artifact": "planting_window",
+  "inputRefs": [ … sorted by (kind, role, first id) … ],
+  "fieldSnapshotHash": "…",
+  "profileVersionId": "…",
+  "engineVersion": "…",
+  "derivationVersion": "1" }
 ```
-{ artifact,
-  dataInputRefs[]  (sorted by kind, role, then first id),
-    each contributing: kind, role, ids/versions, recordSetHash | baselineHash,
-  fieldSnapshot: { fieldSnapshotHash, extractionPolicy, resolvedCells[] }  // when applicable,
-  profileVersionId?, engineVersion?, derivationVersion }
-```
 
-Canonical = sorted keys, fixed number formatting (no `-0`, no float re-printing), no timestamps of the computation itself.
+Each `inputRefs` entry contributes only its identity fields — `kind`, `role`, `purpose`, `forecastRunIds`/`ingestionRunIds`, `baselineVersion`/`datasetVersion`, `recordSetHash`/`baselineHash` — never the values themselves.
 
-**The invariant:** identical `inputSnapshotHash` ⇒ identical complete computation inputs ⇒ byte-identical output. A hash change with identical output is a defect (something irrelevant leaked into the descriptor); an identical hash with different output is a **critical** defect (something relevant is missing from the descriptor).
+`fieldSnapshotHash` appears **instead of** the snapshot body. Including the full object would be equivalent only if canonicalisation were applied recursively and identically; hashing the snapshot once, under one documented rule, is the version that can actually be tested. Because `fieldSnapshotHash` covers every field of `FieldSnapshot` — including `extractionPolicy` and `resolvedCells` — repeating those two outside the hash was redundant and has been removed: it created a second place for them to drift from the snapshot they were supposed to describe.
+
+Canonical form: sorted keys, fixed number formatting (no `-0`, no re-printed floats), UTF-8, no whitespace, and **no timestamps of the computation itself** — `computedAt` is deliberately outside the descriptor, otherwise no two computations could ever match.
+
+**The invariant, restated precisely:** identical `inputSnapshotHash` ⇔ identical complete computation inputs. Two readings matter:
+
+- Same hash, different output ⇒ **critical defect**: something that affects the result is missing from the descriptor.
+- Different hash, same output ⇒ defect in the other direction: something irrelevant leaked in. Not a correctness bug, but it invalidates cache/supersession logic and must be fixed.
+
+Conversely, **different field state must produce a different hash.** Editing a plot's soil type, drainage, irrigation flag, or geometry changes `fieldSnapshotHash`, hence `inputSnapshotHash`, hence the artifact is distinguishable from the one computed before the edit. If that fails, the hash is decorative.
 
 ### Reproducibility requirements
 
@@ -303,13 +358,25 @@ interface SourceFreshness {
 
 interface DerivedFreshness {
   kind: "derived";
-  computedAt: string;
+  computedAt: string;                  // when the artifact row was computed (stored)
   dataAvailability: "available" | "stale" | "pending";
   oldestInputInitializedAt?: string;   // min over non-climatology inputs, null if none
-  staleInputRoles: string[];           // which roles were stale at compute time
+  staleInputRoles: string[];           // which roles are stale right now
   reason?: "inputs_stale" | "recompute_failed" | "superseded_pending";
 }
 ```
+
+`computedAt` is read from the stored row; everything else here is computed at read time from `inputRefs` plus current source freshness. `reason: "recompute_failed"` is the one value drawn from stored state — the artifact's own status — because a failed attempt is an event, not a function of the inputs.
+
+### Derived freshness is computed, not stored
+
+A derived artifact's `DerivedFreshness` is a **pure function of (stored `inputRefs`, current source freshness)** evaluated at read time. Nothing writes it, so no background job needs tenant write access to keep it current.
+
+Consequences, and why this matters for privileges:
+
+- `maintenance` never mutates a tenant-owned row to mark it stale. It only *detects* candidates and enqueues recompute; the read path computes staleness from what it finds.
+- A failed recompute is the one stale state that **is** stored (`status = "failed"` on the attempt, previous artifact still `active`), because it is an event, not a function of inputs.
+- A derived row that is old but whose inputs are all fresh is **not** stale. TTL on the artifact itself would be a proxy for staleness, and a wrong one.
 
 ### Artifact-specific policies
 
@@ -321,14 +388,14 @@ interface DerivedFreshness {
 | Seasonal values | `initializedAt` age | > 35 d |
 | Climatology | `baselineVersion` age | baseline > 13 months old |
 | `MonthlyOutlook` | derived from inputs; `oldestInputInitializedAt` excludes climatology | any non-climatology input stale |
-| `PlantingWindow` | derived; TTL = min over segments' source TTL, floor 6 h | window older than its shortest-lived input's TTL |
-| `AiBriefing` | derived; invalidated by new run id, not by a clock | any input role changed |
+| `PlantingWindow` | derived from the segments' sources | any segment's source stale |
+| `AiBriefing` | derived; invalidated by input identity, not by a clock | any `inputRefs` entry changed |
 
 ### Rules
 
 1. Climatology contributes **nothing** to `oldestInputInitializedAt`. Treating "no initialization time" as infinitely old would mark every 12-month outlook permanently stale and train users to ignore the flag.
 2. `dataAvailability` is computed per source, and a derived artifact reports the **set** of stale roles, not a boolean.
-3. A failed recompute does not deactivate the previous artifact: it stays `active` with `DerivedFreshness.reason = "recompute_failed"` until a successful replacement exists.
+3. A failed recompute does not deactivate the previous artifact: it stays `active` with `reason = "recompute_failed"` until a successful replacement exists. This surfaces stored state rather than mutating it, which is why no sweep needs write access to tenant rows.
 4. A new forecast run supersedes artifacts by status change, never by deletion. `supersededById` preserves the audit trail (BRAINSTORM requires "recommendation update time"; this is how it is honoured).
 
 ---

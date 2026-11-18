@@ -30,10 +30,11 @@ flowchart TB
   end
 
   subgraph WORKER["apps/worker — BullMQ consumers"]
-    ING[ingest: bmkg / om-forecast / om-ensemble / om-seasonal]
-    AGG[aggregate: monthly, climatology, spread]
-    ENG[recompute: outlook, windows, briefings]
-    VER[verify: forecast scoring]
+    ING["ingest.forecast<br/>ingest.climate"]
+    AGG["aggregate<br/>monthly, climatology, spread"]
+    ENG["recompute.windows<br/>+ briefing invalidation"]
+    VER["verify<br/>forecast scoring"]
+    MNT["maintenance<br/>sweep, dead letters"]
   end
 
   subgraph DATA
@@ -179,16 +180,20 @@ CREATE POLICY farm_owner ON farms
 
 ```ts
 // packages/database/src/tenant.ts — the only way tenants are scoped
-export function withTenant<T>(user: AuthUser, fn: (tx: Tx) => Promise<T>): Promise<T> {
+// One signature everywhere: requests pass user.id, tenant-scoped workers pass
+// the resolved ownerId. Both are UUIDv7 — there is no second id type.
+export function withTenant<T>(userId: UUID, fn: (tx: Tx) => Promise<T>): Promise<T> {
   return prisma.$transaction(async (tx) => {
     // set_config returns one row, so this MUST use the row-returning API.
     // $executeRaw is for statements that return a count; using it here is the bug
     // this comment exists to prevent.
-    await tx.$queryRaw`SELECT set_config('app.user_id', ${user.id}, true)`; // true = local to txn
+    await tx.$queryRaw`SELECT set_config('app.user_id', ${userId}, true)`; // true = local to txn
     return fn(tx);
   });
 }
 ```
+
+`withTenant` takes an id, not a user object. An `AuthUser` parameter would force every background job to fake a user record, which is exactly the impersonation the role split exists to prevent.
 
 Prisma API note (checked against the current docs, not assumed): the rule is **rows → `$queryRaw`, writes → `$executeRaw`**. Prisma ORM 7 renames these to `db.query(stmt)` and `db.execute(stmt)`, where a row-returning raw statement is built with `.returnsRow(spec).build()` and the spec declares each column's type — e.g. `db.raw.sql\`SELECT set_config('app.user_id', ${userId}, true)\`.returnsRow({ set_config: "pg/text@1" }).build()`. Whichever major version Phase 2 pins, `SELECT set_config(...)` is a row-returning statement and must take the row-returning path; a write-only API discards the result and turns a silently-failing context set into a cross-tenant read.
 
@@ -197,7 +202,7 @@ Two ORM-7 constraints worth recording now, because they shape the repository lay
 Binding rules:
 
 1. `set_config(..., is_local => true)` only. `SET` (session-scoped) is forbidden anywhere in the codebase; a lint/grep check in CI rejects it.
-2. Every request path enters the database through `withTenant(user, fn)`. A repository function never receives a raw `PrismaClient`.
+2. Every request path enters the database through `withTenant(userId, fn)`. A repository function never receives a raw `PrismaClient`.
 3. A connection returned to the pool has no `app.user_id` (the transaction reset it), so a missing context fails closed — the policy matches zero rows rather than all of them. This is the property that makes the second line worth having.
 4. **Worker roles are split by what the job touches.** "The worker has no user" was too coarse: ingestion touches no tenant data, but window recompute writes tenant-owned rows.
 5. Integration test requirement: two concurrent requests for different users inside one pooled client must not see each other's rows, and a query outside `withTenant` must return zero rows.
@@ -210,7 +215,7 @@ Binding rules:
 | `ingest.forecast`, `ingest.climate` | `ForecastRun`, `IngestionRun`, `WeatherRecord` — no `user_id` column | `app_system` (`BYPASSRLS`) | not applicable; these tables carry no tenant policy at all |
 | `aggregate` | `MonthlyOutlook` keyed by cell, not by user | `app_system` | not applicable |
 | `verify` | weather history + archive | `app_system` | not applicable |
-| `maintenance` | cross-tenant sweep: staleness, orphans, dead letters | `app_system` | read-only over ids; must not write tenant-owned rows |
+| `maintenance` | cross-tenant sweep: staleness **detection**, orphans, dead letters | `app_system` | read-only over ids; enqueues tenant-scoped `recompute.windows` jobs; writes only non-tenant bookkeeping (`background-processing.md` §10) |
 | **`recompute.windows`** | `SuitabilityRun`, `PlantingWindow`, briefings — **tenant-owned** | **`app_api`, not `app_system`** | **required**: `withTenant(ownerId, …)` |
 
 Consequence for `recompute.windows`: the job must never write through the `BYPASSRLS` role. The owner is resolved **before** the job is enqueued — `aggregate` (system role) emits `(fieldId, ownerId)` pairs, and the job payload carries `ownerId`. The job then enters `withTenant(ownerId)`, exactly like a request would. If the payload is missing `ownerId`, the job **fails**; it does not fall back to a bypass role.

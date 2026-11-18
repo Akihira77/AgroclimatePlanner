@@ -17,7 +17,7 @@ Six queues, not ten. Each one exists because of an isolation requirement that a 
 | `aggregate` | daily→monthly rollup, spread computation, coverage | pure transformation of stored data; different failure mode (no provider involved), and safe to replay in bulk | CPU + DB writes, no network | 5 | 60 s | 3, immediate | — | medium · after ingest |
 | `recompute.windows` | agronomy fan-out per field | largest blast radius: a bug here writes wrong recommendations to every user; must be pauseable and rate-limited separately | CPU-bound, DB-heavy, 50–500 ms/field | 5 | 120 s | 3 | — | high · near-term fields first |
 | `verify` | forecast scoring against truth | weekly, GPU-of-the-poor (long loops), must never compete with user-facing recompute | CPU + large reads | 1 | 30 m | 2 | archive provider budget | lowest · off-hours only |
-| `maintenance` | stale sweep, orphan cleanup, **briefing invalidation**, dead-letter reaper | cheap, frequent, must never be blocked behind heavy work; and must be able to run while everything else is paused | trivial | 1 | 30 s | 5 | — | lowest · hourly |
+| `maintenance` | stale sweep, orphan cleanup, dead-letter reaper, **briefing staleness detection** | cheap, frequent, must never be blocked behind heavy work; and must be able to run while everything else is paused | trivial | 1 | 30 s | 5 | — | lowest · hourly |
 
 ### Merges applied, with reasons
 
@@ -25,7 +25,7 @@ Six queues, not ten. Each one exists because of an isolation requirement that a 
 |---|---|---|
 | `ingest.short` + `ingest.ensemble` | `ingest.forecast` | same provider, same adapter family, same failure semantics, same retry shape. The only difference was payload size — expressed as a per-job timeout, not a queue. |
 | `ingest.subseasonal` + `ingest.seasonal` + `ingest.climatology` | `ingest.climate` | one endpoint family (seasonal), one budget, one degrade-together failure mode. Cadence differences are handled by schedule and priority inside the queue. The monthly SEAS5 burst is protected by a 3-slot ceiling and a 180 s timeout, not by a separate queue. |
-| `recompute.briefings` | **deleted** | it only invalidated cached briefing state — deleting a cache key does not need a worker. Invalidation now happens in `maintenance` (sweep) and at the end of `recompute.windows` for touched fields. Pre-generating briefings would also mean paying for AI calls nobody reads. |
+| `recompute.briefings` | **deleted** | it only invalidated cached briefing state — deleting a cache key does not need a worker. Invalidation now happens where it is *allowed* to happen: at the end of `recompute.windows`, inside `withTenant(ownerId)`. `maintenance` may only *detect* candidates and enqueue that work — see §10. Pre-generating briefings would also mean paying for AI calls nobody reads. |
 
 ### Merges deliberately **not** applied
 
@@ -38,8 +38,9 @@ Concurrency is deliberately low. Open-Meteo's free tier is 10 000 calls/day and 
 
 ## 3. Scheduling and run identity
 
-- `forecastRunId` = `{provider}:{model}:{product}:{initializedAt ISO}`, unique on that tuple. It is an identity of the **model output**, not of our attempt to fetch it.
+- `ForecastRun.id` is **UUIDv7** — the only identifier persisted or exposed. The natural key `(provider, model, product, initializedAt)` is unique and used for lookup/upsert, and nothing else. A composite string like `{provider}:{model}:{product}:{initializedAt}` is **not** an id: it duplicates what the natural key already guarantees, it breaks when a provider adds a model version, and it would put a mutable-looking string into every derived row's provenance.
 - `ingestionRunId` → one row per **logical** ingest: unique on `(forecastRunId, ingestionVersion)` where `ingestionVersion = sha256(adapterVersion, normalizerVersion, targetSelectorHash)`. `attempt` is a physical retry counter on that row, not part of identity. Re-normalizing stored payloads bumps `normalizerVersion`, which changes `ingestionVersion` and creates a new `IngestionRun` under the **same** `ForecastRun` — a normalization fix must never surface to users as a new forecast. A BullMQ retry increments `attempt` in place and creates nothing.
+- Job idempotency keys use ids: `ingest:{queue}:{forecastRunId}:{targetSelectorHash}`, where `forecastRunId` is the UUIDv7 resolved from the natural key at enqueue time.
 - Every derived artifact stores `inputRefs[]` (discriminated: forecast run, baseline, observation set, dataset), `fieldSnapshot` where applicable, `inputSnapshotHash`, `derivationVersion`, `computedAt`.
 - SEAS5: run at day 5, 12:00 UTC. Ingest starts +30 min, jittered per cell to spread load.
 - EC46: daily, after ~20:30 UTC.
@@ -112,3 +113,20 @@ Priority: fields with an active planting record or a near-term window are comput
 Per queue: depth, in-flight, completed/failed counts, oldest waiting age, dead-letter count. Per provider: last success, last attempt, latency p50/p95, error rate, remaining budget. Per cell: last ingest per class, coverage percentage.
 
 Alert thresholds (later, Phase 9): seasonal missing for > 40 days, forecast ingest failure rate > 10 % over an hour, dead-letter > 0, budget exhausted before 18:00 local.
+
+## 10. Maintenance and tenant-owned data
+
+`maintenance` runs as `app_system` (`BYPASSRLS`). It must never write a table that carries a `user_id` column.
+
+| Capability | Allowed |
+|---|---|
+| **Read** | ids and metadata only: field ids, owner ids, artifact ids, `inputRefs`, run ids, dead-letter entries, queue state. No soil values, no geometry, no observations, no briefing text. |
+| **Write** | weather-plane bookkeeping only — `sync_attempts`, dead-letter status, sweep watermark. None of these carry `user_id`, so none of them are covered by a tenant policy. |
+| **Enqueue** | yes, and this is its main output: `recompute.windows` jobs keyed by `(ownerId, fieldBatch)`, with `ownerId` in the payload. |
+| **Never** | mark a tenant row stale, rewrite or delete a briefing, touch `farms`, `fields`, `suitability_runs`, `planting_windows`, or `ai_briefings`. |
+
+Briefing invalidation therefore has exactly one executor: the `recompute.windows` job running as `app_api` inside `withTenant(ownerId)`, which drops the briefings for the fields it just recomputed. `maintenance` only notices that a briefing's `inputRefs` no longer match current runs and enqueues that work.
+
+Note that "mark stale" is not an operation at all, because derived freshness is computed at read time from stored provenance (`provenance-contract.md` §5). The sweep exists to *enqueue recomputation*, not to relabel state — which is why it never needs tenant write access.
+
+Why this is a hard rule rather than a preference: a bug in a `BYPASSRLS` write path to `ai_briefings` would rewrite what a farmer was told with no user context in the audit trail, and no RLS policy would have stopped it. The role boundary is the only thing standing between a maintenance sweep and every user's derived data.

@@ -283,3 +283,76 @@ Three things Phase 2 must get right on the first commit, because they are struct
 3. `ingest` and `recompute.windows` use different DB roles from day one; the split cannot be retrofitted after the first tenant data exists.
 
 Not blocking Phase 2: Open-Meteo paid-vs-self-host, BMKG written permission, ECMWF Set VII licence enquiry.
+
+---
+
+## 11. Phase 1.3 — final contract corrections
+
+Six findings, all resolved in the contract text. No accepted decision was reopened; every fix closes a gap between what two documents each said was true.
+
+### Finding-by-finding
+
+| # | Finding | Resolution |
+|---|---|---|
+| **F23** | `background-processing.md` assigned briefing invalidation to `maintenance`, while `system-architecture.md` forbade `app_system` from writing `ai_briefings`. A stated capability that the privilege model forbids is worse than a missing one: someone implements it and the only thing that stops them is an integration test that does not exist yet. | Briefing invalidation has **one** executor: `recompute.windows` as `app_api` inside `withTenant(ownerId)`. `maintenance` may *detect* that a briefing's `inputRefs` no longer match current runs and enqueue that work — never mutate. New `background-processing.md` §10 specifies read/write/enqueue per queue. The contradiction also exposed a deeper redundancy: derived freshness is now explicitly **computed at read time** from stored provenance (`provenance-contract.md` §5), so "mark stale" is not an operation at all and no tenant write is needed to keep a status column honest. |
+| **F24** | `background-processing.md` §3 still defined `forecastRunId = {provider}:{model}:{product}:{initializedAt}`, contradicting the UUIDv7 id in the contract. | `ForecastRun.id` is UUIDv7, the only persisted/exposed identifier. `(provider, model, product, initializedAt)` is the natural key used for lookup and upsert and for nothing else. Job keys resolve the UUIDv7 at enqueue time. The composite string survives only in the sentence forbidding it. |
+| **F25** | `verification_truth` sat under `kind: "forecast"`, so using CHIRPS or IMERG as truth would have been recorded as a forecast input — a false class in the provenance record, produced by the very schema that exists to prevent it. | `purpose: "input" \| "verification_truth"` is now orthogonal to `kind`/`role`, and `role: "verification_truth"` no longer exists. CHIRPS-as-truth is `{kind:"dataset", role:"satellite_estimate", purpose:"verification_truth"}`; a later SEAS5 run as truth is `{kind:"forecast", role:"seasonal", purpose:"verification_truth"}`. `annual_outlook` was added as a forecast role, matching `SegmentProvenance` and `ForecastValue`. A role→`dataClass` table makes the mapping explicit and assertable. |
+| **F26** | `withTenant(user: AuthUser, …)` vs `withTenant(ownerId, …)`. | One signature: `withTenant(userId: UUID, fn)`. Requests pass `user.id`; workers pass the resolved `ownerId`. Taking an object would force background jobs to fabricate a user record — the impersonation the role split exists to prevent. Transaction-local `set_config` and the row-returning raw API are unchanged. |
+| **F27** | `SegmentProvenance` named `forecastRunIds` but not `ingestionRunIds`, while `DataInputRef` named both. | Added `ingestionRunIds` to the `forecast` and `dataset` variants. Rationale: a `normalizerVersion` bump supersedes `WeatherRecord` rows, so the same forecast run can yield different values — a segment naming only the forecast run cannot explain why last week's number for the same day changed. Non-redundant because segments attribute date ranges to sources while `inputRefs` lists the artifact's inputs as a set. Climatology takes no ingestion id; a baseline is rebuilt only by version bump. |
+| **F28** | The hash descriptor said `dataInputRefs[]` while the field is `inputRefs`; and it repeated `extractionPolicy`/`resolvedCells` outside the snapshot hash while also including the snapshot hash. | Descriptor now uses `inputRefs` and is defined per artifact (`MonthlyOutlook` has no field snapshot; the agronomy artifacts carry `fieldSnapshotHash`). `fieldSnapshotHash` appears **instead of** the snapshot body, and the duplicated `extractionPolicy`/`resolvedCells` were removed — they are inside the snapshot the hash covers, so repeating them created a second place to drift. Canonicalisation stated once. |
+
+### Decisions accepted
+
+**A23.** `maintenance` is read-and-enqueue only. Its write surface is non-tenant bookkeeping (`sync_attempts`, dead-letter status, sweep watermark). It may not mark tenant rows stale — because derived freshness is computed, not stored.
+
+**A24.** `ForecastRun.id` is UUIDv7; the natural key is a lookup mechanism, never an identifier. This is now enforced as a rule, not a habit.
+
+**A25.** `purpose` is orthogonal to `kind`/`role`; no role names a purpose. Verification truth is whatever class the evidence actually is.
+
+**A26.** `withTenant(userId: UUID, fn)` — id in, not user object.
+
+**A27.** Segment provenance names both forecast and ingestion runs, because values depend on the normalizer version.
+
+**A28.** One descriptor field name (`inputRefs`) and one inclusion rule (snapshot hash, not snapshot body).
+
+### Decisions rejected
+
+**R11. Do not add a `recompute.briefings` queue back.** The briefs suggest either keeping invalidation in `maintenance` or moving it to the tenant-scoped path; a third queue was already deleted in Phase 1.1 for good reason. The tail of an existing job is the right place.
+
+**R12. Do not split `verification_truth` into its own `kind`.** It is a purpose, not a data class; a fifth variant would have made the union describe intent instead of evidence.
+
+**R13. Do not store a materialised `is_stale` flag to avoid read-time computation.** That would reintroduce the tenant-write problem F23 exposed, and would make staleness a thing that can disagree with its inputs.
+
+### Remaining risks
+
+| Risk | Why it survives | Validation needed |
+|---|---|---|
+| Read-time freshness computation costs a join per response | acceptable at this scale, unmeasured | Phase 4: measure on a 12-month outlook with 4 segments |
+| `maintenance` may read more metadata than it needs | the boundary is documented, not enforced by a policy (weather tables have no `user_id`) | Phase 2: separate DB roles with column-level grants if the read surface grows |
+| `purpose: "verification_truth"` on a `forecast` variant could be misused to smuggle a non-truth input | it is legal in the type system by design | Phase 9: `verify` writes only to scoring tables; a recommendation must never carry `purpose: "verification_truth"` — assert on persist |
+| `fieldSnapshotHash` correctness depends on one canonicalisation implementation | a second implementation would silently produce different hashes for identical fields | Phase 2: single exported `canonicalJson` helper + golden-vector test |
+| Segment `ingestionRunIds` may list runs that no longer hold the rows used | supersession replaces rows rather than keeping per-normalizer copies | Phase 4: confirm superseded rows remain hashable, or store hashes at ingest |
+
+### Consistency verification (static only)
+
+| Check | Result |
+|---|---|
+| No composite string used as an identifier | pass — the only remaining occurrences of `{provider}:{model}:{product}:{initializedAt}` are the rule that forbids it (`background-processing.md` §3) and this review; no schema, contract, or example uses one |
+| UUIDv7 is the only id space | pass — `api-conventions` §1, `provenance-contract` §3, RLS policy cast, `withTenant(userId: UUID)` |
+| No `app_system` job writes a tenant-owned row | pass — `system-architecture` §8 table + `background-processing` §10 agree; `ai_briefings` appears only under `recompute.windows` |
+| `verification_truth` cannot be written as a role | pass — the string exists only as a `purpose` value |
+| `withTenant` has one signature | pass — `system-architecture`, ADR-002 D8, `background-processing` §7/§10 |
+| Hash descriptor field name | pass — `dataInputRefs` appears nowhere |
+| Segment provenance carries both run ids | pass — and `ingestionRunIds` is `[string, ...string[]]`, so the old "empty array means climatology" ambiguity cannot return |
+
+**What this does not establish:** that any of it runs. There is no code and no integration test in this phase. Every claim above is about document agreement, and each row that says "pass" means "the documents no longer disagree", not "the system behaves this way".
+
+### Phase 2 readiness
+
+**Ready.** The three implementation-time gates are unchanged and now sharper:
+
+1. `withTenant(userId: UUID, fn)` with the row-returning raw API, plus a test asserting a query outside it returns zero rows.
+2. `packages/contracts` emits `oneOf` on `dataClass` with `source?: never` on climatology, plus a negative fixture.
+3. Role split from commit one: `app_system` never writes `ai_briefings`, `suitability_runs`, `planting_windows`, `farms`, or `fields`; assert it with a test that attempts the write and expects it to fail.
+
+External blockers unchanged: Open-Meteo licensing, BMKG written permission, ECMWF Set VII access.
