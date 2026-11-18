@@ -10,8 +10,8 @@
 | Decision approval status | **Complete** — every gate this file asked for is answered |
 | Implementation status | **`S1` and `S2` implemented, `S3` onward not started** — contracts at `c44cf5b`/`0bb9792`, plumbing at `ad6235b`, remediation at `6d36741`, details and path hardening at `c762171`, shared path grammar at `38486fd`, parser and numeric-segment correctness at `75607d8` |
 | Verification status | **Green at `75607d8`, reviewed** — build, typecheck, test, lint, prettier, `git diff --check` all exit `0`; api 76, contracts 187, database 9, 0 failing |
-| Remaining blockers before `S3` | **`ADR-004` acceptance only** — written and `Proposed`; `ADR-005` gates `S5`, not `S3` (see the dependency table below). `S3`–`S6` owe no other owner answer. The `IG` gates block **S7** (`IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10`) and **S8** (`IG-8`, `IG-9`), not the database boundary |
-| ADR status | `ADR-004` and `ADR-005` **written, `Proposed`, not accepted** — they formalise `AG-1`/`AG-2` and add no decision of their own. `AG-1`/`AG-2` are **not** re-opened and are not asked for again |
+| Remaining blockers before `S3` | **None documentation-wise** — `ADR-004` was accepted on 2026-11-18 (see the ADR status row). `S3` may begin subject to its own implementation prerequisites (§16 of the plan: test-file authorization, a cluster-admin bootstrap path, an isolated compose project). `ADR-005` gates `S5`, not `S3`. The `IG` gates block **S7** (`IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10`) and **S8** (`IG-8`, `IG-9`), not the database boundary |
+| ADR status | `ADR-004` **Accepted** 2026-11-18 (approver: Akihira77) — formalises `AG-1`, not implemented, `S3`/`S4`/`S6` pending. `ADR-005` **written, `Proposed`, not accepted** — formalises `AG-2` and gates `S5`. Neither adds a decision of its own, and `AG-1`/`AG-2` are **not** re-opened or asked for again |
 | `OPEN-nn` dispositions changed | **No** — `OPEN-01` and `OPEN-13` remain unresolved |
 
 This record exists so the owner can decide without reading 1,100 lines of review. It
@@ -1041,7 +1041,7 @@ the rest are not.
 | S1 | **implemented** | `c44cf5b` — response and error envelopes, error-code set, `requestId`; `0bb9792` — branded `NotFoundErrorCode`; `38486fd` — encoded path grammar enforced by `validationIssueSchema`, with the producer importing the same identifier rule; `75607d8` — explicit parser states and canonical numeric segments |
 | S2 | **implemented and remediated** | `ad6235b` — prefix, filter, request id, cookies, helmet, trust proxy, CORS, database client, health probes; `6d36741` — credential boundary, log sanitisation, 405/406/415 documentation, `statement_timeout` readiness, `IG-5-A1`, `IG-12`; `c762171` — `details` trust boundary, path sanitisation in the pipe, log category, readiness budget, S2 commit history; `38486fd` — shared path grammar, producer reuse, segment-boundary truncation; `75607d8` — parser state machine, canonical numeric guard |
 | S3–S8 | **not started** | no `app_auth` role, no migration, no auth endpoint |
-| S9 (partial) | **`ADR-004`/`ADR-005` written** | `docs/adr/ADR-004-authentication-database-boundary.md`, `docs/adr/ADR-005-session-storage.md` — both `Proposed`, awaiting owner acceptance; every other S9 item is still absent |
+| S9 (partial) | **`ADR-004` accepted; `ADR-005` written** | `docs/adr/ADR-004-authentication-database-boundary.md` — **Accepted** 2026-11-18 (Akihira77); `docs/adr/ADR-005-session-storage.md` — `Proposed`, awaiting acceptance before `S5`; every other S9 item is still absent |
 
 So the honest statement of what these four decisions buy: **Track 1 can start**
 (contracts and plumbing), and **Track 2 can start** (the database boundary and
@@ -1057,11 +1057,13 @@ leave the process rather than only where they are built, and their checks exit `
 S3, S4, and S5 are still approval-only in the other sense — no `app_auth` role, no
 migration, and no verification row exists for them.
 
-The ADRs are now written (`ADR-004`, `ADR-005`, both `Proposed`), so the last thing
-standing between `AG-1`/`AG-2` and S3 is owner acceptance of those two documents. Do
-not read that as a fifth decision: they record what was approved on 2026-11-18 and add
-nothing. A separate, non-architecture row survives from the original list — the `IG`
-gates — and it belongs to S7/S8, where endpoint behaviour is decided.
+The ADRs are now written, and `ADR-004` was **accepted on 2026-11-18**; `ADR-005`
+remains `Proposed` and gates `S5`, not `S3`. So the last thing standing between
+`AG-1` and S3 is implementation, not paperwork — and `AG-2`'s record still awaits
+acceptance before any session table exists. Do not read acceptance as a fifth decision:
+they record what was approved on 2026-11-18 and add nothing. A separate,
+non-architecture row survives from the original list — the `IG` gates — and it belongs
+to S7/S8, where endpoint behaviour is decided.
 
 # What these decisions do not settle
 

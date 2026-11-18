@@ -41,9 +41,10 @@ and S8 and remain blocked on gates this plan does not answer (§13).
 
 The architecture half is now written down where it belongs rather than only in this
 plan: `docs/adr/ADR-004-authentication-database-boundary.md` formalises `AG-1` and
-`docs/adr/ADR-005-session-storage.md` formalises `AG-2`. Both are **Proposed**,
-because approval of a decision and acceptance of its record are different acts. This
-plan links to them and does not restate them (§4).
+`docs/adr/ADR-005-session-storage.md` formalises `AG-2`. `ADR-004` was **accepted on
+2026-11-18**; `ADR-005` is still **Proposed**, because approval of a decision and
+acceptance of its record are different acts. This plan links to them and does not
+restate them (§4).
 
 ## 1.1 What the first independent review changed
 
@@ -1169,7 +1170,7 @@ of them into "done" or "blocked".
 |---|---|---|
 | `AG-1` | **1 — decided** 2026-11-18 | owner record §1.10, Option A |
 | `AG-2` | **1 — decided** 2026-11-18 | owner record §2.10, Option A |
-| `ADR-004` | **2 — written, not accepted** | `docs/adr/ADR-004-authentication-database-boundary.md`; formalises `AG-1` |
+| `ADR-004` | **accepted 2026-11-18** (Akihira77) — left state 2 | `docs/adr/ADR-004-authentication-database-boundary.md`; formalises `AG-1`, not implemented |
 | `ADR-005` | **2 — written, not accepted** | `docs/adr/ADR-005-session-storage.md`; formalises `AG-2` |
 | `IG-5`, `IG-5-A1` | decided, implemented | S1/S2 shipped against them |
 | `IG-11` | decided | `node:test` for `apps/api`; already in use |

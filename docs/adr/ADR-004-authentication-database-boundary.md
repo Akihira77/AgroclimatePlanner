@@ -1,9 +1,12 @@
 # ADR-004 — Authentication Database Boundary
 
-- Status: **Proposed** — formalises decision `AG-1` recorded by the repository owner
-  on 2026-11-18 in `docs/review/phase-3.2-owner-decisions.md` §1.10. That approval is
-  the decision; this document is its durable record. Acceptance of *this document* is
-  the owner's, not the author's, and is a separate act from the approval it records.
+- Status: **Accepted** — approved by Akihira77 on 2026-11-18. This ADR formalises
+  decision `AG-1`, recorded by the repository owner on 2026-11-18 in
+  `docs/review/phase-3.2-owner-decisions.md` §1.10. That approval is the decision; this
+  document is its durable record, and acceptance of it is the owner's act, separate from
+  the approval it records. Acceptance is a **documentation gate, not implementation**:
+  `S3`, `S4`, and `S6` are still pending, and `OPEN-01` stays unresolved until a
+  migration is applied and `db:verify` is green.
 - Date: 2026-11-18 (decision date), recorded here 2026-11-18
 - Depends on: ADR-002 (D5, D7), ADR-003, `docs/data-model/ownership-and-rls.md`,
   `docs/review/phase-3.2-design-review.md` §3, §4, §5, §16
