@@ -22,6 +22,14 @@ where they are enforced instead — the `details` trust boundary and the encoded
 validation path grammar in `api-conventions.md` §3 and §12, and the readiness budget in
 §12.
 
+**Reconciled once more 2026-11-18, after `75607d8`.** That commit made the path parser
+an explicit three-state machine and guarded numeric segments with the contract's own
+canonical-index rule; it changed no row in this review either, and no gate. The
+behaviour it settles is recorded where it is enforced — `api-conventions.md` §12 — so
+this note exists only to keep the chronology complete: `bf0e593` (reviewed) →
+`6d36741` → `c762171` → `38486fd` → `75607d8` (reviewed and approved for the S2 scope).
+The snapshot below is still the object of this review and has not been rewritten.
+
 Repository state reviewed: `master` at `bf0e593`, reviewed again at round 2. Files
 inspected: the Phase 3.2 brief; `packages/database` (`bootstrap/roles.sql`,
 `bootstrap.mjs`, `scripts/lib/{connections,privilege-verification}.mjs`,

@@ -8,8 +8,8 @@
 | Decisions requested | 4 — `AG-1`, `AG-2`, `IG-5`, `IG-11` |
 | Owner decisions made so far | **4 of 4**, plus `IG-5-A1` (amendment) and `IG-12` (new gate) |
 | Decision approval status | **Complete** — every gate this file asked for is answered |
-| Implementation status | **`S1` and `S2` implemented, `S3` onward not started** — contracts at `c44cf5b`/`0bb9792`, plumbing at `ad6235b`, remediation at `6d36741`, details and path hardening at `c762171`, shared path grammar at `38486fd` |
-| Verification status | **Green at `38486fd`** — build, typecheck, test, lint, prettier, `git diff --check` all exit `0`; api 72, contracts 182, database 9 at that commit, and api 76, contracts 187, database 9 on the unreviewed working tree that follows it |
+| Implementation status | **`S1` and `S2` implemented, `S3` onward not started** — contracts at `c44cf5b`/`0bb9792`, plumbing at `ad6235b`, remediation at `6d36741`, details and path hardening at `c762171`, shared path grammar at `38486fd`, parser and numeric-segment correctness at `75607d8` |
+| Verification status | **Green at `75607d8`, reviewed** — build, typecheck, test, lint, prettier, `git diff --check` all exit `0`; api 76, contracts 187, database 9, 0 failing |
 | Remaining blockers before `S3` | `ADR-004`/`ADR-005` and `IG-1`–`IG-4`, `IG-6`–`IG-10`; `OPEN-01`/`OPEN-13` stay unresolved until an accepted ADR **and** an applied migration **and** green verification exist |
 | `OPEN-nn` dispositions changed | **No** — `OPEN-01` and `OPEN-13` remain unresolved |
 
@@ -25,12 +25,13 @@ of them. That was accurate on 2026-11-18 before S1. `OPEN-01` and `OPEN-13` stay
 Until then the register's dispositions are unchanged.
 
 **Update, 2026-11-18 (post-S2).** Two of the tracks this record unblocked now have
-work behind them: `S1` (contracts) at `c44cf5b`, `0bb9792`, `38486fd`; `S2` (API
-plumbing) at `ad6235b`, with remediation at `6d36741`, details and path hardening at
-`c762171`, and the shared path grammar at `38486fd`. That changes implementation
-status only. The approvals, their dates, and the register's dispositions above are
-untouched; `S3` and everything after it still has no code, and `OPEN-01`/`OPEN-13`
-still need the ADR and migration they always needed.
+work behind them: `S1` (contracts) at `c44cf5b`, `0bb9792`, `38486fd`, `75607d8`; `S2`
+(API plumbing) at `ad6235b`, with remediation at `6d36741`, details and path hardening
+at `c762171`, the shared path grammar at `38486fd`, and parser and numeric-segment
+correctness at `75607d8`. That changes implementation status only. The approvals, their
+dates, and the register's dispositions above are untouched; `S3` and everything after it
+still has no code, and `OPEN-01`/`OPEN-13` still need the ADR and migration they always
+needed.
 
 ## Recorded decisions
 
@@ -177,7 +178,7 @@ with no way to tell from a grant dump which repository code was allowed to do wh
 
 **This is a database-privilege boundary, not a process boundary.** The design review
 places the `app_auth` client in the same process as the tenant client
-(`phase-3.2-design-review.md:143` — "a second client in the same process"). The
+(`phase-3.2-design-review.md` §3 — "a second client in the same process"). The
 separation therefore constrains what each *credential* may do; it does not constrain
 what an attacker holding the *process* can do, because such an attacker has both
 credentials. An earlier revision of this section said the two capabilities already
@@ -220,7 +221,7 @@ same power to whoever holds the store credential. The owner must accept this
 residual risk explicitly, not as a footnote.
 
 **And the role boundary does not survive process compromise.** Both clients live in
-one process (`phase-3.2-design-review.md:143`), so an attacker who owns that process —
+one process (`phase-3.2-design-review.md` §3), so an attacker who owns that process —
 RCE, a compromised dependency, a poisoned config read — holds the tenant credential
 and the auth credential together. The fourth role limits what each credential reaches;
 it says nothing about what the process reaches. Hardening the process is out of scope
@@ -780,7 +781,7 @@ The architecture already said Zod twice, in prose:
 | `api-conventions.md` names Zod as the request-validation mechanism and promises OpenAPI generated from Zod | `[V]` `docs/architecture/api-conventions.md` §12, §11 |
 | `packages/contracts` defines every shared schema in Zod and is consumed by `apps/api` | `[V]` `packages/contracts/src/*` |
 | S2 shipped a NestJS `ValidationPipe` over `class-validator` decorators instead | `[V]` `ad6235b`, `apps/api/src/http/validation.pipe.ts` at that commit |
-| The design review's own S2 row named that global pipe | `[V]` `phase-3.2-design-review.md:761`, §18 |
+| The design review's own S2 row named that global pipe | `[V]` `phase-3.2-design-review.md` §10, §18 |
 
 Two validation systems in one repository means two error vocabularies, two places to
 change a rule, and an OpenAPI document generated from schemas that are not the ones the
@@ -1036,8 +1037,8 @@ the rest are not.
 
 | Step | Status | Evidence |
 |---|---|---|
-| S1 | **implemented** | `c44cf5b` — response and error envelopes, error-code set, `requestId`; `0bb9792` — branded `NotFoundErrorCode`; `38486fd` — encoded path grammar enforced by `validationIssueSchema`, with the producer importing the same identifier rule |
-| S2 | **implemented and remediated** | `ad6235b` — prefix, filter, request id, cookies, helmet, trust proxy, CORS, database client, health probes; `6d36741` — credential boundary, log sanitisation, 405/406/415 documentation, `statement_timeout` readiness, `IG-5-A1`, `IG-12`; `c762171` — `details` trust boundary, path sanitisation in the pipe, log category, readiness budget, S2 commit history; `38486fd` — shared path grammar, producer reuse, segment-boundary truncation |
+| S1 | **implemented** | `c44cf5b` — response and error envelopes, error-code set, `requestId`; `0bb9792` — branded `NotFoundErrorCode`; `38486fd` — encoded path grammar enforced by `validationIssueSchema`, with the producer importing the same identifier rule; `75607d8` — explicit parser states and canonical numeric segments |
+| S2 | **implemented and remediated** | `ad6235b` — prefix, filter, request id, cookies, helmet, trust proxy, CORS, database client, health probes; `6d36741` — credential boundary, log sanitisation, 405/406/415 documentation, `statement_timeout` readiness, `IG-5-A1`, `IG-12`; `c762171` — `details` trust boundary, path sanitisation in the pipe, log category, readiness budget, S2 commit history; `38486fd` — shared path grammar, producer reuse, segment-boundary truncation; `75607d8` — parser state machine, canonical numeric guard |
 | S3–S9 | **not started** | no `app_auth` role, no migration, no auth endpoint, no ADR-004/ADR-005 |
 
 So the honest statement of what these four decisions buy: **Track 1 can start**
@@ -1047,7 +1048,7 @@ sessions). Track 3 cannot — `S7` and `S8` additionally require `IG-1` through 
 boundary.
 
 **As of 2026-11-18 the gates for S1, S2, S3, S4, and S5 are satisfied by approval.**
-As of `38486fd`, S1 and S2 are also satisfied by work: the contract schemas, the
+As of `75607d8`, S1 and S2 are also satisfied by work: the contract schemas, the
 exception filter, and the validation pipe exist, the path grammar is enforced where the
 details leave the process rather than only where they are built, and their checks exit
 `0`. S3, S4, and S5 remain approval-only — no `app_auth` role, no migration, and no

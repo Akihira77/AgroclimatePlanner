@@ -451,8 +451,8 @@ approvals, one amendment `IG-5-A1`, one later gate `IG-12`).
 
 | Step | Status | Commit | What exists |
 |---|---|---|---|
-| S1 — contracts | **implemented** | `c44cf5b`, `0bb9792`, `c762171`, `38486fd` | response and error envelopes, `errorCodeSchema` with the branded `NotFoundErrorCode`, `requestIdSchema`, and `validationDetailsSchema` — bounded details at `c762171`, the encoded path grammar enforced in the contract at `38486fd` |
-| S2 — API plumbing | **implemented and remediated** | `ad6235b`, `6d36741`, `c762171`, `38486fd` | `/v1` prefix, request-id middleware, exception filter, `ZodValidationPipe` bound per parameter, `cookie-parser`, helmet, explicit CORS allowlist, explicit trust proxy, database client + lifecycle, `/health` and `/health/ready` |
+| S1 — contracts | **implemented** | `c44cf5b`, `0bb9792`, `c762171`, `38486fd`, `75607d8` | response and error envelopes, `errorCodeSchema` with the branded `NotFoundErrorCode`, `requestIdSchema`, and `validationDetailsSchema` — bounded details at `c762171`, the encoded path grammar enforced in the contract at `38486fd`, canonical numeric segments at `75607d8` |
+| S2 — API plumbing | **implemented and remediated** | `ad6235b`, `6d36741`, `c762171`, `38486fd`, `75607d8` | `/v1` prefix, request-id middleware, exception filter, `ZodValidationPipe` bound per parameter, `cookie-parser`, helmet, explicit CORS allowlist, explicit trust proxy, database client + lifecycle, `/health` and `/health/ready` |
 | S3 — `app_auth` bootstrap | not started | — | — |
 | S4 — `auth_boundary` migration | not started | — | — |
 | S5 — `sessions` migration | not started | — | — |
@@ -469,24 +469,34 @@ What S2 deliberately does not contain: an auth endpoint, session issuance, an
 unresolved — an approval and an implementation are not a migration, and the ADRs
 that would move them are not written.
 
-Verification history, kept in order because the three commits fixed different things:
-`6d36741` was green on its own, `c762171` bounded the `details` boundary and the
-generated path, `38486fd` moved the grammar into the contract and made producer and
-contract agree. The parser and numeric-segment hardening that follows `38486fd` is
-still an uncommitted working tree, verified but not yet reviewed; the numbers below
-are from that tree and separately from `38486fd` where they differ.
+Verification history, by commit, because the four commits fixed different things:
+
+| Commit | Scope |
+|---|---|
+| `6d36741` | Initial S2 remediation — credential boundary, log sanitisation, 405/406/415 documentation, `statement_timeout` readiness, `IG-5-A1`, `IG-12` |
+| `c762171` | Error-details trust boundary, validation-path sanitisation in the pipe, log category, readiness budget |
+| `38486fd` | Shared contract path grammar, producer reuse of the identifier rule, segment-boundary truncation |
+| `75607d8` | Explicit path-parser state machine, canonical numeric-segment guard, producer/contract round-trip proof |
+
+The results below are the ones reported for the committed implementation at
+`75607d8`. They are recorded here, not re-executed by this documentation change:
 
 | Check | Result |
 |---|---|
-| `pnpm install --frozen-lockfile` | exit 0 |
-| `pnpm build` / `typecheck` / `lint` | 0 / 0 / 0 |
-| `pnpm test` | 0 — api 76 (`38486fd`: 72), database 9, contracts 187 (`38486fd`: 182), 0 failing |
-| `pnpm exec prettier --check .` | 0 |
-| `git diff --check` | 0 |
+| API tests | **76 passed**, 0 failing |
+| Contracts tests | **187 passed**, 0 failing |
+| Database tests | **9 passed**, 0 failing |
+| Workspace build | exit 0 |
+| Workspace typecheck | exit 0 |
+| Workspace test | exit 0 — API 76, database 9, contracts 187 |
+| Workspace lint | exit 0 |
+| Prettier (`pnpm exec prettier --check .`) | exit 0 |
+| `git diff --check` | exit 0 |
 
 Two limitations stated rather than implied: the readiness budget bounds the HTTP
 response and lets PostgreSQL cancel its own statement, but a pending pool connect
 attempt is not aborted; and no endpoint takes input yet, so `ZodValidationPipe` is
 exercised by unit, contract-boundary, and filter-level tests rather than by a live
-route. No Prisma-adapter integration test was run — the credential lives in `.env`,
-which this work does not read.
+route. **No Prisma-adapter integration test was run** — the credential lives in
+`.env`, which this work does not read — and **no live HTTP route test exists**,
+because no route takes input yet.
