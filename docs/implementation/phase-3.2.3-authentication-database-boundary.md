@@ -35,6 +35,12 @@ Four steps, in a fixed order:
 | **S5** | migration `sessions`: table, grants, policies, GC function | session rows are written by the credential S3 creates |
 | **S6** | `db:verify` rows, `auth-boundary` suite, conformance additions | a boundary nobody measured is a claim, not a control |
 
+Status, as of 2026-11-18: **S3 and S4 are implemented, verified in isolated projects,
+and pushed** (`b9a27c6`, `cf0d1c2`). `S5` is blocked on `ADR-005` acceptance; `S6`'s
+session half waits for `S5`, and its `users` half is what the corrective pass just
+hardened; the canonical database application is the owner's and is not evidenced
+anywhere in this repository.
+
 What this does **not** produce: a register endpoint, a login endpoint, a session
 guard, `/me`, `/logout`, password hashing, rate limiting, or a GC job. Those are S7
 and S8 and remain blocked on gates this plan does not answer (§13).
@@ -518,13 +524,25 @@ CREATE POLICY users_auth_register ON app.users
   FOR INSERT TO app_auth WITH CHECK (true);
 ```
 
-**Implementation status (S4, 2026-11-18, uncommitted).** The migration exists and is
-applied in an isolated verification project, not the canonical database. `db:verify`
-reports 417 PASS / 0 FAIL / 0 SKIP there; the new assertions are quoted in §8.2 and the
-behavioural half registers a real `app_auth` row, reads it back with no `app.user_id`
-set, and gets `42501` for `created_at`, `updated_at`, `SELECT *`, six unapproved INSERT
-columns, `UPDATE`, and `DELETE`. `app_api` and `app_system` are unchanged and still hold
-no privilege on `app.users`. No commit, no push.
+**Implementation status (S4).** Committed and pushed to `master` as `b9a27c6`
+(migration, verifier, unit tests) and `cf0d1c2` (status reconciliation). Applied and
+verified in isolated Compose projects, never the canonical database: `db:verify`
+reports **417 PASS / 0 FAIL / 0 SKIP** at `b9a27c6` and **419** after the corrective
+pass that added the exact policy contract (§8.2). The behavioural half registers a
+real `app_auth` row, reads it back with no `app.user_id` set, and gets `42501` for
+`created_at`, `updated_at`, `SELECT *`, six unapproved INSERT columns, `UPDATE`, and
+`DELETE`. `app_api` and `app_system` are unchanged and still hold no privilege on
+`app.users`.
+
+Three facts that are not the same fact, and are not to be merged in prose:
+
+| Fact | State |
+|---|---|
+| S4 implementation in source control | **committed and pushed** — `b9a27c6`, `cf0d1c2` |
+| S4 isolated verification | **passed** — 419 PASS / 0 FAIL / 0 SKIP on a fresh volume, all four migrations in order |
+| S4 on the canonical database | **pending owner action** — no evidence exists for it |
+| S6 standalone authentication suite | **pending** — §8.3 is still unwritten |
+| `OPEN-01` | **unresolved** |
 
 `FOR SELECT`/`FOR INSERT` and not `FOR ALL`: one policy per capability is what makes
 the grant dump readable, and `FOR ALL` would document a capability the grants do not
@@ -963,6 +981,17 @@ unimplemented until S5. Four concrete choices:
   counted as having been written.
 - `app_api`/`app_system` are asserted with both `has_table_privilege` and
   `has_column_privilege`; the first alone would miss a column grant added by mistake.
+- The policies are asserted as a **contract**, not a name list, by
+  `checkUsersPolicyInventory`: four records compared on command, `permissive`, role
+  set, `USING` and `WITH CHECK`, with a missing policy, an extra policy, and a
+  rewritten expression all failing. `users_self_only`'s predicate is compared against
+  the catalogue's normalised text
+  (`(id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid)`), so
+  widening it to `USING (true)` is a red run rather than a silent tenancy hole.
+  `roles` is fetched as `text[]`, because `roles === "{public}"` misses
+  `{app_auth,public}`. The comparison is a pure function and is unit-tested without a
+  database; a real `CREATE POLICY … TO PUBLIC` on an isolated table was used once to
+  confirm the assertion actually fires (`db:verify` exit 1, three FAIL).
 
 ### 8.3 New suite `test/rls/auth-boundary.test.mjs` (`node:test`, real roles)
 

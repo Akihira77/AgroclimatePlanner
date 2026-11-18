@@ -454,7 +454,7 @@ approvals, one amendment `IG-5-A1`, one later gate `IG-12`).
 | S1 — contracts | **implemented** | `c44cf5b`, `0bb9792`, `c762171`, `38486fd`, `75607d8` | response and error envelopes, `errorCodeSchema` with the branded `NotFoundErrorCode`, `requestIdSchema`, and `validationDetailsSchema` — bounded details at `c762171`, the encoded path grammar enforced in the contract at `38486fd`, canonical numeric segments at `75607d8` |
 | S2 — API plumbing | **implemented and remediated** | `ad6235b`, `6d36741`, `c762171`, `38486fd`, `75607d8` | `/v1` prefix, request-id middleware, exception filter, `ZodValidationPipe` bound per parameter, `cookie-parser`, helmet, explicit CORS allowlist, explicit trust proxy, database client + lifecycle, `/health` and `/health/ready` |
 | S3 — `app_auth` bootstrap | **implemented** | `70a614f`, `d9d774e`, `f5e4d1c`, `a4f1fa0` | fourth role with zero memberships and no `BYPASSRLS`; `APP_AUTH_DATABASE_URL` parsed and role-validated at boot (dev default, production must state it); non-global `AuthDatabaseModule` + `AuthDatabaseLifecycle`, proven by module-assembly tests, not yet imported by `AppModule`; `db:verify` 387 assertions |
-| S4 — `auth_boundary` migration | **implemented, uncommitted** | — | `20261118040000_auth_boundary`: two column grants and two policies on `app.users`; `db:verify` 417 assertions, 0 FAIL, 0 SKIP in an isolated project |
+| S4 — `auth_boundary` migration | **committed and pushed** | `b9a27c6`, `cf0d1c2` | `20261118040000_auth_boundary`: two column grants and two policies on `app.users`; `db:verify` 419 assertions, 0 FAIL, 0 SKIP after the corrective pass |
 | S5 — `sessions` migration | not started | — | — |
 | S6 — privilege verification | not started | — | — |
 | S7 — register + login | blocked | — | needs `IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10` |
@@ -536,17 +536,54 @@ from column defaults; the six granted columns are readable; `created_at`,
 fail with **`42501`** and nothing else. `app_api` and `app_system` hold no privilege
 on `app.users`, asserted with both `has_table_privilege` and `has_column_privilege`.
 
+### S4 corrective pass — exact policy contract (2026-11-18)
+
+Two review findings, both about truthfulness rather than capability: the verifier
+asserted the four policies by name and substring, and the documents still described
+S4 as uncommitted after it had been pushed.
+
+Source control: `b9a27c6` (migration, verifier, unit tests) and `cf0d1c2` (status
+reconciliation) are on `master`. Isolated verification: the corrective run used its
+own project, `agroclimate-s4-corrective-check` / `agroclimate-db-s4-corrective-check`
+on port **5544**, fresh volume, all four migrations applied in order. Canonical
+database application: **pending owner action**. `OPEN-01`: **unresolved**.
+
+`checkUsersPolicyInventory` now compares the whole inventory against four records —
+command, `permissive`, role set, `USING`, `WITH CHECK` — and fails on a missing
+policy, an extra one, or any of those fields changing. The tenant predicate is
+compared against the catalogue's normalised form:
+
+`(id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid)`
+
+which is why `users_self_only` can no longer be widened to `USING (true)` without a
+red run. `roles` is selected as `text[]` and parsed, so `{app_auth,public}` is caught
+where `roles === "{public}"` would not be.
+
+| Check | Result |
+|---|---|
+| `db:verify` (5544) | **419 PASS, 0 FAIL, 0 SKIP**, exit 0 (417 before the pass) |
+| Negative probe | `CREATE POLICY users_auth_everyone … TO PUBLIC` on the isolated table → `db:verify` **exit 1**, 3 FAIL (`exactly four`, `names PUBLIC`, and the existing cross-table PUBLIC check); policy dropped, green restored, `db:status` up to date |
+| Database unit tests | **25 passed** (13 new policy-contract cases) |
+| API tests | 87 passed |
+| Workspace test | exit 0 — API 87, database 34, contracts 6 files |
+| Workspace build / typecheck / lint | exit 0 |
+| Prettier / `git diff --check` | exit 0 |
+
+The negative probe is the part worth keeping: an assertion that only ever ran green
+is a claim, not evidence.
+
 What this does **not** mean:
 
 - **No authentication workflow exists.** No register, login, logout, `/me`, guard,
   hashing, policy, rate limit, cookie, or CSRF.
-- **`OPEN-01` is not closed.** The capability is proven in an isolated project; the
-  register entry waits for the committed migration, the canonical database, and
-  S6's suite. ADR-004's own definition of done is not shorter than that.
+- **`OPEN-01` is not closed.** The capability is committed and proven in an isolated
+  project; the register entry still waits for the canonical database application and
+  S6's suite. ADR-004's definition of done is not shorter than that.
 - **Enumeration is an accepted limitation, not a bug to fix later.** `USING (true)`
   filters nothing; the column grant is the boundary. `db:verify` asserts
   `select count(*)` succeeds so the exposure cannot be rediscovered as a surprise.
 - **`prisma.user.create()` / `update()` remain unusable** under this grant, by
   design: their client-side defaults name `locale`/`timezone`/`role` and `@updatedAt`
   names `updated_at`. Registration is the raw `INSERT … RETURNING id` above.
-- **S4 is not committed.** Working tree only, awaiting owner review.
+- **S4 is committed and pushed** (`b9a27c6`, `cf0d1c2`). What remains outside this
+  repository is the owner's canonical database application, not the code.

@@ -9,12 +9,12 @@ carry `ENABLE` + `FORCE ROW LEVEL SECURITY` with a `FOR ALL TO app_api` policy a
 a `*_owner_full_access` policy for `migration_owner`. The twelve global/reference
 tables have no RLS because they have no tenant ownership column to filter on.
 Runtime grants and privilege boundaries are applied and verified — `db:verify`
-(417 assertions on PostgreSQL 18.6 after S4), the tenant-isolation suite (39 tests,
+(419 assertions on PostgreSQL 18.6 after S4), the tenant-isolation suite (39 tests,
 as the real `app_api` role through `withTenant`), and the schema-conformance suite
 (12 tests). The authentication credential `app_auth` holds a column grant on
 `app.users` and two policies (`users_auth_lookup`, `users_auth_register`), applied by
-`prisma/migrations/20261118040000_auth_boundary/migration.sql`; `app_api` holds
-nothing there, before and after.
+`prisma/migrations/20261118040000_auth_boundary/migration.sql`, committed as
+`b9a27c6`; `app_api` holds nothing there, before and after.
 
 Implementation is not the same as resolution. `OPEN-01` is still open in the
 register: the boundary that answers it now exists and is exercised by `db:verify` in
@@ -281,7 +281,7 @@ because both are about a *partial* grant and a *policy exemption* rather than a
 binary allow/deny.
 
 **Where they run now.** 1, 2, 6, 7, 8, 9 and 10 are asserted by `db:verify`
-(417 assertions after S4) and the tenant-isolation suite (39 tests, as `app_api` through
+(419 assertions after S4) and the tenant-isolation suite (39 tests, as `app_api` through
 `withTenant`). 10 is also probed behaviourally as the real role: the three-column
 `INSERT` succeeds with `served_lat` NULL and naming `served_lat` returns `42501`.
 Check 5 — moving a row's `user_id` — is **not** separately tested: the suite proves
