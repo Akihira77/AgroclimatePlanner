@@ -21,6 +21,8 @@ GET /v1/farms
 
 Single resource: `{ "data": { … } }`. Errors never return `data`.
 
+One generic schema covers both list and single-resource responses: `envelopeSchema(dataSchema)` is the single-resource shape, and `envelopeSchema(dataSchema, metaSchema)` adds a required `meta`. There is no separate "single resource" schema, because it would be the same object under a second name.
+
 ## 3. Errors
 
 ```json
@@ -29,10 +31,19 @@ Single resource: `{ "data": { … } }`. Errors never return `data`.
     "code": "FIELD_NOT_FOUND",
     "message": "Petak tidak ditemukan.",
     "details": [{ "path": "fieldId", "issue": "unknown_id" }],
-    "requestId": "01J..."
+    "requestId": "018f5b7e-6f3a-7c2b-9d1e-4a5b6c7d8e9f"
   }
 }
 ```
+
+Both envelopes are implemented once in `packages/contracts/src/response.ts` as
+`envelopeSchema` and `errorResponseSchema`; `code` is `errorCodeSchema`. Unknown keys
+are rejected on both, so a controller cannot add a field the contract does not carry.
+
+`requestId` is a **UUID string** (RFC 9562), not a ULID — the id family is the same one
+§1 already chose for resources, and `crypto.randomUUID()` produces one without a
+dependency. Generation and propagation are middleware work; this document only fixes
+the shape.
 
 | Status | Code family | Meaning |
 |---|---|---|
@@ -43,8 +54,19 @@ Single resource: `{ "data": { … } }`. Errors never return `data`.
 | 409 | `CONFLICT` | duplicate slug, published profile edit |
 | 422 | `INSUFFICIENT_DATA` | agronomic input missing; body lists `missingInputs[]` |
 | 429 | `RATE_LIMITED` | with `Retry-After` |
-| 503 | `PROVIDER_UNAVAILABLE` | no usable value exists **and** no permitted fallback — with `retryAfter` |
+| 503 | `PROVIDER_UNAVAILABLE` | no usable weather value exists **and** no permitted fallback — with `retryAfter` |
+| 503 | `DEPENDENCY_UNAVAILABLE` | an infrastructure dependency (session store, database) is unreachable — fail closed |
 | 202 | *(no error)* | data missing while ingest is `pending`; body carries `retryAfter` and no fabricated value |
+
+The two `503`s are not interchangeable. `PROVIDER_UNAVAILABLE` is a statement about
+weather data: the value does not exist and no permitted fallback supplies it, which a
+client may route around. `DEPENDENCY_UNAVAILABLE` is a statement about us. Widening
+`PROVIDER_UNAVAILABLE` to cover both would give one code two meanings and force a
+client to guess which outage it is reacting to.
+
+`details` is deliberately unconstrained: each code owns its payload (`{ path, issue }[]`
+for validation, `missingInputs[]` for insufficient input, `retryAfter` for the `503`s),
+and one shared shape would either drop fields or describe them wrongly.
 
 `DATA_STALE` is **not** an error status. Stale-but-usable data returns `200` with `freshness.dataAvailability = "stale"` and its reason. Mapping staleness to `503` would train clients to retry a request that can be answered, and would hide the distinction between "old" and "absent". Full matrix in `provenance-contract.md` §7.
 
