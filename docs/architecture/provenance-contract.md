@@ -357,8 +357,11 @@ Each `inputRefs` entry contributes only its identity fields — `kind`, `role`, 
 
 | Aspect | Rule | Implemented |
 |---|---|---|
-| Object keys | sorted by UTF-16 code unit (not locale collation), recursively | yes |
+| Object keys | sorted by UTF-16 code unit (not locale collation), recursively; emitted from an explicit sorted entry list, never from object enumeration | yes |
 | Arrays | ordered by the table below, recursively; an array with no declared rule **throws** | yes |
+| Sparse arrays | rejected, with the array path and the missing index in the error | yes |
+| Non-plain objects (`Date`, `Map`, `Set`, `RegExp`, class instances) | rejected, never serialised as `{}` | yes |
+| Own `__proto__` key | preserved as an ordinary property; never assigned through the prototype | yes |
 | Numbers | ECMAScript `Number::toString` — shortest round-trip; `-0` → `0` | yes |
 | `NaN`, `±Infinity` | rejected, never serialised as `null` | yes |
 | Strings | verbatim UTF-8, JSON-escaped, no ASCII folding, no Unicode normalisation | yes |
@@ -373,6 +376,8 @@ Two consequences worth stating, because both were previously left implicit:
 
 - **Numbers are not reformatted.** `0.1` serialises as `0.1`, `1e21` as `1e+21`. Nothing rounds, truncates, or pads. A `-0` means the same input as `0`, so both serialise as `0`.
 - **Unknown arrays fail.** An array whose field name is not in the rule table throws rather than preserving its order. Preserving an unclassified order is how a set silently becomes order-dependent, and it would only surface as a hash mismatch months later.
+
+One implementation trap is worth naming, because the obvious implementation gets it wrong: sorting keys and then assigning them into `{}` does not preserve that order. JavaScript enumerates integer-like own keys first, in ascending numeric order, so `{"10": …, "2": …}` would emit `2` before `10` and contradict the comparator. The canonicaliser therefore carries objects as an explicit sorted entry list from canonicalisation through emission, which also removes the `__proto__` assignment hazard in the same stroke.
 
 ### Timestamp representation is preserved
 
@@ -423,6 +428,11 @@ Sorted object keys do **not** normalise array order. Two payloads with identical
 | `DataInputRef.baseline.cellKeys` | lexicographic | yes |
 | `DataInputRef.observation.observationIds` | lexicographic | yes |
 | `missingRanges` | `(startDate, endDate)` | no — adjacent ranges are not duplicates |
+| `evidenceSegments` | **preserve input order** — a sequence, not a set | no |
+
+`evidenceSegments` is the one array that is deliberately **not** canonicalised by ordering. Segment position is semantic: the temporal partition invariant makes the collection a chronological sequence, so sorting it would be a repair disguised as canonicalisation, and deduplicating it would silently shorten a window. Canonicalisation preserves the order it is given and neither sorts nor fixes it.
+
+The collection invariants themselves — chronological order, non-overlap, contiguity, full span, coverage reconciliation — belong to the domain validator that runs before a window is persisted (§2, "Partition invariant"). **That validator does not exist yet**; until it does, canonicalisation is the only code touching `evidenceSegments`, and it enforces nothing beyond density and JSON-representability.
 
 The nested `DataInputRef` arrays were the gap in the first version of this table: they are sets of ids that are hashed as part of the descriptor, so leaving their order to the producer made the parent `inputRefs` order — and therefore `inputSnapshotHash` — depend on response order.
 

@@ -143,3 +143,144 @@ describe("scalars", () => {
     expect(canonicalJson({ t: "2026-11-18T00:00:00Z" })).toBe('{"t":"2026-11-18T00:00:00Z"}');
   });
 });
+
+describe("object key order is explicit, not enumerated", () => {
+  it("orders integer-like keys by UTF-16 code unit", () => {
+    expect(canonicalJson({ "2": 2, "10": 10, "01": 1, a: "a", _: "_" })).toBe(
+      '{"01":1,"10":10,"2":2,"_":"_","a":"a"}',
+    );
+  });
+
+  it("is independent of insertion order when keys look like indices", () => {
+    expect(canonicalJson({ "2": "two", "10": "ten" })).toBe('{"10":"ten","2":"two"}');
+    expect(canonicalJson({ "10": "ten", "2": "two" })).toBe('{"10":"ten","2":"two"}');
+  });
+
+  it("does not hoist integer keys ahead of string keys", () => {
+    expect(canonicalJson({ a: 1, "2": 2 })).toBe('{"2":2,"a":1}');
+  });
+});
+
+describe("own __proto__ property", () => {
+  const withProto = (): Record<string, unknown> =>
+    JSON.parse('{"__proto__":{"x":1},"b":2}') as Record<string, unknown>;
+
+  it("keeps __proto__ as an ordinary property", () => {
+    expect(canonicalJson(withProto())).toBe('{"__proto__":{"x":1},"b":2}');
+  });
+
+  it("does not mutate the input's prototype", () => {
+    const input = withProto();
+    canonicalJson(input);
+    expect(Object.getPrototypeOf(input)).toBe(Object.prototype);
+  });
+
+  it("does not pollute Object.prototype", () => {
+    canonicalJson(withProto());
+    expect(({} as Record<string, unknown>)["x"]).toBeUndefined();
+  });
+
+  it("round-trips through JSON.parse without losing the property", () => {
+    const parsed = JSON.parse(canonicalJson(withProto())) as Record<string, unknown>;
+    expect(Object.hasOwn(parsed, "__proto__")).toBe(true);
+    expect(parsed["__proto__"]).toEqual({ x: 1 });
+    expect(Object.getPrototypeOf(parsed)).toBe(Object.prototype);
+  });
+
+  it("handles a nested __proto__ property", () => {
+    expect(canonicalJson(JSON.parse('{"a":{"__proto__":{"y":2}}}'))).toBe(
+      '{"a":{"__proto__":{"y":2}}}',
+    );
+  });
+
+  it("is independent of insertion order", () => {
+    expect(canonicalJson(JSON.parse('{"b":2,"__proto__":1}'))).toBe(
+      canonicalJson(JSON.parse('{"__proto__":1,"b":2}')),
+    );
+  });
+});
+
+describe("sparse arrays", () => {
+  const sparse = (index: number, value: unknown): unknown[] => {
+    const arr: unknown[] = [];
+    arr[index] = value;
+    return arr;
+  };
+
+  it("rejects a sparse sequence array and names the missing index", () => {
+    expect(() =>
+      canonicalJson({ evidenceSegments: sparse(1, { startDate: "2027-01-01" }) }),
+    ).toThrow(/sparse array: index 0 is missing/);
+  });
+
+  it("rejects a sparse set-like array", () => {
+    expect(() => canonicalJson({ sourceArtifactHashes: sparse(1, "hash-a") })).toThrow(
+      /sparse array: index 0 is missing/,
+    );
+  });
+
+  it("rejects a sparse nested array", () => {
+    expect(() =>
+      canonicalJson({
+        inputRefs: [
+          {
+            kind: "forecast",
+            role: "seasonal",
+            purpose: "input",
+            forecastRunIds: sparse(1, "run-a"),
+            ingestionRunIds: ["ingest-a"],
+            recordSetHash: "rs",
+          },
+        ],
+      }),
+    ).toThrow(/forecastRunIds.*index 0 is missing|index 0 is missing/);
+  });
+
+  it("still accepts a dense array", () => {
+    expect(canonicalJson({ sourceArtifactHashes: ["b", "a"] })).toBe(
+      '{"sourceArtifactHashes":["a","b"]}',
+    );
+  });
+
+  it("never emits JSON that fails to parse", () => {
+    const fixtures: unknown[] = [
+      { a: 1 },
+      { sourceArtifactHashes: ["x"] },
+      { evidenceSegments: [{ startDate: "2027-01-01" }] },
+      JSON.parse('{"__proto__":1,"b":true}'),
+    ];
+    for (const fixture of fixtures) {
+      expect(() => JSON.parse(canonicalJson(fixture))).not.toThrow();
+    }
+  });
+});
+
+describe("unsupported object prototypes", () => {
+  it.each([
+    ["Date", new Date("2026-11-18T00:00:00Z")],
+    ["Map", new Map([["a", 1]])],
+    ["Set", new Set([1])],
+    ["RegExp", /abc/],
+    ["class instance", new (class CropProfile {})()],
+  ])("rejects %s", (_label, value) => {
+    expect(() => canonicalJson({ v: value })).toThrow(/unsupported object type/);
+  });
+
+  it("accepts a null-prototype object", () => {
+    const record = Object.assign(Object.create(null) as Record<string, unknown>, { b: 2, a: 1 });
+    expect(canonicalJson(record)).toBe('{"a":1,"b":2}');
+  });
+
+  it("rejects an accessor property", () => {
+    const withAccessor = {
+      get a(): number {
+        return 1;
+      },
+    };
+    expect(() => canonicalJson(withAccessor)).toThrow(/accessor property/);
+  });
+
+  it("rejects symbol-keyed properties", () => {
+    expect(() => canonicalJson({ [Symbol("k")]: 1 })).toThrow(/symbol-keyed/);
+  });
+});

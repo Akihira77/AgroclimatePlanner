@@ -9,14 +9,17 @@
  * regardless of object key insertion order or the order a producer emitted a
  * set-like array in.
  *
- * Three decisions are enforced here rather than left to callers:
+ * Four decisions are enforced here rather than left to callers:
  *
  *   1. Array ordering is applied by the canonicaliser. A caller that has to
  *      pre-sort is a caller that can forget.
  *   2. An array with no declared rule throws. Preserving unknown order silently
  *      is how a set becomes order-dependent.
- *   3. Unsupported values throw. `undefined`, `NaN`, `Infinity`, and functions
- *      are not quietly turned into null or dropped.
+ *   3. Unsupported values throw. `undefined`, `NaN`, `Infinity`, sparse arrays,
+ *      and non-plain objects are not quietly turned into null, dropped, or `{}`.
+ *   4. Key order is carried by an explicit sorted entry list, never by
+ *      JavaScript object enumeration — which hoists integer-like keys into
+ *      numeric order and would silently contradict the documented comparator.
  */
 
 export class CanonicalizationError extends Error {
@@ -57,17 +60,33 @@ export const canonicalArrayRules: Readonly<Record<string, SetRule | SequenceRule
   sourceArtifactHashes: { kind: "set", dedupe: true },
   missingRanges: { kind: "set", orderBy: ["startDate", "endDate"], dedupe: false },
 
-  // Nested id arrays. Sorted before their parent is sorted, so `firstRefId`
-  // never reads a producer's emission order.
+  // Nested id arrays. Sorted before their parent is sorted, so the ref's first
+  // id never reads a producer's emission order.
   forecastRunIds: { kind: "set", dedupe: true },
   ingestionRunIds: { kind: "set", dedupe: true },
   cellKeys: { kind: "set", dedupe: true },
   observationIds: { kind: "set", dedupe: true },
 
-  // Ordered, not set-like: the partition invariant makes position meaningful
-  // (segments are contiguous and chronological). Never sorted, never deduped.
+  // Ordered, not set-like: the temporal partition invariant makes position
+  // meaningful. Canonicalisation neither sorts nor repairs this collection —
+  // the domain validator owns chronology, overlap, and coverage.
   evidenceSegments: { kind: "sequence" },
 };
+
+/**
+ * Canonicalised forms. Objects keep a sorted entry list instead of being
+ * rebuilt as a plain object, because assignment into `{}` both loses an own
+ * `__proto__` key and lets enumeration reorder integer-like keys.
+ */
+class ObjectNode {
+  constructor(readonly entries: ReadonlyArray<readonly [string, Node]>) {}
+}
+
+class ArrayNode {
+  constructor(readonly items: readonly Node[]) {}
+}
+
+type Node = null | boolean | number | string | ObjectNode | ArrayNode;
 
 function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
@@ -75,8 +94,7 @@ function compareStrings(a: string, b: string): number {
 
 /**
  * ECMAScript `Number::toString` — shortest round-trip form — with `-0` folded
- * to `0`. Non-finite values are rejected rather than serialised as `null`,
- * which is what `JSON.stringify` would do.
+ * to `0`. Non-finite values are rejected earlier, so this is defensive only.
  */
 function formatNumber(value: number): string {
   if (!Number.isFinite(value)) {
@@ -85,19 +103,30 @@ function formatNumber(value: number): string {
   return Object.is(value, -0) ? "0" : String(value);
 }
 
-function emit(value: unknown): string {
-  if (value === null) return "null";
-  if (typeof value === "boolean") return value ? "true" : "false";
-  if (typeof value === "number") return formatNumber(value);
-  if (typeof value === "string") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map(emit).join(",")}]`;
-  if (typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>).map(
-      ([key, entry]) => `${JSON.stringify(key)}:${emit(entry)}`,
-    );
-    return `{${entries.join(",")}}`;
+function emit(node: Node): string {
+  if (node === null) return "null";
+  if (typeof node === "boolean") return node ? "true" : "false";
+  if (typeof node === "number") return formatNumber(node);
+  if (typeof node === "string") return JSON.stringify(node);
+  if (node instanceof ArrayNode) return `[${node.items.map(emit).join(",")}]`;
+  const entries = node.entries.map(([key, value]) => `${JSON.stringify(key)}:${emit(value)}`);
+  return `{${entries.join(",")}}`;
+}
+
+function describeObject(value: object): string {
+  const prototype = Object.getPrototypeOf(value) as { constructor?: { name?: string } } | null;
+  return prototype?.constructor?.name ?? "null-prototype object";
+}
+
+function fieldOf(node: ObjectNode, key: string): Node | undefined {
+  return node.entries.find(([entryKey]) => entryKey === key)?.[1];
+}
+
+function requireString(node: Node | undefined, path: string, what: string): string {
+  if (typeof node !== "string") {
+    throw new CanonicalizationError(path, `${what} must be a string`);
   }
-  throw new CanonicalizationError("$", `unsupported value of type ${typeof value}`);
+  return node;
 }
 
 /**
@@ -107,11 +136,11 @@ function emit(value: unknown): string {
  * lexicographic minimum. Reading element zero would make `inputRefs` order
  * depend on the order the provider returned run ids in.
  */
-function firstRefId(ref: Record<string, unknown>): string {
+function firstRefId(ref: ObjectNode, path: string): string {
   for (const key of ["forecastRunIds", "observationIds", "cellKeys"] as const) {
-    const value = ref[key];
-    if (!Array.isArray(value)) continue;
-    const ids = value.filter((entry): entry is string => typeof entry === "string");
+    const value = fieldOf(ref, key);
+    if (!(value instanceof ArrayNode)) continue;
+    const ids = value.items.map((item) => requireString(item, path, `${key} entry`));
     if (ids.length > 0) return ids.reduce((min, id) => (id < min ? id : min));
   }
   for (const key of [
@@ -120,32 +149,55 @@ function firstRefId(ref: Record<string, unknown>): string {
     "recordSetHash",
     "baselineHash",
   ] as const) {
-    const value = ref[key];
+    const value = fieldOf(ref, key);
     if (typeof value === "string") return value;
   }
-  throw new CanonicalizationError("$.inputRefs", "ref carries no identity id");
+  throw new CanonicalizationError(path, "ref carries no identity id");
 }
 
-function identityOf(item: unknown, rule: SetRule, path: string): string[] {
+function identityOf(item: Node, rule: SetRule, path: string): string[] {
   if (!rule.orderBy) {
     if (typeof item !== "string") {
       throw new CanonicalizationError(path, "a string set holds non-string entries");
     }
     return [item];
   }
-  if (item === null || typeof item !== "object" || Array.isArray(item)) {
+  if (!(item instanceof ObjectNode)) {
     throw new CanonicalizationError(path, "an object set holds a non-object entry");
   }
-  const record = item as Record<string, unknown>;
   const identity = rule.orderBy.map((key) => {
-    const value = record[key];
+    const value = fieldOf(item, key);
     if (value === undefined || value === null) {
       throw new CanonicalizationError(path, `entry has no identity key "${key}"`);
     }
+    if (typeof value === "object") {
+      throw new CanonicalizationError(path, `identity key "${key}" must be a scalar`);
+    }
     return String(value);
   });
-  if (rule.firstId) identity.push(firstRefId(record));
+  if (rule.firstId) identity.push(firstRefId(item, path));
   return identity;
+}
+
+function compareIdentities(left: readonly string[], right: readonly string[]): number {
+  for (let index = 0; index < left.length; index += 1) {
+    const compared = compareStrings(left[index] ?? "", right[index] ?? "");
+    if (compared !== 0) return compared;
+  }
+  return 0;
+}
+
+/**
+ * Every index from 0 to length-1 must be an own property. A hole survives
+ * `map()`, and `join()` would then emit `[,"x"]` — not valid JSON, and not a
+ * value anyone can reproduce from the same inputs.
+ */
+function assertDense(values: readonly unknown[], path: string): void {
+  for (let index = 0; index < values.length; index += 1) {
+    if (!Object.hasOwn(values, index)) {
+      throw new CanonicalizationError(path, `sparse array: index ${index} is missing`);
+    }
+  }
 }
 
 function canonicalizeArray(
@@ -153,7 +205,7 @@ function canonicalizeArray(
   path: string,
   fieldName: string,
   stack: Set<object>,
-): unknown[] {
+): ArrayNode {
   const rule = canonicalArrayRules[fieldName];
   if (!rule) {
     throw new CanonicalizationError(
@@ -162,10 +214,11 @@ function canonicalizeArray(
     );
   }
 
+  assertDense(values, path);
   const items = values.map((value, index) =>
     canonicalizeValue(value, `${path}[${index}]`, undefined, stack),
   );
-  if (rule.kind === "sequence") return items;
+  if (rule.kind === "sequence") return new ArrayNode(items);
 
   const scored = items.map((item) => ({
     item,
@@ -180,9 +233,9 @@ function canonicalizeArray(
     return compareStrings(left.serialized, right.serialized);
   });
 
-  if (!rule.dedupe) return scored.map((entry) => entry.item);
+  if (!rule.dedupe) return new ArrayNode(scored.map((entry) => entry.item));
 
-  const out: unknown[] = [];
+  const out: Node[] = [];
   let previous: (typeof scored)[number] | undefined;
   for (const entry of scored) {
     if (previous && compareIdentities(previous.identity, entry.identity) === 0) {
@@ -197,15 +250,36 @@ function canonicalizeArray(
     out.push(entry.item);
     previous = entry;
   }
-  return out;
+  return new ArrayNode(out);
 }
 
-function compareIdentities(left: readonly string[], right: readonly string[]): number {
-  for (let index = 0; index < left.length; index += 1) {
-    const compared = compareStrings(left[index] ?? "", right[index] ?? "");
-    if (compared !== 0) return compared;
+function canonicalizeObject(
+  value: Record<string, unknown>,
+  path: string,
+  stack: Set<object>,
+): ObjectNode {
+  const prototype = Object.getPrototypeOf(value) as object | null;
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new CanonicalizationError(
+      path,
+      `unsupported object type ${describeObject(value)} — convert it to a plain object explicitly`,
+    );
   }
-  return 0;
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    throw new CanonicalizationError(path, "symbol-keyed properties are not serialisable");
+  }
+
+  // Own enumerable string keys, then sorted with the documented comparator.
+  // The result is an entry list, so nothing downstream can re-order it.
+  const keys = Object.keys(value).sort(compareStrings);
+  const entries: Array<readonly [string, Node]> = keys.map((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !("value" in descriptor)) {
+      throw new CanonicalizationError(path, `accessor property "${key}" is not serialisable`);
+    }
+    return [key, canonicalizeValue(descriptor.value, `${path}.${key}`, key, stack)] as const;
+  });
+  return new ObjectNode(entries);
 }
 
 function canonicalizeValue(
@@ -213,21 +287,20 @@ function canonicalizeValue(
   path: string,
   fieldName: string | undefined,
   stack: Set<object>,
-): unknown {
+): Node {
   if (value === null) return null;
-  const type = typeof value;
-  if (type === "boolean" || type === "string") return value;
-  if (type === "number") {
+  if (typeof value === "boolean" || typeof value === "string") return value;
+  if (typeof value === "number") {
     if (!Number.isFinite(value)) {
       throw new CanonicalizationError(path, `non-finite number ${String(value)}`);
     }
     return Object.is(value, -0) ? 0 : value;
   }
-  if (type === "undefined") {
+  if (typeof value === "undefined") {
     throw new CanonicalizationError(path, "undefined is not serialisable — omit the key instead");
   }
-  if (type !== "object") {
-    throw new CanonicalizationError(path, `unsupported value of type ${type}`);
+  if (typeof value !== "object") {
+    throw new CanonicalizationError(path, `unsupported value of type ${typeof value}`);
   }
 
   const object = value as object;
@@ -243,17 +316,7 @@ function canonicalizeValue(
       }
       return canonicalizeArray(value, path, fieldName, stack);
     }
-    const entries = Object.keys(value as Record<string, unknown>).sort(compareStrings);
-    const out: Record<string, unknown> = {};
-    for (const key of entries) {
-      out[key] = canonicalizeValue(
-        (value as Record<string, unknown>)[key],
-        `${path}.${key}`,
-        key,
-        stack,
-      );
-    }
-    return out;
+    return canonicalizeObject(value as Record<string, unknown>, path, stack);
   } finally {
     stack.delete(object);
   }
