@@ -249,10 +249,27 @@ gets logged.
 `migration_owner`, which also puts the Prisma ledger out of reach of the
 extension-installed objects.
 
-`CREATE` on `public` is revoked from `PUBLIC`; `app_api` and `app_system` get
-`USAGE` only, enough to resolve PostGIS types and functions, not enough to create
-anything. `app_auth` is not granted `USAGE` on `public` at all: it reads identity
-columns and needs no extension object to do it.
+`CREATE` on `public` is revoked from `PUBLIC` and from `app_api` and
+`app_system`. `USAGE` is a different privilege and must not be conflated with it.
+PostgreSQL's stock ACL for `public` is
+`{pg_database_owner=UC/pg_database_owner,=U/pg_database_owner}`, and `=U` is a
+grant to `PUBLIC`: every role has effective `USAGE` on the schema, including
+`app_auth`, which receives no direct grant of its own. Measured on a freshly
+bootstrapped volume, `has_schema_privilege` returns `true` for `USAGE` and
+`false` for `CREATE` for all four roles. The direct `app_api=U` and
+`app_system=U` entries are therefore redundant with the `PUBLIC` grant; they are
+kept so the intent is visible in `nspacl` and so a future `REVOKE ... FROM
+PUBLIC` would not silently remove the runtime roles' access.
+
+Effective `USAGE` is not access. Schema `USAGE` only lets a role resolve names
+inside the schema; it confers nothing on the objects in it. What `app_auth` can
+actually read in `public` is what the PostGIS installer granted to `PUBLIC`:
+`SELECT` on `spatial_ref_sys` and on the `geometry_columns` and
+`geography_columns` views. Those are EPSG metadata and catalog views — no tenant
+data, nothing this project grants, and outside the `app` schema that holds
+everything else. `db:verify` asserts the part that matters in aggregate:
+`app_auth` owns nothing and holds no table or column privilege on any table in
+`app`.
 
 On a development volume created before this phase the ledger sat in `public`,
 owned by the cluster admin. The bootstrap moves it to `app` and reassigns
