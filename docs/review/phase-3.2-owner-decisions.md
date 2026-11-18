@@ -8,8 +8,8 @@
 | Decisions requested | 4 — `AG-1`, `AG-2`, `IG-5`, `IG-11` |
 | Owner decisions made so far | **4 of 4**, plus `IG-5-A1` (amendment) and `IG-12` (new gate) |
 | Decision approval status | **Complete** — every gate this file asked for is answered |
-| Implementation status | **`S1` and `S2` implemented, `S3` onward not started** — contracts at `c44cf5b`/`0bb9792`, plumbing at `ad6235b`, S2 remediation at `6d36741` |
-| Verification status | **Green at `6d36741`** — build, typecheck, test, lint, prettier, `git diff --check` all exit `0`; test counts in `docs/IMPLEMENTATION_STATUS.md` |
+| Implementation status | **`S1` and `S2` implemented, `S3` onward not started** — contracts at `c44cf5b`/`0bb9792`, plumbing at `ad6235b`, remediation at `6d36741`, path hardening at `c762171` |
+| Verification status | **Green at `c762171`** — build, typecheck, test, lint, prettier, `git diff --check` all exit `0`; api 72, contracts 182, database 9, 0 failing |
 | Remaining blockers before `S3` | `ADR-004`/`ADR-005` and `IG-1`–`IG-4`, `IG-6`–`IG-10`; `OPEN-01`/`OPEN-13` stay unresolved until an accepted ADR **and** an applied migration **and** green verification exist |
 | `OPEN-nn` dispositions changed | **No** — `OPEN-01` and `OPEN-13` remain unresolved |
 
@@ -25,11 +25,11 @@ of them. That was accurate on 2026-11-18 before S1. `OPEN-01` and `OPEN-13` stay
 Until then the register's dispositions are unchanged.
 
 **Update, 2026-11-18 (post-S2).** Two of the tracks this record unblocked now have
-work behind them: `S1` (contracts) at `c44cf5b` and `0bb9792`, `S2` (API plumbing) at
-`ad6235b` with its remediation at `6d36741`. That changes implementation status only.
-The approvals, their dates, and the register's dispositions above are untouched; `S3`
-and everything after it still has no code, and `OPEN-01`/`OPEN-13` still need the ADR
-and migration they always needed.
+work behind them: `S1` (contracts) at `c44cf5b`, `0bb9792`, and `c762171`; `S2` (API
+plumbing) at `ad6235b`, with remediation at `6d36741` and path-boundary hardening at
+`c762171`. That changes implementation status only. The approvals, their dates, and
+the register's dispositions above are untouched; `S3` and everything after it still has
+no code, and `OPEN-01`/`OPEN-13` still need the ADR and migration they always needed.
 
 ## Recorded decisions
 
@@ -1035,8 +1035,8 @@ the rest are not.
 
 | Step | Status | Evidence |
 |---|---|---|
-| S1 | **implemented** | `c44cf5b` — response and error envelopes, error-code set, `requestId`; `0bb9792` — branded `NotFoundErrorCode` |
-| S2 | **implemented and remediated** | `ad6235b` — prefix, filter, request id, cookies, helmet, trust proxy, CORS, database client, health probes; `6d36741` — credential boundary, log sanitisation, 405/406/415 documentation, `statement_timeout` readiness, `IG-5-A1`, `IG-12` |
+| S1 | **implemented** | `c44cf5b` — response and error envelopes, error-code set, `requestId`; `0bb9792` — branded `NotFoundErrorCode`; `c762171` — bounded path grammar enforced by `validationIssueSchema` |
+| S2 | **implemented and remediated** | `ad6235b` — prefix, filter, request id, cookies, helmet, trust proxy, CORS, database client, health probes; `6d36741` — credential boundary, log sanitisation, 405/406/415 documentation, `statement_timeout` readiness, `IG-5-A1`, `IG-12`; `c762171` — `details` trust boundary, encoded path grammar (producer and contract), log category, readiness budget, S2 commit history |
 | S3–S9 | **not started** | no `app_auth` role, no migration, no auth endpoint, no ADR-004/ADR-005 |
 
 So the honest statement of what these four decisions buy: **Track 1 can start**
@@ -1046,7 +1046,7 @@ sessions). Track 3 cannot — `S7` and `S8` additionally require `IG-1` through 
 boundary.
 
 **As of 2026-11-18 the gates for S1, S2, S3, S4, and S5 are satisfied by approval.**
-As of `6d36741`, S1 and S2 are also satisfied by work: the contract schemas, the
+As of `c762171`, S1 and S2 are also satisfied by work: the contract schemas, the
 exception filter, and the validation pipe exist and their checks exit `0`. S3, S4, and
 S5 remain approval-only — no `app_auth` role, no migration, and no verification row
 exists for them.

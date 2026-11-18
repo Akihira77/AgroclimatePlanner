@@ -1,6 +1,12 @@
 import type { ArgumentMetadata, PipeTransform } from "@nestjs/common";
 import type { ValidationIssue } from "@agroclimate/contracts";
-import { MAX_VALIDATION_ISSUES, MAX_VALIDATION_PATH_LENGTH } from "@agroclimate/contracts";
+import {
+  isSafeIdentifierSegment,
+  MAX_VALIDATION_ISSUES,
+  MAX_VALIDATION_PATH_LENGTH,
+  VALIDATION_ROOT_PATH,
+  VALIDATION_TRUNCATION_MARKER,
+} from "@agroclimate/contracts";
 import type { ZodIssue, ZodType } from "zod";
 import { z } from "zod";
 
@@ -47,20 +53,6 @@ export class ZodValidationPipe<T extends ZodType> implements PipeTransform<unkno
  */
 export type { ValidationIssue };
 
-const ROOT_PATH = "(root)";
-
-/**
- * A segment is reflected verbatim only if it cannot be confused with the path
- * syntax: no dot, no bracket, no quote, no control or bidi character, and a
- * bounded length. Everything else becomes a positional marker — see
- * `formatPath`.
- *
- * Unicode letters and digits are allowed because a field name is not the place to
- * force ASCII; the ranges above still exclude every character that could make the
- * path ambiguous or unprintable.
- */
-const IDENTIFIER_SEGMENT = /^[\p{L}_][\p{L}\p{N}_]{0,63}$/u;
-
 /**
  * Builds the `details` list: bounded, ordered, and free of submitted values *and*
  * submitted names.
@@ -69,29 +61,36 @@ const IDENTIFIER_SEGMENT = /^[\p{L}_][\p{L}\p{N}_]{0,63}$/u;
  * caller's text — a payload can name a key `password=hunter2`, add a newline, or
  * put a dot where the path syntax puts a separator. Reflecting such a name turns
  * the response into a channel for whatever the caller put in it, so a key that is
- * not a plain identifier is replaced by `[…n]`: the n-th unnamed key of that
+ * not a plain identifier is replaced by `[…n]`: the n-th named position of that
  * object, which the caller can still map back to their own payload.
+ *
+ * The output is not merely "usually safe": `validationDetailsSchema` re-derives
+ * the same grammar when the details reach the filter, so a caller that constructs
+ * `ValidationFailedException` directly gets the same refusal as one that went
+ * through Zod.
  */
 export function toIssues(issues: readonly ZodIssue[]): ValidationIssue[] {
   const mapped: ValidationIssue[] = [];
 
   for (const issue of issues) {
+    const chunks = chunksFor(issue.path);
+
     if (issue.code === "unrecognized_keys") {
       // Sorted so the ordinals depend on the set of keys, not on the order they
       // happened to arrive in.
       const keys = [...issue.keys].sort(compareCodeUnits);
 
       keys.forEach((key, index) => {
-        mapped.push(
-          IDENTIFIER_SEGMENT.test(key)
-            ? { path: appendSegment(issue.path, key), issue: issue.code }
-            : { path: appendMarker(issue.path, index + 1), issue: issue.code },
-        );
+        const appended = isSafeIdentifierSegment(key)
+          ? [`${chunks.length === 0 ? "" : "."}${key}`]
+          : [`[…${index + 1}]`];
+
+        mapped.push({ path: render([...chunks, ...appended]), issue: issue.code });
       });
       continue;
     }
 
-    mapped.push({ path: bound(formatPath(issue.path)), issue: issue.code });
+    mapped.push({ path: render(chunks), issue: issue.code });
   }
 
   // Zod's order follows object key order; sorting makes the response stable
@@ -110,42 +109,53 @@ function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-function formatPath(path: readonly PropertyKey[]): string {
-  let formatted = "";
+/**
+ * Each segment rendered with the separator it owns, so the join needs no rule
+ * beyond concatenation: identifiers carry their `.`, indexes and markers their
+ * brackets. An identifier that would be a segment's first chunk carries nothing.
+ */
+function chunksFor(path: readonly PropertyKey[]): string[] {
+  const chunks: string[] = [];
   let unnamed = 0;
 
   for (const segment of path) {
     if (typeof segment === "number") {
-      formatted += `[${segment}]`;
+      chunks.push(`[${segment}]`);
       continue;
     }
 
     const key = String(segment);
-    if (IDENTIFIER_SEGMENT.test(key)) {
-      formatted = formatted === "" ? key : `${formatted}.${key}`;
+    if (isSafeIdentifierSegment(key)) {
+      chunks.push(chunks.length === 0 ? key : `.${key}`);
       continue;
     }
 
     unnamed += 1;
-    formatted += `[…${unnamed}]`;
+    chunks.push(`[…${unnamed}]`);
   }
 
-  return formatted === "" ? ROOT_PATH : formatted;
+  return chunks;
 }
 
-function appendSegment(path: readonly PropertyKey[], key: string): string {
-  const parent = formatPath(path);
-  return bound(parent === ROOT_PATH ? key : `${parent}.${key}`);
-}
+/**
+ * Joins the chunks under the contract's length limit, cutting at a segment boundary
+ * and saying so with `[…]`.
+ *
+ * A mid-token cut would leave a value that is neither the path nor a marker, and
+ * the contract could not accept it — which mattered the day the schema started
+ * enforcing this grammar. Losing the tail of a deeply nested path is acceptable;
+ * emitting a path the contract must reject is not.
+ */
+function render(chunks: readonly string[]): string {
+  const capacity = MAX_VALIDATION_PATH_LENGTH - VALIDATION_TRUNCATION_MARKER.length;
+  let formatted = "";
 
-function appendMarker(path: readonly PropertyKey[], ordinal: number): string {
-  const parent = formatPath(path);
-  return bound(parent === ROOT_PATH ? `[…${ordinal}]` : `${parent}[…${ordinal}]`);
-}
+  for (const chunk of chunks) {
+    if (formatted.length + chunk.length > capacity) {
+      return `${formatted}${VALIDATION_TRUNCATION_MARKER}`;
+    }
+    formatted += chunk;
+  }
 
-/** Truncation is the last resort, after encoding has removed the dangerous part. */
-function bound(path: string): string {
-  return path.length <= MAX_VALIDATION_PATH_LENGTH
-    ? path
-    : `${path.slice(0, MAX_VALIDATION_PATH_LENGTH - 1)}…`;
+  return formatted === "" ? VALIDATION_ROOT_PATH : formatted;
 }

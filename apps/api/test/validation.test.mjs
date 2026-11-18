@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import { BadRequestException } from "@nestjs/common";
-import { errorResponseSchema } from "@agroclimate/contracts";
+import { errorResponseSchema, validationDetailsSchema } from "@agroclimate/contracts";
 import { z } from "zod";
 
 import { ApiExceptionFilter } from "../dist/http/api-exception.filter.js";
@@ -212,12 +212,13 @@ describe("validation path safety", () => {
     const [unknown] = issuesFrom(schema, { name: "x", [longName]: 1 });
     assert.equal(unknown.path, "[…1]");
 
-    // A legitimately nested path is truncated rather than allowed to grow.
+    // A legitimately nested path is cut at a segment boundary, never mid-token: a
+    // half-written segment is not a path the contract could accept.
     const nested = toIssues([
       { code: "invalid_type", path: Array.from({ length: 40 }, () => "abcdefghij"), message: "m" },
     ]);
     assert.equal(nested[0].path.length, 200);
-    assert.equal(nested[0].path.endsWith("…"), true);
+    assert.equal(nested[0].path.endsWith("[…]"), true);
   });
 
   it("reflects ordinary identifiers, including unicode letters, verbatim", () => {
@@ -254,6 +255,35 @@ describe("validation path safety", () => {
 
     for (let run = 0; run < 5; run += 1) {
       assert.deepEqual(issuesFrom(schema, value), issuesFrom(schema, value));
+    }
+  });
+
+  it("emits paths the shared contract accepts, including its truncation marker", () => {
+    const schema = z.strictObject({
+      name: z.string(),
+      filters: z.strictObject({ crop: z.string() }),
+      items: z.array(z.strictObject({ id: z.uuid() })),
+    });
+
+    const outputs = [
+      issuesFrom(schema, undefined),
+      issuesFrom(schema, { name: 1, filters: { crop: 2 }, items: [{ id: "x" }] }),
+      issuesFrom(schema, { name: "x", filters: { crop: "p", "a.b": 1 }, "weird key": 2 }),
+      toIssues([
+        {
+          code: "invalid_type",
+          path: Array.from({ length: 40 }, () => "abcdefghij"),
+          message: "m",
+        },
+      ]),
+    ];
+
+    for (const details of outputs) {
+      assert.equal(
+        validationDetailsSchema.safeParse(details).success,
+        true,
+        JSON.stringify(details),
+      );
     }
   });
 

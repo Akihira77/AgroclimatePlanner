@@ -74,12 +74,13 @@ client to guess which outage it is reacting to.
 payload (`{ path, issue }[]` for validation, `missingInputs[]` for insufficient input,
 `retryAfter` for the `503`s), and one shared shape would either drop fields or describe
 them wrongly. The field is only as safe as its producer, so the server forwards details
-from one origin and no other: `ValidationFailedException`, which the Zod pipe throws
-after encoding the issues through `validationDetailsSchema`. A `400` thrown with a
-hand-built `details` payload — a password, a SQL fragment, a provider response — is
-answered without details rather than with them. Domain payloads for `422` and `503`
-arrive with the endpoints that own them, and will be forwarded only against their own
-schema.
+from one origin and no other: `ValidationFailedException`. The Zod pipe encodes the
+issues into the path grammar `validationDetailsSchema` accepts, and the filter re-parses
+them at the boundary before sending — so a caller that constructs the exception by hand
+gets the same refusal as one that went through Zod. A `400` thrown with a hand-built
+`details` payload — a password, a SQL fragment, a provider response — is answered
+without details rather than with them. Domain payloads for `422` and `503` arrive with
+the endpoints that own them, and will be forwarded only against their own schema.
 
 `RESOURCE_NOT_FOUND` is the family's generic member, used when a path names no
 resource at all. It is not an endpoint's code; a handler that knows which noun is
@@ -287,15 +288,27 @@ contract above; it fixes how a request becomes a response.
     `[n]` for array indices and `(root)` for the whole value. Zod's message and
     `issue.input` are both dropped — a custom message can embed a submitted value, and
     `input` is the value.
-  - A property name is reflected only if it is a plain identifier: Unicode letters,
-    digits, and `_`, up to 64 characters. Anything else — a dot, a bracket, a quote, a
-    control or bidi character, or an over-long name — becomes `[…n]`, the n-th unnamed
-    segment of that object, because a rejected key is caller-supplied text and echoing
-    it turns the response into a channel for whatever the caller put there. The whole
-    path is capped at 200 characters and the list at 100 entries; all three bounds are
-    in `packages/contracts` (`MAX_VALIDATION_PATH_LENGTH`, `MAX_VALIDATION_ISSUES`).
+  - A property name is reflected only if it is a plain identifier: a Unicode letter or
+    `_`, then letters, digits, or `_` (64 characters at most). Anything else — a dot, a
+    bracket, a quote, a control or bidi character, an over-long name — becomes `[…n]`,
+    the n-th position of that object, because a rejected key is caller-supplied text
+    and echoing it turns the response into a channel for whatever the caller put there.
+  - The resulting grammar is exact, and the **contract** enforces it rather than the
+    pipe: `(root)` for a value rejected whole, identifiers joined by `.`, `[n]` for an
+    array index, `[…n]` for an unnamed segment, and `[…]` as the final token when a
+    path had to be cut at a segment boundary to stay inside 200 characters.
+    `validationIssueSchema` rejects everything else — free text, a newline, a
+    non-canonical index (`[007]`), a truncation marker that is not last.
+  - That matters because `ValidationFailedException` is a class inside the process, not
+    a capability: a caller can construct one without ever passing through Zod. A path
+    outside the grammar costs the response its `details` and nothing else — the `400
+    VALIDATION_FAILED` stands, and the filter never falls back to what the exception
+    held. The guarantee is about the boundary, not about which internal caller is
+    trusted.
   - Entries are sorted by path then code using code-unit comparison, never a
     locale-aware collator, so the same input produces the same list on every host.
+  - Bounds: 200 characters per path, 100 entries per list, both exported from
+    `packages/contracts` (`MAX_VALIDATION_PATH_LENGTH`, `MAX_VALIDATION_ISSUES`).
 - **Errors.** One global exception filter. It is the only place an HTTP status is
   chosen, it validates what it is about to send against `errorResponseSchema`, and it
   falls back to `500 INTERNAL_ERROR` if that validation fails. Unrecognised

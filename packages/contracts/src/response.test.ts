@@ -190,6 +190,82 @@ describe("validationDetailsSchema", () => {
     ).toEqual([{ path: "items[1].id", issue: "invalid_format" }]);
   });
 
+  it("accepts every form the encoded grammar allows", () => {
+    const valid = [
+      "(root)",
+      "fieldName",
+      "kebun.luas",
+      "items[0].id",
+      "items[12]",
+      "[0]",
+      "filters[…1]",
+      "filters[…2].crop",
+      "a[…1].b[3].c",
+      "é",
+      "kebun_é.luas2",
+      "a[…]",
+      "[…]",
+    ];
+
+    for (const path of valid) {
+      const result = validationIssueSchema.safeParse({ path, issue: "invalid_type" });
+      expect(result.success, JSON.stringify(path)).toBe(true);
+    }
+  });
+
+  it("accepts a path at the length limit and rejects one past it", () => {
+    const atLimit = Array.from({ length: 67 }, () => "ab").join(".");
+    expect(atLimit).toHaveLength(MAX_VALIDATION_PATH_LENGTH);
+    expect(validationIssueSchema.safeParse({ path: atLimit, issue: "invalid_type" }).success).toBe(
+      true,
+    );
+
+    const pastLimit = Array.from({ length: 68 }, () => "ab").join(".");
+    expect(
+      validationIssueSchema.safeParse({ path: pastLimit, issue: "invalid_type" }).success,
+    ).toBe(false);
+  });
+
+  it("rejects a path that is not the encoded grammar", () => {
+    const invalid = [
+      // Free text a caller might mistake for a field name.
+      "password=hunter2",
+      "apiKey=secret-value",
+      "field name",
+      "a+b",
+      "a,b",
+      "a;b",
+      // Characters that would break a log line or a parser.
+      "field\nname",
+      "field\rname",
+      "field\u0000name",
+      "field\u001Bname",
+      "field\u202Ename",
+      // Structural ambiguity.
+      "a..b",
+      ".leading",
+      "a.",
+      "..",
+      "a[…]b",
+      "a[…1]b",
+      "items[007].id",
+      "items[-1]",
+      "items[]",
+      "items[a]",
+      "items[0",
+      "[0]x",
+      "(root)x",
+      "a(root)",
+      "a b",
+      "",
+    ];
+
+    for (const path of invalid) {
+      const result = validationIssueSchema.safeParse({ path, issue: "invalid_type" });
+      expect(result.success, JSON.stringify(path)).toBe(false);
+    }
+  });
+
   it("rejects a value smuggled alongside the diagnosis", () => {
     // A strict object is the point: `input` is where the submitted value would go.
     expect(

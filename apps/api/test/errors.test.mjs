@@ -158,6 +158,55 @@ describe("exception filter", () => {
     assert.equal("details" in outage.body.error, false);
   });
 
+  it("keeps a legitimate path from the trusted exception type", () => {
+    // The grammar the pipe emits, accepted as written at the boundary.
+    const details = [
+      { path: "(root)", issue: "invalid_type" },
+      { path: "kebun.luas", issue: "invalid_type" },
+      { path: "items[0].id", issue: "invalid_format" },
+      { path: "filters[…2].crop", issue: "unrecognized_keys" },
+    ];
+
+    const response = run(new ValidationFailedException(details));
+    assert.deepEqual(response.body.error.details, details);
+  });
+
+  it("refuses an unsafe path even from the trusted exception type", () => {
+    // `ValidationFailedException` is a class inside the process, not a capability:
+    // a caller can build one without ever passing through Zod.
+    const unsafe = [
+      "password=hunter2",
+      "apiKey=secret-value",
+      "field\nname",
+      "field\rname",
+      "field\u0000name",
+      "filters[…1]extra",
+      "items[007].id",
+      "items.id.",
+      ".leading",
+      "a..b",
+      "[0]x",
+      "field name",
+    ];
+
+    for (const path of unsafe) {
+      const response = run(new ValidationFailedException([{ path, issue: "invalid_type" }]));
+
+      assert.equal(response.statusCode, 400);
+      assert.equal(response.body.error.code, "VALIDATION_FAILED");
+      assert.equal("details" in response.body.error, false, `forwarded ${JSON.stringify(path)}`);
+
+      const serialised = JSON.stringify(response.body);
+      for (const leak of ["hunter2", "secret-value", "\\n", "\\r", "\\u0000"]) {
+        assert.equal(
+          serialised.includes(leak),
+          false,
+          `leaked ${leak} via ${JSON.stringify(path)}`,
+        );
+      }
+    }
+  });
+
   it("drops malformed validation metadata instead of forwarding it", () => {
     const cases = [
       // An extra field is how a submitted value would ride along with a diagnosis.

@@ -14,11 +14,12 @@ rest of it still describes `master` at `bf0e593`. Note that `IG-12` was raised a
 this review, so §15's eleven-gate table does not list it; its authority is
 `phase-3.2-owner-decisions.md`.
 
-**Reconciled again 2026-11-18, after the S2 remediation at `6d36741`.** No row in this
-review changed: its status columns (§10 "absent", §11 "proposed") describe `bf0e593`
-and are still true of that commit. Two things it could not have anticipated are
-recorded where they are enforced instead — the `details` trust boundary in
-`api-conventions.md` §3 and the readiness budget in §12.
+**Reconciled again 2026-11-18, after the S2 remediation at `6d36741` and its
+path-boundary hardening at `c762171`.** No row in this review changed: its status
+columns (§10 "absent", §11 "proposed") describe `bf0e593` and are still true of that
+commit. Three things it could not have anticipated are recorded where they are
+enforced instead — the `details` trust boundary and the encoded validation path
+grammar in `api-conventions.md` §3 and §12, and the readiness budget in §12.
 
 Repository state reviewed: `master` at `bf0e593`, reviewed again at round 2. Files
 inspected: the Phase 3.2 brief; `packages/database` (`bootstrap/roles.sql`,

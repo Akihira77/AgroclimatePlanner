@@ -106,6 +106,108 @@ export function envelopeSchema<T extends z.ZodType, M extends z.ZodType = z.ZodN
 /** `Envelope<Farm>` is `{ data: Farm }`; `Envelope<Farm[], PageMeta>` adds `meta`. */
 export type Envelope<T, M = undefined> = M extends undefined ? { data: T } : { data: T; meta: M };
 
+/** A path with no segments: the whole value was rejected. */
+export const VALIDATION_ROOT_PATH = "(root)";
+
+/**
+ * Terminates a path that outgrew `MAX_VALIDATION_PATH_LENGTH`. It marks the cut
+ * itself rather than leaving a half-written segment behind: a path is only useful
+ * if it can be read back unambiguously, and a mid-token cut cannot.
+ */
+export const VALIDATION_TRUNCATION_MARKER = "[…]";
+
+/**
+ * The one identifier rule, shared by the producer and the contract. `[^\p{L}_]`
+ * means a segment can never start with a digit, a dot, or a bracket, which is what
+ * keeps `field2` distinguishable from `field[2]`.
+ */
+const IDENTIFIER_SEGMENT = /^[\p{L}_][\p{L}\p{N}_]{0,63}$/u;
+
+/** One Unicode code point that may appear inside an identifier. Sticky, so it advances. */
+const WORD_CHARACTER = /[_\p{L}\p{N}]/uy;
+
+/** No leading zeros: `[0]` and `[10]` are indexes, `[007]` is neither one thing nor the other. */
+const CANONICAL_INDEX = /^(0|[1-9][0-9]{0,9})$/;
+
+export function isSafeIdentifierSegment(segment: string): boolean {
+  return IDENTIFIER_SEGMENT.test(segment);
+}
+
+/**
+ * Accepts exactly the grammar the producer emits, and nothing adjacent to it:
+ *
+ * ```
+ * path      = "(root)" | segment { separator segment } [ "…" ]
+ * separator = "." | "[" index "]" | "[…" ordinal "]"
+ * segment   = identifier            ; Unicode letter or "_", then letters, digits, "_"
+ * ```
+ *
+ * Written as a parser rather than one regular expression because the parts are
+ * not independent: an identifier may not start with a digit, an index must be
+ * canonical, and the truncation marker is only legal as the last token.
+ *
+ * This is the boundary, not a courtesy. `ValidationFailedException` is a public
+ * class inside `apps/api`, so a caller that never went through the Zod pipe can
+ * still construct one; the schema is what makes its payload safe rather than the
+ * assumption that only the pipe does.
+ */
+export function isSafeValidationPath(path: string): boolean {
+  if (path === VALIDATION_ROOT_PATH) return true;
+  if (path.length === 0 || path.length > MAX_VALIDATION_PATH_LENGTH) return false;
+
+  let index = 0;
+  let first = true;
+
+  while (index < path.length) {
+    if (path.startsWith(VALIDATION_TRUNCATION_MARKER, index)) {
+      return index + VALIDATION_TRUNCATION_MARKER.length === path.length;
+    }
+
+    if (path[index] === "[") {
+      const ordinal = path.startsWith("[…", index);
+      const digitsStart = index + (ordinal ? 2 : 1);
+      let cursor = digitsStart;
+
+      while (cursor < path.length) {
+        const code = path.charCodeAt(cursor);
+        if (code < 48 || code > 57) break;
+        cursor += 1;
+      }
+
+      if (cursor === digitsStart || path[cursor] !== "]") return false;
+      if (!CANONICAL_INDEX.test(path.slice(digitsStart, cursor))) return false;
+
+      index = cursor + 1;
+      first = false;
+      continue;
+    }
+
+    if (!first) {
+      if (path[index] !== ".") return false;
+      index += 1;
+    }
+
+    const segmentStart = index;
+    index = readWord(path, index);
+    if (!isSafeIdentifierSegment(path.slice(segmentStart, index))) return false;
+
+    first = false;
+  }
+
+  return true;
+}
+
+/** Advances over the identifier tail, one code point at a time. */
+function readWord(path: string, start: number): number {
+  let cursor = start;
+
+  for (;;) {
+    WORD_CHARACTER.lastIndex = cursor;
+    if (!WORD_CHARACTER.test(path)) return cursor;
+    cursor = WORD_CHARACTER.lastIndex;
+  }
+}
+
 /**
  * One validation failure. Both fields are bounded by this contract, not by the
  * producer: an unbounded `path` is how a rejected payload's own text gets
@@ -114,13 +216,18 @@ export type Envelope<T, M = undefined> = M extends undefined ? { data: T } : { d
  * The object is strict, so a producer cannot attach the submitted value next to
  * the diagnosis. `path` is the encoded form `api-conventions.md` §12 defines;
  * ordinary field names appear unchanged, anything that is not an identifier is
- * replaced by an ordinal marker rather than echoed.
+ * replaced by an ordinal marker rather than echoed, and `isSafeValidationPath`
+ * refuses anything that is neither.
  */
 export const MAX_VALIDATION_PATH_LENGTH = 200;
 export const MAX_VALIDATION_ISSUE_LENGTH = 64;
 
 export const validationIssueSchema = z.strictObject({
-  path: z.string().min(1).max(MAX_VALIDATION_PATH_LENGTH),
+  path: z
+    .string()
+    .min(1)
+    .max(MAX_VALIDATION_PATH_LENGTH)
+    .refine(isSafeValidationPath, "expected the encoded validation path grammar"),
   issue: z
     .string()
     .min(1)
