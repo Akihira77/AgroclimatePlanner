@@ -5,6 +5,8 @@ Status: Phase 1. Binding on Phase 3–8. OpenAPI is generated from Zod schemas i
 ## 1. Base
 
 - Base path `/v1`. Breaking change ⇒ `/v2`, never a silent shape change.
+- Two exceptions, both operational and both outside the version prefix: `GET /health` (process liveness) and `GET /health/ready` (readiness, including a bounded database check). They are unversioned because a probe must not break when the API version changes; an outage must not be reported as healthy.
+- Every response carries `X-Request-Id`. The value is a UUID minted per request by the server, and the same value appears in the body of any error response. A caller-supplied `X-Request-Id` is ignored unless trusted-proxy header propagation is explicitly enabled in configuration.
 - `Content-Type: application/json; charset=utf-8`. All timestamps ISO-8601 UTC (`Z`); user-facing dates computed in `Asia/Jakarta`.
 - IDs: opaque **UUIDv7** strings, never sequential integers in the URL. One id space — the value in the URL is the primary key in Postgres (`uuid`, 16 bytes, native Prisma support, time-ordered for index locality). Deliberately **not** ULID: a 26-char text key doubles the PK index size, needs a CHECK constraint to be safe, and buys nothing UUIDv7 lacks (ULID's sortability is the only advantage, and v7 has it). It is also deliberately not "UUID internally, ULID publicly" — that mapping would have to be applied in every RLS policy, every join, and every URL parse, which is a whole class of bug for zero benefit. `app.user_id` is therefore a `uuid`, and policies cast `::uuid`.
 - Money: not applicable. Units must be explicit on every numeric field (`amount`, `unit`), never implied by the key name alone.
@@ -56,6 +58,7 @@ the shape.
 | 429 | `RATE_LIMITED` | with `Retry-After` |
 | 503 | `PROVIDER_UNAVAILABLE` | no usable weather value exists **and** no permitted fallback — with `retryAfter` |
 | 503 | `DEPENDENCY_UNAVAILABLE` | an infrastructure dependency (session store, database) is unreachable — fail closed |
+| 500 | `INTERNAL_ERROR` | an unexpected failure the server did not classify. No stack trace, SQL text, connection string, or exception message reaches the body |
 | 202 | *(no error)* | data missing while ingest is `pending`; body carries `retryAfter` and no fabricated value |
 
 The two `503`s are not interchangeable. `PROVIDER_UNAVAILABLE` is a statement about
@@ -67,6 +70,14 @@ client to guess which outage it is reacting to.
 `details` is deliberately unconstrained: each code owns its payload (`{ path, issue }[]`
 for validation, `missingInputs[]` for insufficient input, `retryAfter` for the `503`s),
 and one shared shape would either drop fields or describe them wrongly.
+
+`RESOURCE_NOT_FOUND` is the family's generic member, used when a path names no
+resource at all. It is not an endpoint's code; a handler that knows which noun is
+missing returns that noun (`FIELD_NOT_FOUND`), validated through
+`notFoundErrorCodeSchema`. The filter also keeps `405`/`406`/`415` with their own
+status and falls back to `VALIDATION_FAILED` — the request, not the server, was
+unacceptable — and maps every other unmapped status to `500 INTERNAL_ERROR` rather
+than inventing a code for it.
 
 `DATA_STALE` is **not** an error status. Stale-but-usable data returns `200` with `freshness.dataAvailability = "stale"` and its reason. Mapping staleness to `503` would train clients to retry a request that can be answered, and would hide the distinction between "old" and "absent". Full matrix in `provenance-contract.md` §7.
 
@@ -235,3 +246,40 @@ The API exposes `engineVersion`, `profileVersionId`, `derivationVersion`, `input
 - Every endpoint documented, including error variants.
 - `dataClass`, `evaluationBasis`, `dataAvailability`, and `freshness` are required on **every** `WeatherValue` variant, and the OpenAPI model is generated as a `oneOf` discriminated on `dataClass` — not a single object with all-optional provenance fields. Per-variant required properties (`forecastRunId`/`ingestionRunId`/`initializedAt` on forecasts, `baseline` on climatology, `observation` on field measurements) are required **within their variant**.
 - Contract tests (Phase 9) assert that responses validate against the schema for fresh, stale, pending, and climatology fixtures — a climatology fixture that includes an `initializedAt` must fail validation, not pass silently.
+
+## 12. Transport and runtime configuration
+
+Implemented in `apps/api` (Phase 3.2, step S2). Nothing here changes the response
+contract above; it fixes how a request becomes a response.
+
+- **Validation.** One global `ValidationPipe`: `whitelist`, `forbidNonWhitelisted`,
+  `transform`, and `enableImplicitConversion: false`. An unknown property is a `400`
+  `VALIDATION_FAILED`, not a silently dropped field, and a query string `"3"` stays a
+  string until a DTO declares otherwise. `details` carries `{ path, issue }` entries
+  describing the failure — never the submitted value.
+- **Errors.** One global exception filter. It is the only place an HTTP status is
+  chosen, it validates what it is about to send against `errorResponseSchema`, and it
+  falls back to `500 INTERNAL_ERROR` if that validation fails. Unrecognised
+  exceptions never contribute their message.
+- **CORS.** Explicit allowlist from `CORS_ORIGINS` (comma-separated). Credentials are
+  not enabled — no cookie is issued by this phase. In production the variable is
+  required; in development it defaults to `http://localhost:5173`. An invalid entry
+  fails startup rather than widening the policy.
+- **Trust proxy.** `TRUST_PROXY` is explicit and off by default. Accepted values:
+  `false` (default), `loopback`, `linklocal`, `uniquelocal`, or a comma-separated list
+  of those and/or IPv4/IPv6 CIDRs. `true` is rejected: it would let any caller set
+  `X-Forwarded-For` and choose their own client IP, and rate limiting in a later phase
+  depends on that value being real. Deployments behind Caddy set `TRUST_PROXY=loopback`.
+- **Cookies.** `cookie-parser` is registered with no secret: signed cookies are not part
+  of this phase, and a secret would imply a trust decision nobody has made yet.
+- **Database.** The API connects as `app_api` through `APP_API_DATABASE_URL`. Outside
+  development that variable is required; inside development it is derived from
+  `APP_API_PASSWORD` and the shared database defaults. `MIGRATION_DATABASE_URL` is
+  never read by the API — it carries schema-owner privileges the runtime must not hold.
+  Missing configuration fails startup rather than falling back to another role.
+- **Readiness.** `/health/ready` runs `SELECT 1` through the pooled client under a
+  bounded timeout and returns `503 DEPENDENCY_UNAVAILABLE` when it fails or times out.
+  Redis is not checked because it is not provisioned.
+- **Tests.** `pnpm --filter @agroclimate/api test` builds and runs `node --test`. HTTP
+  plumbing tests do not need a live PostgreSQL; the database token is replaced with a
+  controlled double. A double proves lifecycle wiring, not connectivity or privilege.

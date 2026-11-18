@@ -126,6 +126,7 @@ describe("errorCodeSchema", () => {
       "RATE_LIMITED",
       "PROVIDER_UNAVAILABLE",
       "DEPENDENCY_UNAVAILABLE",
+      "INTERNAL_ERROR",
     ];
 
     for (const code of documented)

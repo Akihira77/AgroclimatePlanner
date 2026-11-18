@@ -30,11 +30,17 @@ export type RequestId = z.infer<typeof requestIdSchema>;
  * the closed set.
  *
  * `DEPENDENCY_UNAVAILABLE` is the only addition (owner decision `IG-5`, C-1,
- * 2026-11-18) and is deliberately distinct from `PROVIDER_UNAVAILABLE`:
- * a weather provider having no usable value is a domain fact a client may route
+ * 2026-11-18) and is deliberately distinct from `PROVIDER_UNAVAILABLE`: a
+ * weather provider having no usable value is a domain fact a client may route
  * around, while a session store or database being unreachable is infrastructure
  * failure. Both are `503`; collapsing them would make the weather code mean two
  * things.
+ *
+ * `INTERNAL_ERROR` was added by owner decision on 2026-11-18 for S2, and for the
+ * opposite reason: an unexpected exception must fail closed with `500`, and the
+ * set above had no code that could honestly describe it. Reporting a bug as
+ * `DEPENDENCY_UNAVAILABLE` would tell every client to retry something that will
+ * fail identically next time.
  */
 export const singletonErrorCodeSchema = z.enum([
   "VALIDATION_FAILED",
@@ -45,6 +51,7 @@ export const singletonErrorCodeSchema = z.enum([
   "RATE_LIMITED",
   "PROVIDER_UNAVAILABLE",
   "DEPENDENCY_UNAVAILABLE",
+  "INTERNAL_ERROR",
 ]);
 export type SingletonErrorCode = z.infer<typeof singletonErrorCodeSchema>;
 
