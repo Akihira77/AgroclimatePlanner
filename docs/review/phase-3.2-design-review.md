@@ -30,6 +30,13 @@ this note exists only to keep the chronology complete: `bf0e593` (reviewed) →
 `6d36741` → `c762171` → `38486fd` → `75607d8` (reviewed and approved for the S2 scope).
 The snapshot below is still the object of this review and has not been rewritten.
 
+**Reconciled 2026-11-18 after the plan-review remediation.** One track definition is
+clarified, not changed. `ADR-004` and `ADR-005` now exist as `Proposed` records of
+`AG-1`/`AG-2`, so §18's Track 2 gate reads "`AG-1`/`AG-2` approved **and** their ADRs
+accepted" before S3. §18's Track 3 `IG` gates stay exactly where that row puts them —
+S7 and S8 — and none of them moves into Track 2. §3.2's "PROPOSED — not applied"
+status remains accurate: this note records documents, not schema.
+
 Repository state reviewed: `master` at `bf0e593`, reviewed again at round 2. Files
 inspected: the Phase 3.2 brief; `packages/database` (`bootstrap/roles.sql`,
 `bootstrap.mjs`, `scripts/lib/{connections,privilege-verification}.mjs`,

@@ -10,7 +10,8 @@
 | Decision approval status | **Complete** — every gate this file asked for is answered |
 | Implementation status | **`S1` and `S2` implemented, `S3` onward not started** — contracts at `c44cf5b`/`0bb9792`, plumbing at `ad6235b`, remediation at `6d36741`, details and path hardening at `c762171`, shared path grammar at `38486fd`, parser and numeric-segment correctness at `75607d8` |
 | Verification status | **Green at `75607d8`, reviewed** — build, typecheck, test, lint, prettier, `git diff --check` all exit `0`; api 76, contracts 187, database 9, 0 failing |
-| Remaining blockers before `S3` | `ADR-004`/`ADR-005` and `IG-1`–`IG-4`, `IG-6`–`IG-10`; `OPEN-01`/`OPEN-13` stay unresolved until an accepted ADR **and** an applied migration **and** green verification exist |
+| Remaining blockers before `S3` | **ADR acceptance only** — `ADR-004` and `ADR-005` are written and `Proposed`; `S3`–`S6` owe no other owner answer. The `IG` gates block **S7** (`IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10`) and **S8** (`IG-8`, `IG-9`), not the database boundary |
+| ADR status | `ADR-004` and `ADR-005` **written, `Proposed`, not accepted** — they formalise `AG-1`/`AG-2` and add no decision of their own. `AG-1`/`AG-2` are **not** re-opened and are not asked for again |
 | `OPEN-nn` dispositions changed | **No** — `OPEN-01` and `OPEN-13` remain unresolved |
 
 This record exists so the owner can decide without reading 1,100 lines of review. It
@@ -1030,7 +1031,7 @@ satisfied — not that the step is complete.
 | S6 | `privilege-verification.mjs` `EXPECTED` + `has_column_privilege` probes; `auth-boundary` suite | S4 (and S5) | S4 |
 | S7 | Register + login: schemas, Argon2id, dummy hash, rate limit before lookup, generic failures | S1, S2, S4, `IG-1/2/3/4/6/7/10` | **not** unblocked by these four alone |
 | S8 | Session guard, `/me`, logout, sliding expiry, purge wiring | S5, S6, `IG-8/9` | **not** unblocked by these four alone |
-| S9 | Docs reconciliation: `ADR-004`/`ADR-005` accepted, `entity-catalog` `sessions` in widened `identity`, `api-conventions` amendments, `auth-deferred.md` pointer, `IMPLEMENTATION_STATUS` | everything above | — |
+| S9 | Docs reconciliation: `entity-catalog` `sessions` in widened `identity`, `api-conventions` amendments, `auth-deferred.md` pointer, `IMPLEMENTATION_STATUS` (`ADR-004`/`ADR-005` are written; see the ADR status row) | everything above | — |
 
 **Implementation status of this sequence (verified 2026-11-18).** Two steps are built;
 the rest are not.
@@ -1039,7 +1040,8 @@ the rest are not.
 |---|---|---|
 | S1 | **implemented** | `c44cf5b` — response and error envelopes, error-code set, `requestId`; `0bb9792` — branded `NotFoundErrorCode`; `38486fd` — encoded path grammar enforced by `validationIssueSchema`, with the producer importing the same identifier rule; `75607d8` — explicit parser states and canonical numeric segments |
 | S2 | **implemented and remediated** | `ad6235b` — prefix, filter, request id, cookies, helmet, trust proxy, CORS, database client, health probes; `6d36741` — credential boundary, log sanitisation, 405/406/415 documentation, `statement_timeout` readiness, `IG-5-A1`, `IG-12`; `c762171` — `details` trust boundary, path sanitisation in the pipe, log category, readiness budget, S2 commit history; `38486fd` — shared path grammar, producer reuse, segment-boundary truncation; `75607d8` — parser state machine, canonical numeric guard |
-| S3–S9 | **not started** | no `app_auth` role, no migration, no auth endpoint, no ADR-004/ADR-005 |
+| S3–S8 | **not started** | no `app_auth` role, no migration, no auth endpoint |
+| S9 (partial) | **`ADR-004`/`ADR-005` written** | `docs/adr/ADR-004-authentication-database-boundary.md`, `docs/adr/ADR-005-session-storage.md` — both `Proposed`, awaiting owner acceptance; every other S9 item is still absent |
 
 So the honest statement of what these four decisions buy: **Track 1 can start**
 (contracts and plumbing), and **Track 2 can start** (the database boundary and
@@ -1047,12 +1049,19 @@ sessions). Track 3 cannot — `S7` and `S8` additionally require `IG-1` through 
 `IG-6` through `IG-10`, none of which is answered here and none of which changes the
 boundary.
 
-**As of 2026-11-18 the gates for S1, S2, S3, S4, and S5 are satisfied by approval.**
-As of `75607d8`, S1 and S2 are also satisfied by work: the contract schemas, the
-exception filter, and the validation pipe exist, the path grammar is enforced where the
-details leave the process rather than only where they are built, and their checks exit
-`0`. S3, S4, and S5 remain approval-only — no `app_auth` role, no migration, and no
-verification row exists for them.
+**As of 2026-11-18 the architecture gate for S3, S4, and S5 is satisfied by approval.**
+That is a statement about the owner's decision, not about the paperwork. As of
+`75607d8`, S1 and S2 are also satisfied by work: the contract schemas, the exception
+filter, and the validation pipe exist, the path grammar is enforced where the details
+leave the process rather than only where they are built, and their checks exit `0`.
+S3, S4, and S5 are still approval-only in the other sense — no `app_auth` role, no
+migration, and no verification row exists for them.
+
+The ADRs are now written (`ADR-004`, `ADR-005`, both `Proposed`), so the last thing
+standing between `AG-1`/`AG-2` and S3 is owner acceptance of those two documents. Do
+not read that as a fifth decision: they record what was approved on 2026-11-18 and add
+nothing. A separate, non-architecture row survives from the original list — the `IG`
+gates — and it belongs to S7/S8, where endpoint behaviour is decided.
 
 # What these decisions do not settle
 

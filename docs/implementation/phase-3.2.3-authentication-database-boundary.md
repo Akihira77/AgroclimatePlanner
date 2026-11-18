@@ -1,8 +1,11 @@
 # Phase 3.2.3 — Authentication Database Boundary (S3–S6): Implementation Plan
 
 Status: **PLAN ONLY — nothing in this document is applied.**
-Prepared 2026-11-18 against `master` at `75607d8`.
-Approvers needed: repository owner, for `ADR-004` and `ADR-005` (see §16).
+Prepared 2026-11-18 against `master` at `75607d8`; revised after independent review.
+Architecture records: `ADR-004` (`app_auth` boundary) and `ADR-005` (session storage),
+both **Proposed**, formalising the owner decisions `AG-1`/`AG-2` of 2026-11-18.
+Approval still needed: owner acceptance of those two ADRs (see §16). `AG-1` and `AG-2`
+are **not** re-opened here and are not asked for again.
 
 **Document location.** This is the first file under `docs/implementation/`. The
 existing directories each answer a different question — `adr/` records accepted
@@ -35,6 +38,23 @@ What this does **not** produce: a register endpoint, a login endpoint, a session
 guard, `/me`, `/logout`, password hashing, rate limiting, or a GC job. Those are S7
 and S8 and remain blocked on gates this plan does not answer (§13).
 
+The architecture half is now written down where it belongs rather than only in this
+plan: `docs/adr/ADR-004-authentication-database-boundary.md` formalises `AG-1` and
+`docs/adr/ADR-005-session-storage.md` formalises `AG-2`. Both are **Proposed**,
+because approval of a decision and acceptance of its record are different acts. This
+plan links to them and does not restate them (§4).
+
+## 1.1 What the independent review changed
+
+Four corrections, each of which would have produced a wrong implementation:
+
+| # | Finding | Correction |
+|---|---|---|
+| 1 | adding `AUTH_DATABASE_CLIENT` to the `@Global()` `DatabaseModule` would have made both credentials reachable from every module, so the claimed isolation would have been a naming convention | §5.5: a separate, non-global `AuthDatabaseModule` that owns the token and its lifecycle; `DatabaseModule` is left unchanged |
+| 2 | the S3 probe expected `42501` from `app.sessions` before the table exists — that statement returns `42P01`, so the check would have failed or been "fixed" by weakening it | §5.6, §8.0: relation **existence** is asserted with `to_regclass`, and denial only ever at `42501` |
+| 3 | the gate matrix contradicted itself: the owner record listed the `IG` gates as blockers before S3, while this plan assigned them to S7/S8 | §13: architecture decision, ADR acceptance, implementation gate, milestone, and register item are now five separate states, and the owner record's header row is corrected |
+| 4 | the Prisma `Session` model was left as "a relation, maybe", and the `User` model has no reciprocal field | §7.5: the relation is declared on both sides (matching `User`/`Farm`); §6.5 records that `User`'s literal defaults plus `@updatedAt` make `prisma.user.create/update` unusable under the grant, so registration is explicit-column SQL |
+
 The honest one-line summary of the security model being built: **`app_auth` can read
 every email and every password hash, and can mint a session for any `user_id`. That
 is the price of the approved design, it is disclosed in the owner record, and no
@@ -61,8 +81,9 @@ blast radius exactly that large and provably not one table wider.
   `scripts/verify-probe-isolation.mjs` — new assertions.
 - `packages/database/test/rls/auth-boundary.test.mjs` — new suite.
 - `packages/database/test/schema/schema-conformance.test.mjs` — new rows.
-- `apps/api/src/config/runtime-config.ts`, `src/database/database.module.ts`,
-  `src/tokens.ts` — a validated second DSN and a second client.
+- `apps/api/src/config/runtime-config.ts`, `src/tokens.ts` — a validated second DSN and
+  its token. `src/database/database.module.ts` is **not** changed; the second client
+  lives in a new, non-global `src/database/auth-database.module.ts` (§5.5).
 - `docs/architecture/api-conventions.md`, `docs/data-model/*`,
   `docs/IMPLEMENTATION_STATUS.md` — recorded after the code, with evidence.
 
@@ -229,8 +250,23 @@ about what each credential reaches.
 | Grants | column `SELECT`/`INSERT`/`UPDATE` per design review §4.3; **no `DELETE`** to any runtime role; `app_api` and `app_system` hold no table privilege |
 
 Explicitly rejected and not to be revisited by an implementer: Redis, JWT, a
-`SECURITY DEFINER` credential read for `app_api` (option B1), and a second tenant
-GUC (option C).
+`SECURITY DEFINER` credential read for `app_api` (option B2, not B1 — B1 is the
+`app_api`-reads-`users` variant), and a second tenant GUC (option C).
+
+### 4.1 Where these two decisions are recorded
+
+Three artefacts, three different meanings, and none of them substitutes for another:
+
+| Artefact | Meaning | State |
+|---|---|---|
+| `phase-3.2-owner-decisions.md` §1.10, §2.10 | the owner **approved** `AG-1`/`AG-2` on 2026-11-18 | approved |
+| `ADR-004`, `ADR-005` | the durable formal record of those approvals | **Proposed** — awaiting owner acceptance |
+| this plan | how the approved architecture becomes schema and evidence | plan only |
+
+Approval is not acceptance of a document, and neither is implementation. Nothing here
+asks the owner to decide `AG-1`/`AG-2` a second time; the open question is whether the
+two ADRs faithfully record what was approved, and that is the only thing S3 waits on
+beyond the plan itself (§16).
 
 ---
 
@@ -307,32 +343,102 @@ constructs environment records and will fail until fixtures include the new fiel
 That edit is required by S3 and must be authorised explicitly in the implementation
 task; it is not a change to what the tests assert about the tenant credential.
 
-### 5.5 Second client (`apps/api/src/database/database.module.ts`, `tokens.ts`)
+### 5.5 The second client lives in its own module
 
-- `tokens.ts` gains `AUTH_DATABASE_CLIENT`.
-- `DatabaseModule` gains a second provider built from `config.authDatabaseUrl` using
-  the **same** `DatabaseClientFactory` type, plus `AuthDatabaseLifecycle` closing it
-  in `onModuleDestroy`.
-- Both clients are process singletons; neither token is exported to the other's
-  consumers, so a module that asks for the tenant client cannot accidentally receive
-  the auth client.
-- `/health/ready` keeps probing the **tenant** client only. Adding an auth probe
-  would change the meaning of a 503 that has already been documented
-  (`api-conventions.md` §12); auth readiness is an S7 concern, together with the
-  fail-closed outage policy.
+The existing `DatabaseModule` is `@Global()` and exports `DATABASE_CLIENT` and
+`DatabaseLifecycle` (`apps/api/src/database/database.module.ts:37-54`). Adding
+`AUTH_DATABASE_CLIENT` to it would put both credentials behind one global token set:
+every module in the process could inject the auth client by name without importing
+anything. The separation would then be a naming convention enforced by review, not by
+the dependency graph.
+
+So the second client gets its own module, and `DatabaseModule` is left alone.
+
+```text
+AppModule
+├── DatabaseModule        (@Global)     → DATABASE_CLIENT       app_api
+├── AuthenticationModule
+│   └── AuthDatabaseModule (not global) → AUTH_DATABASE_CLIENT  app_auth
+└── HealthModule                        → DATABASE_CLIENT       app_api
+```
+
+| Element | Change |
+|---|---|
+| `src/tokens.ts` | gains `AUTH_DATABASE_CLIENT` — one symbol, nothing else |
+| `src/database/database.module.ts` | **unchanged**; stays `@Global`, keeps one provider and one lifecycle, and must not export the auth token |
+| `src/database/auth-database.module.ts` | new, **not** `@Global`; owns `AUTH_DATABASE_CLIENT` and `AuthDatabaseLifecycle` |
+| `src/auth/auth.module.ts` | new at S7; the only module that imports `AuthDatabaseModule` |
+| `src/app.module.ts` | imports `AuthDatabaseModule` only if authentication needs it at boot — it does not, so the import lands with `AuthenticationModule` at S7 rather than at S3 |
+
+Four consequences worth stating, because each is a way this is usually done wrong:
+
+1. **Why not one global module with two providers.** It works mechanically and fails
+   the only test that matters: a business module injecting `AUTH_DATABASE_CLIENT` would
+   compile, pass review, and give tenant code access to every credential row. A
+   non-global module turns that mistake into a missing import.
+2. **Why not `@Global` on the auth module either.** A global non-tenant client is
+   exactly the credential-by-default arrangement the module split exists to prevent.
+3. **Lifecycle stays one provider per client.** Each lifecycle provider injects
+   exactly one token and holds its own `closed` flag
+   (`database.module.ts:24-35` is the pattern to copy). Nest calls `onModuleDestroy`
+   once per provider instance, so no client is disconnected twice and neither
+   lifecycle can reach the other client. Sharing one lifecycle class across both
+   tokens is the shape that produces a double `$disconnect()`.
+4. **No circular dependency is introduced.** `AuthDatabaseModule` depends on
+   `APP_CONFIG` and the factory only; `DatabaseModule` depends on neither. The factory
+   type `DatabaseClientFactory` is reused from the existing module (a type import, so
+   it erases at compile time), which keeps both clients constructed the same way
+   without either module importing the other's runtime value.
+
+What this boundary is **not**: a NestJS module graph is compile-time structure. It
+prevents accidental injection; it does not survive a compromised process, which holds
+both tokens (`AG-1`; ADR-004, *Explicit limitations*). Nothing in the code may claim
+otherwise.
+
+Two further rules:
+
+- `/health/ready` keeps probing the **tenant** client only. Adding an auth probe would
+  change the meaning of a 503 already documented in `api-conventions.md` §12; auth
+  readiness is an S7 concern with the fail-closed outage policy.
 - Failure handling when the credential is absent: the process does not start
-  (production) or derives the development URL (development). There is **no**
-  fallback to `app_api` and no lazy "create it when needed" path: a client created on
-  first use turns a configuration error into a 500 at the least convenient moment.
+  (production) or derives the development URL (development). There is **no** fallback
+  to `app_api` and no lazy "create it when needed" path — a client created on first use
+  turns a configuration error into a 500 at the worst moment.
+
+**How the boundary is tested later** (S7, needs `IG-11`; not part of S3):
+a Nest testing-module assembly that imports `AuthDatabaseModule` and asserts
+`AUTH_DATABASE_CLIENT` resolves; a second that imports `DatabaseModule` alone and
+asserts `AUTH_DATABASE_CLIENT` does **not** resolve; and a shutdown test asserting both
+clients receive exactly one `$disconnect()`. The `DatabaseClientFactory` double already
+exists for this (`AppDependencies.createDatabaseClient`), so no live PostgreSQL is
+needed.
 
 ### 5.6 Least-privilege check for S3 in isolation
 
-S3 grants nothing on any table, so after S3 alone the role must be able to do
-exactly one thing: connect, resolve `app`, and see no relation. The S3 acceptance
-probes are therefore: `current_user = 'app_auth'`; `USAGE` on `app` true; `CREATE` on
-`app` false; `SELECT` on `app.users`, `app.farms`, `app.sessions` (absent) all
-`42501`; `SET ROLE app_api` `42501`. This is what makes S4 a reviewable delta rather
-than "the role appeared and things started working".
+S3 grants nothing on any table, so after S3 alone the role must be able to do exactly
+one thing: connect, resolve `app`, and reach nothing.
+
+**The absence of `app.sessions` is not a privilege check.** Before S5 the table does
+not exist, and `SELECT FROM app.sessions` returns `42P01` (`undefined_table`) — an
+object-existence failure, not a denial. Asserting `42501` there would either fail the
+run or, worse, be "fixed" by widening the check. The correct probe is
+`to_regclass('app.sessions') IS NULL`, stated as a positive fact about ordering.
+
+The S3 acceptance probes are therefore:
+
+| Probe (as `app_auth`) | Expected |
+|---|---|
+| `select current_user` | `app_auth` |
+| `has_schema_privilege('app_auth', 'app', 'USAGE')` | true |
+| `has_schema_privilege('app_auth', 'app', 'CREATE')` | false |
+| `has_table_privilege('app_auth', 'app.users', 'SELECT')` | false (table-level); the column grants arrive at S4 |
+| `select count(*) from app.users` | **`42501`** — the relation exists, the privilege does not |
+| `select count(*) from app.farms` | **`42501`** — same |
+| `to_regclass('app.sessions')` | `NULL` — declared as absence, never as a denial |
+| `set role app_api` | **`42501`** |
+
+That is what makes S4 a reviewable delta rather than "the role appeared and things
+started working".
 
 ---
 
@@ -404,16 +510,37 @@ pre-empt it.
 - A grant on any other table. Enumerated, not sampled: this migration names
   `app.users` four times and nothing else.
 
-### 6.5 Application consequences to verify, not assume
+### 6.5 Application consequences: the ORM does not fit the grant
 
-- Prisma's generated `INSERT` for `User` may name columns outside the grant
-  (`locale`, `timezone`, `role`, timestamps). If it does, registration **must** use a
-  raw `INSERT INTO app.users (email, password_hash) … RETURNING id` rather than
-  widening the grant. The implementation task must inspect the generated SQL
-  (`EXPLAIN`/log at statement level, or a behavioral probe) before writing the
-  registration path — the grant is authoritative, the ORM is not.
-- `RETURNING id, email` is permitted because both columns are in the `SELECT` grant.
-  `RETURNING created_at` would fail with `42501`, which is intended.
+`app_auth` cannot use `prisma.user.create()` or `prisma.user.update()` against this
+grant, for reasons visible in `packages/database/prisma/schema.prisma:46-59`:
+
+| Prisma declaration | What the client does | Against the grant |
+|---|---|---|
+| `locale String @default("id")` | a **client-side** default: the field is sent in the `INSERT` | `42501` — `locale` has no `INSERT` grant |
+| `timezone String @default("Asia/Jakarta")` | same | `42501` |
+| `role String @default("owner")` | same | `42501` |
+| `updatedAt DateTime @default(now()) @updatedAt` | `@updatedAt` makes every `update()` write `updated_at = now()` | `42501` — and there is no `UPDATE` grant at all |
+| `id String @id @default(dbgenerated("uuidv7()"))` | omitted, left to the database | fine |
+
+So the strategy is decided here rather than discovered at S7:
+
+- **Registration** is an explicit column insert, not an ORM create:
+  `INSERT INTO app.users (email, password_hash) VALUES ($1, $2) RETURNING id`
+  through `$queryRaw`. It names exactly the granted columns, lets PostgreSQL apply
+  `locale`/`timezone`/`role`/timestamps from their column defaults, and returns only
+  granted `SELECT` columns.
+- **Login** is a `SELECT` of the six granted columns; nothing to adapt.
+- **Any user write beyond insert is out of scope for `app_auth`.** Password change and
+  email verification need `UPDATE` on specific columns — a new grant and a new policy,
+  i.e. an owner decision, not something S4 quietly adds.
+
+`RETURNING id, email, role, locale, timezone` is permitted because all six are in the
+`SELECT` grant; `RETURNING created_at` would fail `42501`, which is intended.
+
+The generated SQL still has to be confirmed empirically at S4 — statement logging or a
+behavioural probe — because the point is to test the grant against the *actual*
+statement, not against this table. The grant is authoritative; the ORM is not.
 
 ---
 
@@ -437,10 +564,11 @@ CREATE TABLE app.sessions (
   CONSTRAINT sessions_token_hash_key UNIQUE (token_hash),
   CONSTRAINT sessions_expiry_order_check
     CHECK (absolute_expires_at >= expires_at AND expires_at > created_at),
-  -- Addition to the review's DDL, flagged for review: see §7.3
+  -- Not in the review's DDL. Flagged for S5 review: see §7.3
   CONSTRAINT sessions_token_hash_shape_check CHECK (token_hash ~ '^[0-9a-f]{64}$')
 );
 
+-- Also not in the review's DDL; same flag (§7.3).
 CREATE INDEX sessions_user_id_idx ON app.sessions (user_id);
 CREATE INDEX sessions_absolute_expires_at_idx ON app.sessions (absolute_expires_at);
 ```
@@ -467,25 +595,39 @@ So `sessions_auth_all … USING (true)` is chosen, with the consequences stated:
   it holds **no grant at all**, and `FORCE` means a mistaken grant returns zero rows.
 - `ENABLE` + `FORCE` remain correct for the same reason as on `users`.
 
-### 7.3 The one addition to the approved DDL, and why
+### 7.3 Two additions to the approved DDL, both flagged
 
-`sessions_token_hash_shape_check` is not in the design review's proposed DDL. It is
-proposed here because `AG-2` says "only `sha256(token)` stored" and nothing in the
-schema currently distinguishes a hash from a raw token: a bug that wrote the
-base64url token into `token_hash` would be silently accepted and would still
+Neither is in the design review's proposed DDL, and neither is approved by `AG-2`.
+They are proposals for S5 review, not security controls this plan may award itself.
+
+**1. `sessions_token_hash_shape_check`.** `AG-2` says "only `sha256(token)` stored",
+and nothing in the schema currently distinguishes a hash from a raw token: a bug that
+wrote the base64url token into `token_hash` would be silently accepted and would still
 authenticate.
 
-- 64 lowercase hex characters is exactly `encode(sha256(32 bytes), 'hex')`. A
-  base64url token is 43 characters, so the mistake fails at `23514` instead of
-  persisting a credential.
-- It constrains the *encoding*, not the algorithm. If a future decision stores
-  base64 hashes, this needs a migration — which is the intended cost.
-- It does not make the raw-token rule enforceable in general (an application could
-  hash twice and still pass); it catches the one realistic error.
+- 64 lowercase hex characters is exactly `encode(sha256(32 bytes), 'hex')`. A base64url
+  token is 43 characters, so the mistake fails at `23514` instead of persisting a
+  credential.
+- It constrains the *encoding*, not the algorithm. If a future decision stores base64
+  hashes, this needs a migration — which is the intended cost.
+- It does not make the raw-token rule enforceable in general (an application could hash
+  twice and still pass); it catches the one realistic error.
 
-Flagged explicitly: **this is a schema addition beyond the approved design and must be
-accepted or removed at review.** It is not a security control the plan may award
-itself.
+**2. `sessions_user_id_idx` and `sessions_absolute_expires_at_idx`.** The review's DDL
+declares `token_hash UNIQUE` and no other index. Two scans then have no index:
+revoke-all-sessions-for-a-user (`WHERE user_id = $1`) and the GC sweep
+(`WHERE absolute_expires_at < now()`). Both are rare and both are sequential scans over
+a table that grows to 90 days of every user's sessions, on the hour, forever.
+
+- They add no capability and change no plan for the request path, which is the unique
+  `token_hash` lookup.
+- A partial index (`WHERE revoked_at IS NULL`) was considered for the user index and
+  rejected: revoking all of a user's sessions must also find already-revoked rows if it
+  is ever used to audit, and the table is small enough that the distinction is noise.
+
+Both additions are cheap to reverse before S5 ships — the constraint and an index are
+one `ALTER`/`DROP` each in the *same* migration, not a later one, because nothing has
+been applied yet. After it applies, they are immutable like everything else.
 
 ### 7.4 Grants, policies, and the GC function
 
@@ -540,38 +682,126 @@ Three load-bearing details, each easy to lose:
 "delete rows nobody can use any more" and it touches no credential and no tenant row.
 `ADR-003`'s rejection of a definer-based tenant validator does not transfer to it.
 
-### 7.5 Prisma representation
+### 7.5 Prisma representation — relation traversal declared, deliberately
 
-Add a `Session` model to `schema.prisma` with `@@map("sessions")` and `@@schema("app")`,
-all eight scalar columns mapped, `token_hash` `@unique`, and **no relation field
-requirement beyond `user User @relation(...)`**. This file is a representation;
-`prisma/migrations` remains authoritative, `migrate dev` must not be used, and the
-model exists so the client has a type — not so it can generate DDL. If the generated
-model cannot express the CHECK constraints, say so in a comment rather than
-pretending the schema file is complete.
+One direction, chosen now so S5 does not rediscover it: **declare the relation on both
+sides**, matching how `User`/`Farm` already works (`schema.prisma:55` `farms Farm[]`,
+`:71` `user User @relation(fields: [userId], references: [id])`).
+
+```prisma
+// In model User — currently absent, so the reciprocal field must be added:
+sessions Session[]
+
+// New model:
+model Session {
+  id                String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId            String    @map("user_id") @db.Uuid
+  tokenHash         String    @unique @map("token_hash")
+  expiresAt         DateTime  @map("expires_at") @db.Timestamptz(6)
+  absoluteExpiresAt DateTime  @map("absolute_expires_at") @db.Timestamptz(6)
+  revokedAt         DateTime? @map("revoked_at") @db.Timestamptz(6)
+  lastSeenAt        DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@schema("app")
+  @@map("sessions")
+}
+```
+
+Why the relation and not a bare scalar:
+
+- It is the existing convention in this file. A `user_id` scalar with no relation would
+  be the only foreign key in the schema represented that way, and the next reader would
+  read it as an oversight.
+- The FK's referential action is `NO ACTION` (`RESTRICT`-like), matching the SQL
+  migration's plain `REFERENCES`. Nothing here specifies `onDelete`/`onUpdate`, because
+  the SQL says neither and the representation must not invent a behaviour.
+- It creates **no** traversal requirement: nothing on the auth path needs
+  `session.user` or `user.sessions`. The relation is declared for fidelity, not for use.
+
+Two constraints on this model, both non-negotiable:
+
+1. **`prisma/migrations` remains authoritative.** `migrate dev` is banned and must not
+   return; the model exists so the client has a type, not so it can generate DDL. CHECK
+   constraints and the function have no Prisma representation — say so in a comment
+   rather than pretending the schema file is complete.
+2. **This task does not touch `schema.prisma`.** The `Session` model and the reciprocal
+   `sessions Session[]` on `User` are S5 changes, made by hand and reviewed against the
+   applied migration.
 
 ### 7.6 Schema/Prisma write-path consequence
 
-Session creation with Prisma names every non-defaulted column, which is exactly the
-`INSERT` grant, so `create` is viable. Any read that selects `*` would need the full
-`SELECT` list — which `app_auth` has — so the column grant is about *writes* and about
-future columns, not about hiding present ones from `app_auth`. Say this plainly:
-**the session table's column grants do not hide session rows from the auth
-credential; they constrain which columns it can change.**
+Session creation names `user_id`, `token_hash`, `expires_at`, `absolute_expires_at` —
+exactly the `INSERT` grant — plus nothing else, because `id`, `last_seen_at`, and
+`created_at` are database defaults (`dbgenerated`/`now()`), which Prisma omits. So
+`create` is viable here where `user.create` is not; the difference is that every
+non-defaulted session column is granted, while `User`'s literal defaults are
+client-sent (§6.5).
+
+Any read that selects `*` needs the full `SELECT` list — which `app_auth` has. So the
+column grant is about **writes** and about future columns, not about hiding present
+rows from the auth credential. Say it plainly where the query lives: **the session
+table's column grants do not hide session rows from `app_auth`; they constrain which
+columns it can change.**
 
 ---
 
 ## 8. S6 — privilege verification and security tests
 
-Three layers, each answering a different question. None of them is a text search over
+Three harnesses, each answering a different question. None of them is a text search over
 SQL; every assertion talks to PostgreSQL as the role it is about.
 
-### 8.1 `db:verify` (structural + behavioural, existing harness)
+### 8.0 Six layers, and why they must not be collapsed
+
+A single "denied or not" assertion cannot tell a boundary apart from a typo, and it
+cannot run before the object exists. Verification is therefore layered, and each layer
+answers a question the others cannot:
+
+| Layer | Question | Probe | Failure mode if collapsed |
+|---|---|---|---|
+| **Existence** | is the object there at all? | `to_regclass('app.sessions')`, `pg_proc` lookup, `information_schema.columns` | querying a missing table returns `42P01` — an object error read as a denial |
+| **Schema** | may the role resolve `app`? | `has_schema_privilege(…, 'USAGE'/'CREATE')` | a `42P01` from an unresolvable schema duplicates the existence layer |
+| **Table** | any table-wide grant? | `has_table_privilege` + policy/ACL dump | `has_table_privilege` is **false for column grants**, so it cannot prove a column grant exists — and reads as "locked down" when it is not |
+| **Column** | exactly which columns? | `has_column_privilege` per column, positive and negative | the only safe way to assert a column grant; table-level checks are structurally blind here |
+| **RLS** | is the policy set what we think? | `relrowsecurity`, `relforcerowsecurity`, `pg_policies` | a grant without `FORCE` and a policy is a different system than one with them |
+| **Behaviour** | does the database actually refuse? | the statement, as the role, expecting an exact SQLSTATE | any of the above can be true while the statement still succeeds (e.g. via a different grant path) |
+
+**SQLSTATE discipline.** A denial is accepted only at `42501`
+(`insufficient_privilege`). Every other code fails the assertion:
+
+| Code | Meaning | Verdict |
+|---|---|---|
+| `42501` | `insufficient_privilege` | the only accepted denial |
+| `42P01` | `undefined_table` | **fails** the check — the object is missing, nothing was proved about privileges |
+| `3F000` | `invalid_schema_name` | fails — the schema is wrong, not the privilege |
+| `23503` | `foreign_key_violation` | asserted separately, where a FK is the actual mechanism, never as a denial |
+| `23514` | `check_violation` | asserted separately, for constraint tests |
+| `42601`, `42703` | syntax/undefined column | fails — the probe is broken |
+
+Relation **absence** is asserted as absence, never as a denial. Before S5 the correct
+statement about `app.sessions` is `to_regclass('app.sessions') IS NULL`.
+
+### 8.1 Stage-appropriate scope
+
+Verification grows with the schema; each stage's suite must pass on its own, because
+each ships as its own commit.
+
+| Stage | What exists | What is asserted |
+|---|---|---|
+| **after S3** | role only, no table grant | role identity and attributes; zero memberships; `USAGE` on `app`, no `CREATE`; `42501` on `app.users` and `app.farms` (relations exist); `to_regclass('app.sessions') IS NULL`; `SET ROLE` refused |
+| **after S4** | `users` column grants + 2 policies | the six `SELECT` columns granted and the two absent; `INSERT` for `email`/`password_hash` only; `UPDATE`/`DELETE` `42501`; `app_api` still `42501`; `users_self_only` unchanged; `FORCE` intact |
+| **after S5** | `sessions` table + function | column grants exactly as §7.4 with no `DELETE`; `app_api`/`app_system` `42501` on all four verbs; RLS flags and both policies; function `prosecdef`/owner/`EXECUTE`/`search_path`; GC deletes dead rows only |
+| **cross-stage regression** | everything | 39 tenant-isolation tests and 12 conformance checks unchanged; `app_api`'s credential denial re-asserted |
+
+### 8.2 `db:verify` (structural + behavioural, existing harness)
 
 Additions to `privilege-verification.mjs`:
 
 | Group | Assertions |
 |---|---|
+| Existence | `to_regclass('app.users')` not null; **at S3 only**, `to_regclass('app.sessions')` is null — recorded as ordering evidence, and the S6 run adds the non-null assertion once S5 has applied |
 | Identity | `connected as app_auth`; `rolcanlogin = true`; no superuser/createdb/createrole/replication |
 | Attributes | `app_auth` `NOBYPASSRLS`; `NOINHERIT` |
 | Membership | the existing zero-membership query now covers four roles, in both directions |
@@ -580,14 +810,14 @@ Additions to `privilege-verification.mjs`:
 | Column grants | `has_column_privilege(app_auth, users, c, 'SELECT')` true for the six, false for `created_at`/`updated_at`; `INSERT` true for `email`/`password_hash`, false for the rest; `UPDATE` and `DELETE` false for every column |
 | Sessions | table `42501` for `app_api` and `app_system` on all four verbs; `app_auth` column privileges exactly as §7.4; no `DELETE` for `app_auth` |
 | RLS | `sessions` `relrowsecurity` and `relforcerowsecurity` true; both policies present; neither names `{public}` or `app_api`; `SELECT`/`INSERT` split correct |
-| Function | `prosecdef` true; owner `migration_owner`; `proacl` grants `EXECUTE` to `app_system` only; `has_function_privilege` false for `app_api`, `app_auth` |
+| Function | `prosecdef` true; owner `migration_owner`; `proacl` grants `EXECUTE` to `app_system` only; `has_function_privilege` false for `app_api`, `app_auth`; `pg_proc.proconfig` contains the pinned `search_path` |
 | Cross-role | `app_auth` cannot `SET ROLE app_api`/`app_system`/`migration_owner`; `app_api`/`app_system` unchanged |
 | Regression | the existing `app_api holds no grant on app.users` denial stays and is asserted for the new role's neighbours too |
 
-Every denial is accepted only at `42501`; `23503` is asserted separately where a
-foreign key is the mechanism.
+Every denial is accepted only at `42501`; `23503` and `23514` are asserted separately,
+where a foreign key or a CHECK is the actual mechanism, and never counted as denials.
 
-### 8.2 New suite `test/rls/auth-boundary.test.mjs` (`node:test`, real roles)
+### 8.3 New suite `test/rls/auth-boundary.test.mjs` (`node:test`, real roles)
 
 Fixtures: one user per run, created by `migration_owner`, email carrying
 `randomBytes(6).toString("hex")` so two runs never collide; sessions created by
@@ -605,19 +835,23 @@ connection — never a fixed id, never `DROP ROLE`, never a `TRUNCATE`.
 | `set role app_api` / `app_system` / `migration_owner` | `42501` |
 | `set_config('app.user_id', <other tenant>, true); select … from app.farms` | `42501` — the "permitted but useless" claim, tested rather than asserted |
 | `create table app.probe_…` | `42501` |
-| any of the 21 other tables, `select` | `42501`, enumerated over the table list, not sampled |
+| any of the 21 existing tables other than `users`, `select` | `42501`, enumerated over the table list, not sampled |
 | `insert into app.sessions (user_id, token_hash, expires_at, absolute_expires_at)` | succeeds |
 | `select … from app.sessions where token_hash = $1` | 1 row |
 | `update app.sessions set revoked_at = now()` | succeeds |
-| `update app.sessions set token_hash = …` / `user_id = …` / `created_at = …` | `42501` |
+| `update app.sessions set token_hash = …` / `user_id = …` / `created_at = …` / `absolute_expires_at = …` | `42501` |
 | `delete from app.sessions` | `42501` |
 | `select app.purge_expired_sessions()` | `42501` |
+
+Rows that need an object that does not exist yet are **stage-gated**: the `sessions`
+block runs only after S5, and the suite asserts `to_regclass('app.sessions')` before
+using it rather than letting `42P01` masquerade as a denial.
 
 And as the other roles: `app_api`/`app_system` `42501` on every `sessions` verb;
 `app_system` `EXECUTE app.purge_expired_sessions()` succeeds and returns an integer;
 `app_api` `42501` on the function.
 
-### 8.3 `test/schema/schema-conformance.test.mjs`
+### 8.4 `test/schema/schema-conformance.test.mjs`
 
 Structural rows, no behaviour: `sessions` exists with the eight columns, both CHECK
 constraints, the unique constraint, the two indexes, `ENABLE`+`FORCE`, two policies
@@ -626,7 +860,7 @@ migration_owner`), and the exact grant lists via `has_column_privilege`. The exi
 12 conformance checks and 39 isolation tests must pass **unchanged** — a changed
 count is a finding, not a housekeeping edit.
 
-### 8.4 Fresh-volume migration check
+### 8.5 Fresh-volume migration check
 
 Both migrations are applied to an isolated compose project with its own volume
 (the Phase 3 pattern), never by resetting the development database, and the project
@@ -751,12 +985,50 @@ reason:
 
 ## 13. Dependencies and unresolved owner decisions
 
-### Unblocked by what already exists
+### 13.1 The five statuses this plan keeps apart
+
+Every gate below is in exactly one of these states, and the states are not
+interchangeable. Most gate confusion in this repository has come from collapsing two
+of them into "done" or "blocked".
+
+| # | State | Meaning | What it is not |
+|---|---|---|---|
+| 1 | **Architecture decided** | the owner chose an option on a date | not an implementation |
+| 2 | **ADR written, not accepted** | the decision is recorded durably and awaits owner acceptance of the record | not a new decision, not a second approval |
+| 3 | **Implementation gate open** | an owner answer is still required before a named step can be written | not answerable by an implementer |
+| 4 | **Milestone not started** | no code exists for a step whose gates are satisfied | not blocked |
+| 5 | **Register item unresolved** | `OPEN-nn` still needs accepted ADR **+** applied migration **+** green verification | not resolved by approval alone |
+
+### 13.2 Where each gate currently sits
+
+| Gate | State | Detail |
+|---|---|---|
+| `AG-1` | **1 — decided** 2026-11-18 | owner record §1.10, Option A |
+| `AG-2` | **1 — decided** 2026-11-18 | owner record §2.10, Option A |
+| `ADR-004` | **2 — written, not accepted** | `docs/adr/ADR-004-authentication-database-boundary.md`; formalises `AG-1` |
+| `ADR-005` | **2 — written, not accepted** | `docs/adr/ADR-005-session-storage.md`; formalises `AG-2` |
+| `IG-5`, `IG-5-A1` | decided, implemented | S1/S2 shipped against them |
+| `IG-11` | decided | `node:test` for `apps/api`; already in use |
+| `IG-12` | decided | Zod-only validation, bound per parameter; in use |
+| `IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10` | **3 — open** | block **S7**, not S3–S6 |
+| `IG-8`, `IG-9` | **3 — open** | block **S8**, not S3–S6 |
+| S3–S6 | **4 — not started** | gates satisfied once the two ADRs are accepted; no other owner answer owed |
+| `OPEN-01` | **5 — unresolved** | needs accepted `ADR-004` + migration + `db:verify` |
+| `OPEN-13` | **5 — unresolved** | needs accepted `ADR-005` + migration + session suite |
+
+The one correction this table exists to make: **no `IG` gate blocks S3, S4, S5, or
+S6.** They are endpoint-behaviour decisions — email normalisation, duplicate
+registration, auto-login, password policy, hashing parameters, rate limiting, email
+verification, cookie naming, CSRF — and none of them can change a role, a grant, a
+policy, or a table's shape. The owner record previously listed them in a row labelled
+"blockers before `S3`"; that row is corrected in the record itself, not only here.
+
+### 13.3 Unblocked by what already exists
 
 | Requirement | Status |
 |---|---|
-| `AG-1` (credential boundary) | **approved 2026-11-18** |
-| `AG-2` (session storage) | **approved 2026-11-18** |
+| `AG-1` (credential boundary) | **approved 2026-11-18** — ADR-004 is its record |
+| `AG-2` (session storage) | **approved 2026-11-18** — ADR-005 is its record |
 | `IG-5` (+`IG-5-A1`), `IG-11`, `IG-12` | approved / recorded; S2 implemented against them |
 | `ADR-002` D5 (server-side sessions) | accepted; `AG-2` A preserves it |
 
@@ -799,11 +1071,16 @@ Each row names the evidence, not the intent.
    `NOCREATEROLE`, `NOREPLICATION`, `NOBYPASSRLS`, `NOINHERIT` — `db:verify` rows.
 2. Zero memberships in either direction involving all four roles — `db:verify`.
 3. A live connection reports `current_user = 'app_auth'` — suite probe.
-4. After S3 **alone**, every table read fails `42501` — this is the baseline S4 is
-   measured against.
+4. After S3 **alone**, every read of an **existing** table fails `42501` — this is the
+   baseline S4 is measured against — and `app.sessions` is asserted **absent**
+   (`to_regclass(...) IS NULL`), never queried. A `42P01` is not a denial and must not
+   be recorded as one.
 5. The API boots with `APP_AUTH_DATABASE_URL`, refuses a URL naming `app_api`, and
    fails to boot in production without it — config tests plus one negative boot.
-6. Two distinct clients exist, each closed on shutdown — lifecycle test.
+6. Two distinct clients exist in two modules — `AUTH_DATABASE_CLIENT` resolves inside
+   `AuthDatabaseModule` and does **not** resolve from a module that imports only the
+   global `DatabaseModule`; each client receives exactly one `$disconnect()` on
+   shutdown — module-assembly test and lifecycle test.
 
 ### S4
 
@@ -828,12 +1105,15 @@ Each row names the evidence, not the intent.
     survives; a row expired only on `expires_at` is **not** deleted.
 16. A sliding extension at day 70 of 90 lands on `absolute_expires_at`, satisfies
     `sessions_expiry_order_check`, and does not exceed the absolute deadline.
-17. Updating `token_hash`, `user_id`, or `created_at` as `app_auth` fails `42501`.
+17. Updating `token_hash`, `user_id`, `created_at`, or `absolute_expires_at` as
+    `app_auth` fails `42501` — the last one is what makes "a session cannot outlive its
+    absolute expiration" a database property rather than a promise.
 
 ### S6 and cross-cutting
 
 18. `db:verify` green with the new rows; assertion count recorded with the exact
-    number, not "more than before".
+    number, not "more than before". Every denial is `42501`; no `42P01` appears in a
+    denial log, because a missing relation would be a defect in the stage, not a pass.
 19. `test/rls/auth-boundary.test.mjs` green; existing suites unchanged in count.
 20. Both migrations apply to a fresh isolated volume in order.
 21. No `OPEN-01`/`OPEN-13` disposition changed by the implementation. Their flip is a
@@ -850,8 +1130,9 @@ the next.
 
 | # | Commit | Contents | Must be green before the next |
 |---|---|---|---|
+| **0** | `docs(adr): record the authentication database boundary and session storage` | `ADR-004`, `ADR-005`, this plan, the owner-record gate correction | owner acceptance of both ADRs — **this commit is the gate, so it precedes all code** |
 | 1 | `feat(database): provision the app_auth role` | `roles.sql`, `bootstrap.mjs`, `connections.mjs`, `database.defaults.json`, `.env.example` names, `db:verify` attribute/membership rows | `db:bootstrap` + `db:verify` |
-| 2 | `feat(api): hold a second, validated database credential` | `runtime-config.ts` (+fixtures), `tokens.ts`, `database.module.ts` | build, typecheck, api tests |
+| 2 | `feat(api): hold a second, validated database credential` | `runtime-config.ts` (+fixtures), `tokens.ts`, new `auth-database.module.ts`; **`database.module.ts` untouched** | build, typecheck, api tests, module-assembly + lifecycle test |
 | 3 | `feat(database): grant the auth boundary on app.users` | migration `20261118040000_auth_boundary`, users-half verification | `db:verify`, auth-boundary users half |
 | 4 | `feat(database): add server-side sessions` | migration `20261118050000_sessions`, `schema.prisma` model, function | `db:verify`, auth-boundary sessions half, conformance |
 | 5 | `test(database): verify the authentication boundary` | `auth-boundary` suite, conformance rows, probe-isolation extension if needed | all DB suites |
@@ -867,9 +1148,11 @@ the session table in the diff.
 
 **GO when all of the following hold:**
 
-1. The owner has **accepted** `ADR-004` and `ADR-005` (this plan does not write them;
-   it is their implementation consequence). Acceptance is an owner action with a date
-   and an approver, not an implementer's assertion.
+1. The owner has **accepted** `ADR-004` and `ADR-005`. Both are written and
+   **Proposed**; acceptance adds a date and an approver to each, and is the owner's act,
+   not an implementer's assertion. Note what this does *not* mean: `AG-1` and `AG-2` are
+   already decided (2026-11-18), so acceptance is a statement that the records are
+   faithful — not a fresh architecture decision, and not a re-vote.
 2. `master` is at or after `75607d8` with a clean tree, and the S2 checks are green —
    the baseline this work builds on.
 3. A cluster-admin path for bootstrap exists for every environment in scope
@@ -893,7 +1176,17 @@ the session table in the diff.
    a password policy or an email-normalisation rule puts an unapproved decision into
    production.
 6. The `sessions_token_hash_shape_check` addition (§7.3) is neither accepted nor
-   removed — an unreviewed schema constraint must not ship by default.
+   removed — an unreviewed schema constraint must not ship by default. The same applies
+   to the two supporting indexes (ADR-005, *Implementation details still requiring
+   review*).
+7. A privilege test is "fixed" by accepting a SQLSTATE other than `42501` as a denial,
+   or by querying `app.sessions` before S5 and calling the `42P01` a pass. Both turn a
+   missing object into false evidence.
+8. `AUTH_DATABASE_CLIENT` is added to the `@Global()` `DatabaseModule`, or
+   `DatabaseModule` starts exporting it. That would make the module boundary in §5.5
+   decorative.
+9. An implementer grants `UPDATE` on `app.users` so that Prisma's `@updatedAt` stops
+   failing. The grant is the decision; the ORM is the thing to change (§6.5).
 
 **What "done" looks like for this phase, in one sentence:** a fourth credential exists,
 can read and insert exactly the credential columns it needs and exactly the session
