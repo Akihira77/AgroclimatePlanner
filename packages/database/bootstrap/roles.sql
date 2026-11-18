@@ -9,7 +9,7 @@ DO $$
 DECLARE
   role_name text;
 BEGIN
-  FOREACH role_name IN ARRAY ARRAY['migration_owner', 'app_api', 'app_system'] LOOP
+  FOREACH role_name IN ARRAY ARRAY['migration_owner', 'app_api', 'app_system', 'app_auth'] LOOP
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = role_name) THEN
       EXECUTE format('CREATE ROLE %I', role_name);
     END IF;
@@ -22,6 +22,10 @@ $$;
 ALTER ROLE migration_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
 ALTER ROLE app_api          NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
 ALTER ROLE app_system       NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS    NOINHERIT;
+-- app_auth reaches credentials before a tenant context exists, so it is the role
+-- the RLS design must not rely on. NOBYPASSRLS is asserted rather than assumed;
+-- `db:verify` re-reads it from pg_roles.
+ALTER ROLE app_auth         NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT;
 
 -- Application objects live in their own schema so that migration_owner owns
 -- exactly one namespace and PostGIS keeps `public`, `topology`, and `tiger`.
@@ -37,8 +41,8 @@ CREATE SCHEMA IF NOT EXISTS app AUTHORIZATION migration_owner;
 -- re-running it.
 REVOKE ALL ON SCHEMA app FROM PUBLIC;
 REVOKE CREATE ON SCHEMA app FROM PUBLIC;
-REVOKE ALL ON SCHEMA app FROM app_api, app_system;
-GRANT USAGE ON SCHEMA app TO app_api, app_system;
+REVOKE ALL ON SCHEMA app FROM app_api, app_system, app_auth;
+GRANT USAGE ON SCHEMA app TO app_api, app_system, app_auth;
 
 -- `public` holds PostGIS. Runtime roles may reference its types and functions,
 -- and still may not create objects there. `public` belongs to
@@ -61,7 +65,7 @@ GRANT USAGE ON SCHEMA public TO app_api, app_system;
 -- all: PostgreSQL grants no privileges on them to other roles by default, which
 -- the privilege verification checks against a table created after this runs.
 ALTER DEFAULT PRIVILEGES FOR ROLE migration_owner
-  REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC, app_api, app_system;
+  REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC, app_api, app_system, app_auth;
 
 -- Development volumes created before this phase put the Prisma ledger in
 -- `public`, owned by the cluster admin. Move it where Prisma will look once the

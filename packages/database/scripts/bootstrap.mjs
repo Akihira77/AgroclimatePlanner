@@ -31,6 +31,7 @@ const ROLE_PASSWORD_VARIABLES = {
   migration_owner: "MIGRATION_OWNER_PASSWORD",
   app_api: "APP_API_PASSWORD",
   app_system: "APP_SYSTEM_PASSWORD",
+  app_auth: "APP_AUTH_PASSWORD",
 };
 
 function passwordFor(role) {

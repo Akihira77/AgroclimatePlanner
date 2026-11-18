@@ -14,7 +14,13 @@ import { spawn } from "node:child_process";
 
 import { Client } from "pg";
 
-import { development, env, roleConnectionString, ROLE_NAMES } from "./connections.mjs";
+import {
+  credentialVariables,
+  development,
+  env,
+  roleConnectionString,
+  ROLE_NAMES,
+} from "./connections.mjs";
 
 /** Names from the pre-2.2.2.x verification, kept only as the decoy test's fixture. */
 export const LEGACY_PROBE_NAMES = [
@@ -145,12 +151,27 @@ export async function runPrivilegeVerification({
   const owner = clients["migration_owner"];
   const api = clients["app_api"];
   const system = clients["app_system"];
+  const auth = clients["app_auth"];
 
   const probes = createProbes();
   const created = { table: false, sequence: false, fn: false };
 
   try {
-    await Promise.all(Object.values(clients).map((client) => client.connect()));
+    // Sequential, so a failure names the role whose credential is wrong instead of
+    // the first rejection out of four. Neither the URL nor the password is ever
+    // printed: only the PostgreSQL SQLSTATE.
+    for (const [role, client] of Object.entries(clients)) {
+      try {
+        await client.connect();
+      } catch (error) {
+        const code = error?.code ?? "no SQLSTATE";
+        const names = credentialVariables(role);
+        throw new Error(
+          `db:verify could not connect as ${role} (${code}). Set ${names.password} or ${names.url} ` +
+            "for this environment. Values are never printed.",
+        );
+      }
+    }
 
     // ---------------------------------------------------------------- identity
     // Before anything else. A denial coming from the wrong role proves nothing.
@@ -161,7 +182,7 @@ export async function runPrivilegeVerification({
 
     // -------------------------------------------------------------- attributes
     const { rows: roles } = await owner.query(
-      "select rolname, rolsuper, rolcanlogin, rolbypassrls, rolcreatedb, rolcreaterole from pg_roles where rolname = any($1)",
+      "select rolname, rolsuper, rolcanlogin, rolbypassrls, rolcreatedb, rolcreaterole, rolinherit from pg_roles where rolname = any($1)",
       [ROLE_NAMES],
     );
     const attribute = (name) => roles.find((role) => role.rolname === name);
@@ -174,9 +195,11 @@ export async function runPrivilegeVerification({
       check(`${name} cannot create databases`, role.rolcreatedb === false);
       check(`${name} cannot create roles`, role.rolcreaterole === false);
       check(`${name} can log in`, role.rolcanlogin === true);
+      check(`${name} does not inherit privileges`, role.rolinherit === false);
     }
     check("app_api lacks BYPASSRLS", attribute("app_api")?.rolbypassrls === false);
     check("app_system has BYPASSRLS", attribute("app_system")?.rolbypassrls === true);
+    check("app_auth lacks BYPASSRLS", attribute("app_auth")?.rolbypassrls === false);
 
     // -------------------------------------------------------------- membership
     const { rows: memberships } = await owner.query(
@@ -188,7 +211,7 @@ export async function runPrivilegeVerification({
       [ROLE_NAMES],
     );
     check(
-      "no role memberships involving the three roles",
+      "no role memberships involving the four roles",
       memberships.length === 0,
       JSON.stringify(memberships),
     );
@@ -203,7 +226,7 @@ export async function runPrivilegeVerification({
       schema[0]?.schema_owner,
     );
 
-    for (const role of ["app_api", "app_system"]) {
+    for (const role of ["app_api", "app_system", "app_auth"]) {
       const { rows } = await owner.query(
         "select has_schema_privilege($1, 'app', 'USAGE') as usage, has_schema_privilege($1, 'app', 'CREATE') as create",
         [role],
@@ -217,6 +240,79 @@ export async function runPrivilegeVerification({
       ["app_api"],
     );
     check("app_api has no CREATE on public", publicCreate[0].create === false);
+
+    // -------------------------- app_auth owns nothing, because it creates nothing
+    // A role that owns an object bypasses every policy on it, so "no ownership" is
+    // the property that keeps the credential boundary from depending on RLS.
+    const { rows: authOwnership } = await owner.query(
+      `select (select count(*)
+                 from pg_class c join pg_namespace n on n.oid = c.relnamespace
+                where pg_get_userbyid(c.relowner) = 'app_auth')::integer as relations,
+              (select count(*)
+                 from pg_namespace where pg_get_userbyid(nspowner) = 'app_auth')::integer as schemas,
+              (select count(*)
+                 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                where pg_get_userbyid(p.proowner) = 'app_auth')::integer as functions`,
+    );
+    check(
+      "app_auth owns no relation, schema, or function",
+      authOwnership[0].relations === 0 &&
+        authOwnership[0].schemas === 0 &&
+        authOwnership[0].functions === 0,
+      JSON.stringify(authOwnership[0]),
+    );
+
+    // Same shape one level up. app_auth is the credential that exists before a
+    // tenant does; ADR-004 keeps it at zero table privileges until S4 grants the
+    // identity columns, so the expected set is empty today.
+    const { rows: authTablePrivileges } = await owner.query(
+      `select coalesce(
+                array_agg(c.relname || ':' || p.priv::text order by c.relname, p.priv::text),
+                '{}'
+              ) as held
+         from pg_class c
+         join pg_namespace n on n.oid = c.relnamespace
+         cross join (values ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')) as p(priv)
+        where n.nspname = 'app'
+          and c.relkind = 'r'
+          and has_table_privilege('app_auth', c.oid, p.priv)`,
+    );
+    check(
+      "app_auth holds no table privilege on any app table",
+      authTablePrivileges[0].held.length === 0,
+      JSON.stringify(authTablePrivileges[0].held),
+    );
+
+    // One aggregate rather than one assertion per column: in S3 the expected set is
+    // empty, so any privilege of any verb on any column of any app table is a defect.
+    const { rows: authColumnPrivileges } = await owner.query(
+      `select coalesce(
+                array_agg(c.relname || '.' || a.attname || ':' || p.priv order by c.relname, a.attname),
+                '{}'
+              ) as held
+         from pg_class c
+         join pg_namespace n on n.oid = c.relnamespace
+         join pg_attribute a on a.attrelid = c.oid
+         cross join (values ('SELECT'), ('INSERT'), ('UPDATE')) as p(priv)
+        where n.nspname = 'app'
+          and c.relkind = 'r'
+          and a.attnum > 0
+          and not a.attisdropped
+          and has_column_privilege('app_auth', a.attrelid, a.attnum, p.priv)`,
+    );
+    check(
+      "app_auth holds no column privilege on any app table",
+      authColumnPrivileges[0].held.length === 0,
+      JSON.stringify(authColumnPrivileges[0].held),
+    );
+
+    // S3 and S4 do not create the session table; asserting its absence here keeps a
+    // `42P01` from ever being recorded as a privilege denial. When S5 lands, S6 owns
+    // the session assertions and this check simply stops applying.
+    const { rows: sessionsRelation } = await owner.query(
+      "select to_regclass('app.sessions') as oid",
+    );
+    if (sessionsRelation[0].oid === null) check("app.sessions is absent before S5", true);
 
     // --------------------------------------------- default privileges declared
     const { rows: defaultAcl } = await owner.query(
@@ -233,8 +329,13 @@ export async function runPrivilegeVerification({
 
     // ------------------------------- bootstrap normalises a direct schema grant
     // Idempotency is a claim until a stray grant is planted and removed. The
-    // bootstrap is a cluster-admin action, so this check needs that credential;
-    // without it the assertion is reported as skipped, never as passed.
+    // bootstrap is a cluster-admin action, so this check needs that credential.
+    //
+    // A missing credential is a failure, not a skip: a verification run that
+    // silently omits idempotency still reports success, and the operator reads
+    // that as "the bootstrap normalises grants". `reBootstrap: false` remains the
+    // only way to opt out, and it is reserved for the probe-isolation test, which
+    // cannot re-run a bootstrap concurrently with itself.
     const canRebootstrap = development || (env["BOOTSTRAP_DATABASE_URL"] ?? "") !== "";
     if (!reBootstrap) {
       skip(
@@ -242,9 +343,11 @@ export async function runPrivilegeVerification({
         "re-bootstrap disabled for this run; concurrent bootstraps would contend on the same roles",
       );
     } else if (!canRebootstrap) {
-      skip(
+      check(
         "bootstrap removes a direct CREATE grant on app",
-        "BOOTSTRAP_DATABASE_URL is unset outside development; cluster-admin re-bootstrap unavailable",
+        false,
+        "BOOTSTRAP_DATABASE_URL is unset and NODE_ENV is not development; set the cluster-admin " +
+          "credential, or the bootstrap idempotency assertion cannot be made",
       );
     } else {
       await owner.query("grant create on schema app to app_api");
@@ -296,7 +399,7 @@ export async function runPrivilegeVerification({
       probeOwner[0]?.owner_name,
     );
 
-    for (const role of ["app_api", "app_system"]) {
+    for (const role of ["app_api", "app_system", "app_auth"]) {
       const { rows } = await owner.query(
         `select has_table_privilege($1, $2, 'SELECT') as can_select,
                 has_table_privilege($1, $2, 'INSERT') as can_insert,
@@ -424,6 +527,42 @@ export async function runPrivilegeVerification({
       "app_system cannot execute an ungranted function",
       `select ${child(probes.fn)}()`,
     );
+
+    // ---------------------------------------------------------- app_auth: deny
+    // This credential is the one ADR-004 says must not be trusted as a second
+    // boundary. Its bounds are asserted behaviourally rather than inferred from
+    // an empty ACL: `app.users` exists, so a denial here is 42501 and not a
+    // missing relation.
+    await denied(auth, "app_auth cannot SELECT app.users", "select * from app.users");
+    await denied(
+      auth,
+      "app_auth cannot SELECT an ungranted table",
+      `select * from ${child(probes.table)}`,
+    );
+    await denied(
+      auth,
+      "app_auth cannot INSERT into an ungranted table",
+      `insert into ${child(probes.table)} values (4, 'x')`,
+    );
+    await denied(
+      auth,
+      "app_auth cannot create a table in app",
+      "create table app.should_not_exist (id int)",
+    );
+    await denied(
+      auth,
+      "app_auth cannot write the migration ledger",
+      "delete from app._prisma_migrations",
+    );
+    await denied(
+      auth,
+      "app_auth cannot execute an ungranted function",
+      `select ${child(probes.fn)}()`,
+    );
+    for (const target of ["migration_owner", "app_api", "app_system"]) {
+      await denied(auth, `app_auth cannot set role to ${target}`, `set role ${target}`);
+    }
+    await allowed(auth, "app_auth can resolve names in app", "select to_regclass('app.users')");
 
     // ------------------------------------------------------- column-level grants
     // The mechanism behind the later `SELECT geom FROM fields` denial: a role

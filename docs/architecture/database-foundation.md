@@ -198,17 +198,19 @@ Consequences, stated so nobody assumes otherwise:
 
 ### Privileged migration connection
 
-Schema DDL must not run as either runtime role. `app_api` is subject to RLS and
-holds tenant-scoped privileges; `app_system` is `BYPASSRLS` for system jobs.
-Neither may own tables and neither may `CREATE`. Migration execution connects as
-`migration_owner`, and that connection is not reachable by the API or the worker.
+Schema DDL must not run as any runtime role. `app_api` is subject to RLS and
+holds tenant-scoped privileges; `app_system` is `BYPASSRLS` for system jobs;
+`app_auth` reads credentials outside a tenant context. None of them may own tables
+and none may `CREATE`. Migration execution connects as `migration_owner`, and that
+connection is not reachable by the API or the worker.
 
 See [Role and privilege boundary](#role-and-privilege-boundary-phase-222).
 
 ## Role and privilege boundary (Phase 2.2.2)
 
-Three roles, one schema. `bootstrap/roles.sql` creates them; it is executed by
-`scripts/bootstrap.mjs` as a **cluster admin**, not as a migration.
+Four roles, one schema. Three came with Phase 2.2.2; `app_auth` came with S3.
+`bootstrap/roles.sql` creates them all; it is executed by `scripts/bootstrap.mjs`
+as a **cluster admin**, not as a migration.
 
 That split is deliberate. `CREATE ROLE` is a cluster privilege. If migrations
 could create roles, a compromised migration connection would be a compromised
@@ -219,8 +221,14 @@ cluster, so role creation lives outside the migration path entirely.
 | `migration_owner` | provisioned    | `NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS` | `app`     |
 | `app_api`         | provisioned    | `NOBYPASSRLS`                                     | nothing   |
 | `app_system`      | provisioned    | `BYPASSRLS`                                       | nothing   |
+| `app_auth`        | provisioned    | `NOBYPASSRLS`                                     | nothing   |
 
-All three carry `NOINHERIT`: no role is a member of another, so there is no
+`app_auth` gets `USAGE` on `app` and nothing else: no table privilege, no column
+privilege, no ownership. Its purpose is to reach credentials before a tenant
+context exists, and ADR-004 is explicit that the RLS boundary must not be the
+thing that contains it.
+
+All four carry `NOINHERIT`: no role is a member of another, so there is no
 privilege path to walk and no `SET ROLE` escalation to audit.
 
 ### No credentials in the repository
@@ -241,9 +249,10 @@ gets logged.
 `migration_owner`, which also puts the Prisma ledger out of reach of the
 extension-installed objects.
 
-`CREATE` on `public` is revoked from `PUBLIC`; both runtime roles get `USAGE`
-only, enough to resolve PostGIS types and functions, not enough to create
-anything.
+`CREATE` on `public` is revoked from `PUBLIC`; `app_api` and `app_system` get
+`USAGE` only, enough to resolve PostGIS types and functions, not enough to create
+anything. `app_auth` is not granted `USAGE` on `public` at all: it reads identity
+columns and needs no extension object to do it.
 
 On a development volume created before this phase the ledger sat in `public`,
 owned by the cluster admin. The bootstrap moves it to `app` and reassigns
@@ -336,12 +345,18 @@ rather than the looser pattern.
 `db:verify` plants `GRANT CREATE ON SCHEMA app TO app_api`, re-runs
 `bootstrap.mjs` as the cluster admin, and then asserts the grant is gone and
 `USAGE` remains. Bootstrap normalises with `REVOKE ALL ON SCHEMA app FROM
-app_api, app_system` before granting `USAGE`, so repeated runs converge instead
-of accumulating whatever an older bootstrap version left behind.
+app_api, app_system, app_auth` before granting `USAGE`, so repeated runs converge
+instead of accumulating whatever an older bootstrap version left behind.
 
 Without cluster-admin credentials — `BOOTSTRAP_DATABASE_URL` unset outside
-development — the check prints `SKIP` with the reason and is excluded from the
-pass count. A skipped assertion is never reported as a pass.
+development — the check **fails** and names the missing variable. It is not a
+skip: a run that silently omits idempotency still prints "all checks passed", and
+an operator reads that as a verified bootstrap. The only opt-out is
+`reBootstrap: false`, which the probe-isolation test needs because a re-bootstrap
+would contend with itself.
+
+The same rule applies to the role credentials: a missing `*_PASSWORD` fails the
+run with the variable name, never a value, rather than quietly reducing coverage.
 
 `public` is owned by `pg_database_owner`, so only a cluster admin can normalise
 direct grants on it; `REVOKE CREATE ON SCHEMA public` for the runtime roles is

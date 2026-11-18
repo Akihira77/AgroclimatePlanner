@@ -8,6 +8,7 @@
   "roles": {
     "migration_owner": "migration-owner-dev",
     "app_api": "app-api-dev",
-    "app_system": "app-system-dev"
+    "app_system": "app-system-dev",
+    "app_auth": "app_auth_dev"
   }
 }

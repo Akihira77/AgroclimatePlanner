@@ -27,9 +27,17 @@ const ROLE_CONNECTIONS = {
   migration_owner: { url: "MIGRATION_DATABASE_URL", password: "MIGRATION_OWNER_PASSWORD" },
   app_api: { url: "APP_API_DATABASE_URL", password: "APP_API_PASSWORD" },
   app_system: { url: "APP_SYSTEM_DATABASE_URL", password: "APP_SYSTEM_PASSWORD" },
+  app_auth: { url: "APP_AUTH_DATABASE_URL", password: "APP_AUTH_PASSWORD" },
 };
 
 export const ROLE_NAMES = Object.keys(ROLE_CONNECTIONS);
+
+/** Environment variables that carry a role's URL and password, for error messages. */
+export function credentialVariables(role) {
+  const names = ROLE_CONNECTIONS[role];
+  if (names === undefined) throw new Error(`unknown role ${role}`);
+  return names;
+}
 
 function required(name, fallback) {
   const provided = env[name];
