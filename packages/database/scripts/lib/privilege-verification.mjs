@@ -155,6 +155,117 @@ export function checkAuthUserColumnGrants(check, held) {
 }
 
 /**
+ * The tenant predicate, in the form `pg_policies` returns it on PostgreSQL 18.6.
+ * Quoted from `20261118020000_tenant_tables/migration.sql` and normalised by the
+ * catalogue — `current_setting('app.user_id', true)` acquires its casts once it is
+ * stored as an expression. Comparing against the migration text would fail on
+ * whitespace that PostgreSQL never preserves.
+ */
+const TENANT_SELF_PREDICATE =
+  "(id = (NULLIF(current_setting('app.user_id'::text, true), ''::text))::uuid)";
+
+/**
+ * The complete policy inventory of `app.users`, not just the two S4 adds.
+ *
+ * A policy is four independent properties — command, roles, `USING`, `WITH CHECK` —
+ * and three of them can be widened without any name changing. Asserting the names
+ * would have passed a `users_self_only` rewritten to `USING (true)`, which is the
+ * single most dangerous edit that table allows.
+ *
+ * Roles arrive from `pg_policies.roles` as `name[]`; a plain `roles === "{public}"`
+ * test misses `{app_auth,public}`, so the check parses the array.
+ */
+export function checkUsersPolicyInventory(check, policies) {
+  const expected = [
+    {
+      name: "users_auth_lookup",
+      cmd: "SELECT",
+      roles: ["app_auth"],
+      qual: "true",
+      withCheck: null,
+    },
+    {
+      name: "users_auth_register",
+      cmd: "INSERT",
+      roles: ["app_auth"],
+      qual: null,
+      withCheck: "true",
+    },
+    {
+      name: "users_owner_full_access",
+      cmd: "ALL",
+      roles: ["migration_owner"],
+      qual: "true",
+      withCheck: "true",
+    },
+    {
+      name: "users_self_only",
+      cmd: "ALL",
+      roles: ["app_api"],
+      qual: TENANT_SELF_PREDICATE,
+      withCheck: TENANT_SELF_PREDICATE,
+    },
+  ];
+
+  const rolesOf = (policy) => {
+    const roles = policy?.roles;
+    if (Array.isArray(roles)) return roles.map(String);
+    if (typeof roles === "string") {
+      return roles
+        .replace(/^\{|\}$/g, "")
+        .split(",")
+        .map((role) => role.trim().replace(/^"|"$/g, ""))
+        .filter(Boolean);
+    }
+    return [];
+  };
+
+  const actual = Array.isArray(policies) ? policies : [];
+  const actualNames = actual.map((policy) => policy.policyname).sort();
+  const expectedNames = expected.map((policy) => policy.name).sort();
+
+  check(
+    "app.users carries exactly the four expected policies",
+    actualNames.length === expectedNames.length &&
+      actualNames.every((name, index) => name === expectedNames[index]),
+    JSON.stringify(actualNames),
+  );
+
+  for (const wanted of expected) {
+    const found = actual.find((policy) => policy.policyname === wanted.name);
+    const roles = rolesOf(found).sort();
+    const wantedRoles = [...wanted.roles].sort();
+
+    check(
+      `${wanted.name} has its recorded command, roles, USING and WITH CHECK`,
+      found !== undefined &&
+        found.cmd === wanted.cmd &&
+        found.permissive === "PERMISSIVE" &&
+        roles.length === wantedRoles.length &&
+        roles.every((role, index) => role === wantedRoles[index]) &&
+        (found.qual ?? null) === wanted.qual &&
+        (found.with_check ?? null) === wanted.withCheck,
+      JSON.stringify(found ?? null),
+    );
+  }
+
+  // `PUBLIC` is a role name like any other to the catalogue; a policy naming it
+  // applies to every role that has the command, which would make the column grant
+  // the only thing left. Both spellings occur depending on who wrote the SQL.
+  check(
+    "no policy on app.users names PUBLIC",
+    !actual.some((policy) => rolesOf(policy).some((role) => role.toLowerCase() === "public")),
+    JSON.stringify(actual.map((policy) => `${policy.policyname}:${rolesOf(policy).join(",")}`)),
+  );
+
+  check(
+    "app_auth holds no FOR ALL policy on app.users",
+    !actual.some((policy) => policy.cmd === "ALL" && rolesOf(policy).includes("app_auth")),
+    JSON.stringify(actual.filter((policy) => policy.cmd === "ALL").map((p) => p.policyname)),
+  );
+}
+
+/**
  * The session table belongs to S5. Checking that it is absent is not a formality:
  * a table created early would make the later migration a no-op and leave the
  * sessions of this phase half-built.
@@ -453,53 +564,15 @@ export async function runPrivilegeVerification({
       usersRls[0]?.owner_name,
     );
 
+    // The full policy contract, not four name lookups: the catalogue query and the
+    // comparison are separated so the comparison can be unit-tested without a
+    // database, and so a policy that was rewritten rather than removed cannot pass.
     const { rows: userPolicies } = await owner.query(
-      `select policyname, cmd, roles::text as roles, qual, with_check
+      `select policyname, cmd, permissive, roles::text[] as roles, qual, with_check
          from pg_policies
         where schemaname = 'app' and tablename = 'users'`,
     );
-    const userPolicy = (name) => userPolicies.find((policy) => policy.policyname === name);
-
-    check(
-      "users_auth_lookup is FOR SELECT TO app_auth USING (true)",
-      userPolicy("users_auth_lookup")?.cmd === "SELECT" &&
-        userPolicy("users_auth_lookup")?.roles === "{app_auth}" &&
-        userPolicy("users_auth_lookup")?.qual === "true",
-      JSON.stringify(userPolicy("users_auth_lookup") ?? null),
-    );
-    check(
-      "users_auth_register is FOR INSERT TO app_auth WITH CHECK (true)",
-      userPolicy("users_auth_register")?.cmd === "INSERT" &&
-        userPolicy("users_auth_register")?.roles === "{app_auth}" &&
-        userPolicy("users_auth_register")?.with_check === "true",
-      JSON.stringify(userPolicy("users_auth_register") ?? null),
-    );
-    // S4 adds two policies and rewrites none. The tenant policy is quoted here
-    // because a rewrite would look like a working login and a broken isolation.
-    check(
-      "users_self_only is still FOR ALL TO app_api keyed on app.user_id",
-      userPolicy("users_self_only")?.cmd === "ALL" &&
-        userPolicy("users_self_only")?.roles === "{app_api}" &&
-        userPolicy("users_self_only")?.qual?.includes("app.user_id") === true &&
-        userPolicy("users_self_only")?.with_check?.includes("app.user_id") === true,
-      JSON.stringify(userPolicy("users_self_only") ?? null),
-    );
-    check(
-      "users_owner_full_access is still FOR ALL TO migration_owner",
-      userPolicy("users_owner_full_access")?.cmd === "ALL" &&
-        userPolicy("users_owner_full_access")?.roles === "{migration_owner}",
-      JSON.stringify(userPolicy("users_owner_full_access") ?? null),
-    );
-    check(
-      "no authentication policy is FOR ALL, and none names PUBLIC",
-      !userPolicies.some(
-        (policy) =>
-          policy.roles === "{public}" || (policy.roles === "{app_auth}" && policy.cmd === "ALL"),
-      ),
-      JSON.stringify(
-        userPolicies.map((policy) => `${policy.policyname}:${policy.cmd}:${policy.roles}`),
-      ),
-    );
+    checkUsersPolicyInventory(check, userPolicies);
 
     // Behavioural half. The row is inserted by app_auth — which is the
     // registration probe — and removed by migration_owner, because app_auth has
