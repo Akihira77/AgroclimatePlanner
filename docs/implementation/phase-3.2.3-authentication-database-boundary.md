@@ -273,8 +273,8 @@ Three artefacts, three different meanings, and none of them substitutes for anot
 | Artefact | Meaning | State |
 |---|---|---|
 | `phase-3.2-owner-decisions.md` §1.10, §2.10 | the owner **approved** `AG-1`/`AG-2` on 2026-11-18 | approved |
-| `ADR-004`, `ADR-005` | the durable formal record of those approvals | **Proposed** — awaiting owner acceptance |
-| this plan | how the approved architecture becomes schema and evidence | plan only |
+| `ADR-004`, `ADR-005` | the durable formal record of those approvals | `ADR-004` **Accepted** 2026-11-18; `ADR-005` **Proposed** |
+| this plan | how the approved architecture becomes schema and evidence | `S3`/`S4` implemented; the rest is still plan |
 
 Approval is not acceptance of a document, and neither is implementation. Nothing here
 asks the owner to decide `AG-1`/`AG-2` a second time; the open question is whether each
@@ -508,7 +508,7 @@ additive, 4 statements plus comments. No `ALTER TABLE`, no column change, no rew
 no data.
 
 ```sql
--- PROPOSED — NOT APPLIED
+-- APPLIED 2026-11-18 by `20261118040000_auth_boundary` (S4).
 GRANT SELECT (id, email, password_hash, role, locale, timezone) ON app.users TO app_auth;
 GRANT INSERT (email, password_hash)                                ON app.users TO app_auth;
 
@@ -517,6 +517,14 @@ CREATE POLICY users_auth_lookup ON app.users
 CREATE POLICY users_auth_register ON app.users
   FOR INSERT TO app_auth WITH CHECK (true);
 ```
+
+**Implementation status (S4, 2026-11-18, uncommitted).** The migration exists and is
+applied in an isolated verification project, not the canonical database. `db:verify`
+reports 417 PASS / 0 FAIL / 0 SKIP there; the new assertions are quoted in §8.2 and the
+behavioural half registers a real `app_auth` row, reads it back with no `app.user_id`
+set, and gets `42501` for `created_at`, `updated_at`, `SELECT *`, six unapproved INSERT
+columns, `UPDATE`, and `DELETE`. `app_api` and `app_system` are unchanged and still hold
+no privilege on `app.users`. No commit, no push.
 
 `FOR SELECT`/`FOR INSERT` and not `FOR ALL`: one policy per capability is what makes
 the grant dump readable, and `FOR ALL` would document a capability the grants do not
@@ -933,6 +941,28 @@ Additions to `privilege-verification.mjs`:
 
 Every denial is accepted only at `42501`; `23503` and `23514` are asserted separately,
 where a foreign key or a CHECK is the actual mechanism, and never counted as denials.
+
+**Implemented at S4 (2026-11-18), and where it diverges from the rows above.** The
+`users` half of this table is in `db:verify` now; the `sessions` and function rows stay
+unimplemented until S5. Four concrete choices:
+
+- The grant is asserted as an **exact set** (`checkAuthUserColumnGrants`), not as a
+  floor: a seventh readable column fails even though it satisfies "the six are
+  readable". The same function is unit-tested without a database in
+  `packages/database/test/unit/privilege-verification.test.mjs` — six cases, including
+  a duplicate that pads the set to the right length and a missing row that must be a
+  failure rather than silence.
+- The pre-S4 aggregate `app_auth holds no column privilege on any app table` became
+  `…on any app table other than users`, and `app.users` is asserted exactly instead.
+  Leaving the aggregate inclusive would have tolerated the six approved columns by
+  arithmetic.
+- The behavioural half lives inside `db:verify`, not in `test/rls/auth-boundary.test.mjs`:
+  it inserts one row as `app_auth` (which *is* the registration probe), reads it back
+  with no `app.user_id`, and removes it as `migration_owner` because `app_auth` has no
+  `DELETE`. The standalone suite in §8.3 remains S6's deliverable, so this must not be
+  counted as having been written.
+- `app_api`/`app_system` are asserted with both `has_table_privilege` and
+  `has_column_privilege`; the first alone would miss a column grant added by mistake.
 
 ### 8.3 New suite `test/rls/auth-boundary.test.mjs` (`node:test`, real roles)
 

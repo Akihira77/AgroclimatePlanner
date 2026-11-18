@@ -223,10 +223,12 @@ cluster, so role creation lives outside the migration path entirely.
 | `app_system`      | provisioned    | `BYPASSRLS`                                       | nothing   |
 | `app_auth`        | provisioned    | `NOBYPASSRLS`                                     | nothing   |
 
-`app_auth` gets `USAGE` on `app` and nothing else: no table privilege, no column
-privilege, no ownership. Its purpose is to reach credentials before a tenant
-context exists, and ADR-004 is explicit that the RLS boundary must not be the
-thing that contains it.
+`app_auth` gets `USAGE` on `app` and, after S4, a column grant on exactly one table:
+`SELECT (id, email, password_hash, role, locale, timezone)` and `INSERT (email,
+password_hash)` on `app.users`. No ownership, no `UPDATE`, no `DELETE`, no table-wide
+privilege anywhere. Its purpose is to reach credentials before a tenant context
+exists, and ADR-004 is explicit that the RLS boundary must not be the thing that
+contains it.
 
 All four carry `NOINHERIT`: no role is a member of another, so there is no
 privilege path to walk and no `SET ROLE` escalation to audit.
@@ -268,8 +270,9 @@ actually read in `public` is what the PostGIS installer granted to `PUBLIC`:
 `geography_columns` views. Those are EPSG metadata and catalog views — no tenant
 data, nothing this project grants, and outside the `app` schema that holds
 everything else. `db:verify` asserts the part that matters in aggregate:
-`app_auth` owns nothing and holds no table or column privilege on any table in
-`app`.
+`app_auth` owns nothing, holds no table privilege in `app`, and holds no column
+privilege outside `app.users` — where the six `SELECT` and two `INSERT` columns of
+S4 are asserted as an exact set.
 
 On a development volume created before this phase the ledger sat in `public`,
 owned by the cluster admin. The bootstrap moves it to `app` and reassigns
@@ -277,9 +280,10 @@ ownership once; subsequent runs find it already there.
 
 ### Default deny
 
-Nothing is granted to either runtime role by default. Both get `USAGE` on `app`
+Nothing is granted to a runtime role by default. All three get `USAGE` on `app`
 and nothing else: no table, sequence, or function privilege, on any object, until
-a migration grants it explicitly.
+a migration grants it explicitly — which is how `app_auth` acquired its two column
+grants on `app.users` and why they are absent from `bootstrap/roles.sql`.
 
 Default privileges are declared for `migration_owner`, the only role that creates
 application objects:

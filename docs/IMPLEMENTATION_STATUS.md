@@ -453,8 +453,8 @@ approvals, one amendment `IG-5-A1`, one later gate `IG-12`).
 |---|---|---|---|
 | S1 — contracts | **implemented** | `c44cf5b`, `0bb9792`, `c762171`, `38486fd`, `75607d8` | response and error envelopes, `errorCodeSchema` with the branded `NotFoundErrorCode`, `requestIdSchema`, and `validationDetailsSchema` — bounded details at `c762171`, the encoded path grammar enforced in the contract at `38486fd`, canonical numeric segments at `75607d8` |
 | S2 — API plumbing | **implemented and remediated** | `ad6235b`, `6d36741`, `c762171`, `38486fd`, `75607d8` | `/v1` prefix, request-id middleware, exception filter, `ZodValidationPipe` bound per parameter, `cookie-parser`, helmet, explicit CORS allowlist, explicit trust proxy, database client + lifecycle, `/health` and `/health/ready` |
-| S3 — `app_auth` bootstrap | not started | — | — |
-| S4 — `auth_boundary` migration | not started | — | — |
+| S3 — `app_auth` bootstrap | **implemented** | `70a614f`, `d9d774e`, `f5e4d1c`, `a4f1fa0` | fourth role with zero memberships and no `BYPASSRLS`; `APP_AUTH_DATABASE_URL` parsed and role-validated at boot (dev default, production must state it); non-global `AuthDatabaseModule` + `AuthDatabaseLifecycle`, proven by module-assembly tests, not yet imported by `AppModule`; `db:verify` 387 assertions |
+| S4 — `auth_boundary` migration | **implemented, uncommitted** | — | `20261118040000_auth_boundary`: two column grants and two policies on `app.users`; `db:verify` 417 assertions, 0 FAIL, 0 SKIP in an isolated project |
 | S5 — `sessions` migration | not started | — | — |
 | S6 — privilege verification | not started | — | — |
 | S7 — register + login | blocked | — | needs `IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10` |
@@ -500,3 +500,53 @@ exercised by unit, contract-boundary, and filter-level tests rather than by a li
 route. **No Prisma-adapter integration test was run** — the credential lives in
 `.env`, which this work does not read — and **no live HTTP route test exists**,
 because no route takes input yet.
+
+### Phase 3.2.3 — S3 and S4 outcome
+
+**S3** added the fourth role and the second credential; **S4** gave it the only table
+it may reach. Both are `app.users`-shaped work: no session, no endpoint, no guard.
+
+| Item | State |
+|---|---|
+| `bootstrap/roles.sql` | `app_auth` in the role array: `LOGIN`, `NOINHERIT`, `NOBYPASSRLS`, zero memberships, `USAGE` on `app`, no `CREATE` |
+| `apps/api/src/config/runtime-config.ts` | `authDatabaseUrl` derived in development (`APP_AUTH_PASSWORD ?? "app_auth_dev"`), required verbatim in production; parsed as a URL; `assertAuthRole` refuses the other three roles |
+| `apps/api/src/database/auth-database.module.ts` | non-global module + lifecycle; no pool opened at boot; **not imported by `AppModule`** until S7 |
+| `20261118040000_auth_boundary` | `GRANT SELECT (id, email, password_hash, role, locale, timezone)`, `GRANT INSERT (email, password_hash)`, `users_auth_lookup FOR SELECT USING (true)`, `users_auth_register FOR INSERT WITH CHECK (true)` — nothing else |
+
+Verification, executed in an isolated Compose project
+(`agroclimate-s4-check`, container `agroclimate-db-s4-check`, port **5543**, own
+volume), from zero: `db:up` → `db:bootstrap` → `db:migrate` (four migrations in
+order) → `db:verify`.
+
+| Check | Result |
+|---|---|
+| `db:verify` | **417 PASS, 0 FAIL, 0 SKIP**, exit 0 |
+| API tests | **87 passed**, 0 failing |
+| Database tests | **21 passed**, 0 failing (7 new, driving `checkAuthUserColumnGrants`) |
+| Workspace build / typecheck / lint | exit 0 |
+| Workspace test | exit 0 — API 87, database 21, contracts 6 files |
+| Prettier (`pnpm exec prettier --check .`) | exit 0 |
+| `git diff --check` | exit 0 |
+
+Behavioural evidence from `db:verify`, as the real `app_auth` credential with **no
+`app.user_id` set**: an `INSERT (email, password_hash) RETURNING id` succeeds and the
+row comes back with `role = 'owner'`, `locale = 'id'`, `timezone = 'Asia/Jakarta'`
+from column defaults; the six granted columns are readable; `created_at`,
+`updated_at`, `SELECT *`, six unapproved `INSERT` columns, `UPDATE`, and `DELETE` all
+fail with **`42501`** and nothing else. `app_api` and `app_system` hold no privilege
+on `app.users`, asserted with both `has_table_privilege` and `has_column_privilege`.
+
+What this does **not** mean:
+
+- **No authentication workflow exists.** No register, login, logout, `/me`, guard,
+  hashing, policy, rate limit, cookie, or CSRF.
+- **`OPEN-01` is not closed.** The capability is proven in an isolated project; the
+  register entry waits for the committed migration, the canonical database, and
+  S6's suite. ADR-004's own definition of done is not shorter than that.
+- **Enumeration is an accepted limitation, not a bug to fix later.** `USING (true)`
+  filters nothing; the column grant is the boundary. `db:verify` asserts
+  `select count(*)` succeeds so the exposure cannot be rediscovered as a surprise.
+- **`prisma.user.create()` / `update()` remain unusable** under this grant, by
+  design: their client-side defaults name `locale`/`timezone`/`role` and `@updatedAt`
+  names `updated_at`. Registration is the raw `INSERT … RETURNING id` above.
+- **S4 is not committed.** Working tree only, awaiting owner review.

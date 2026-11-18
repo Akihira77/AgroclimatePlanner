@@ -5,14 +5,15 @@
   `docs/review/phase-3.2-owner-decisions.md` §1.10. That approval is the decision; this
   document is its durable record, and acceptance of it is the owner's act, separate from
   the approval it records. Acceptance is a **documentation gate, not implementation**:
-  `S3`, `S4`, and `S6` are still pending, and `OPEN-01` stays unresolved until a
-  migration is applied and `db:verify` is green.
+  `S3` and `S4` are applied (2026-11-18), `S6` is still pending, and `OPEN-01` stays
+  unresolved until the owner applies the migration to the canonical database and
+  `db:verify` is green there.
 - Date: 2026-11-18 (decision date), recorded here 2026-11-18
 - Depends on: ADR-002 (D5, D7), ADR-003, `docs/data-model/ownership-and-rls.md`,
   `docs/review/phase-3.2-design-review.md` §3, §4, §5, §16
 - Supersedes: none
 - Implemented by: `docs/implementation/phase-3.2.3-authentication-database-boundary.md`
-  (steps S3, S4, S6) — **plan only, nothing applied**
+  (steps S3, S4, S6) — **S3 and S4 applied 2026-11-18; S6 pending**
 - Register entry: `OPEN-01` (P1, hard) — **still unresolved**, see §17
 
 ## Context
@@ -133,7 +134,7 @@ rewrite rather than something that happened by default.
 ## Column-level grants
 
 ```sql
--- Applied by migration `auth_boundary` (S4). NOT APPLIED.
+-- Applied by migration `20261118040000_auth_boundary` (S4) on 2026-11-18.
 GRANT SELECT (id, email, password_hash, role, locale, timezone) ON app.users TO app_auth;
 GRANT INSERT (email, password_hash)                                ON app.users TO app_auth;
 ```
@@ -155,7 +156,7 @@ Reasons, column by column:
 added, one per capability, so the grant dump and the policy dump agree:
 
 ```sql
--- Applied by migration `auth_boundary` (S4). NOT APPLIED.
+-- Applied by migration `20261118040000_auth_boundary` (S4) on 2026-11-18.
 CREATE POLICY users_auth_lookup   ON app.users FOR SELECT TO app_auth USING (true);
 CREATE POLICY users_auth_register ON app.users FOR INSERT TO app_auth WITH CHECK (true);
 ```
@@ -294,8 +295,8 @@ These are accepted, disclosed, and not mitigated by this ADR:
   normalisation, default privileges.
 - `packages/database/scripts/bootstrap.mjs`, `scripts/lib/connections.mjs`,
   `database.defaults.json` — provisioning and connection resolution.
-- `packages/database/prisma/migrations/20261118040000_auth_boundary/` — the grants and
-  policies above (to be created).
+- `packages/database/prisma/migrations/20261118040000_auth_boundary/migration.sql` — the
+  four statements above, applied 2026-11-18.
 - `apps/api/src/config/runtime-config.ts`, `src/tokens.ts`,
   `src/database/auth-database.module.ts` — the second DSN, token, and module.
 - `packages/database/scripts/lib/privilege-verification.mjs`,

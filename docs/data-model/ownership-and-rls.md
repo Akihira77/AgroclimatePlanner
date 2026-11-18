@@ -9,15 +9,21 @@ carry `ENABLE` + `FORCE ROW LEVEL SECURITY` with a `FOR ALL TO app_api` policy a
 a `*_owner_full_access` policy for `migration_owner`. The twelve global/reference
 tables have no RLS because they have no tenant ownership column to filter on.
 Runtime grants and privilege boundaries are applied and verified — `db:verify`
-(355 assertions), the tenant-isolation suite (39 tests, as the real `app_api` role
-through `withTenant`), and the schema-conformance suite (12 tests).
+(417 assertions on PostgreSQL 18.6 after S4), the tenant-isolation suite (39 tests,
+as the real `app_api` role through `withTenant`), and the schema-conformance suite
+(12 tests). The authentication credential `app_auth` holds a column grant on
+`app.users` and two policies (`users_auth_lookup`, `users_auth_register`), applied by
+`prisma/migrations/20261118040000_auth_boundary/migration.sql`; `app_api` holds
+nothing there, before and after.
 
-Implementation is not the same as resolution. `OPEN-01` is still open: `app_api`
-holds no grant on `app.users`, so nothing can read the credential that would
-establish a tenant context in the first place. The trusted-tenant-context problem
-analysed in §5 is likewise still open, and RLS remains containment of forgotten
-filters, not a boundary against arbitrary SQL executed with a compromised
-`app_api` credential. Neither is solved here or anywhere else in the repository.
+Implementation is not the same as resolution. `OPEN-01` is still open in the
+register: the boundary that answers it now exists and is exercised by `db:verify` in
+an isolated project, but the Definition of Done also requires the migration to be
+committed and applied to the canonical database, and the standalone authentication
+suite is S6's. The trusted-tenant-context problem analysed in §5 is likewise still
+open, and RLS remains containment of forgotten filters, not a boundary against
+arbitrary SQL executed with a compromised `app_api` credential. Neither is solved
+here or anywhere else in the repository.
 
 The policy text for `users`/`farms`/`fields` is quoted from
 `prisma/migrations/20261118020000_tenant_tables/migration.sql`; the remaining
@@ -34,10 +40,11 @@ zero memberships, no role granted to another:
 | `migration_owner` | no | **yes** — schema `app` and every object in it | applies migrations, seeds the catalog, runs fixtures |
 | `app_api` | no | no | the runtime request path; always inside `withTenant` |
 | `app_system` | **yes** | no | ingestion, aggregation, baseline building; never a tenant request |
+| `app_auth` | no | no | authentication only, before a tenant exists; column grant on `app.users` (§5) |
 
 `NOINHERIT` matters: a role with memberships could inherit a privilege it was
 never granted directly, and `BYPASSRLS` on `app_system` would then leak into
-`app_api` through a shared login. The three roles are separate connection
+`app_api` through a shared login. The four roles are separate connection
 strings (`scripts/lib/connections.mjs`) and none can `SET ROLE` to another.
 
 `BYPASSRLS` on `app_system` confers **no table privilege** — it only disables
@@ -74,6 +81,11 @@ grant. Measured in Phase 2.2.2.x: every operation `app_api` is refused,
 | 20 | `suitability_runs` | tenant-derived | FORCE | RW | none | RW |
 | 21 | `planting_windows` | tenant-derived | FORCE | RW | none | RW |
 | 22 | `ai_briefings` | tenant-derived | FORCE | RW | none | RW |
+
+`app_auth` has no column in this matrix on purpose: it is permitted exactly one
+table, `users`, and the reason it needs even that is §5. Every other table above is
+`none` for it, which `db:verify` asserts as one aggregate over all `app` tables
+rather than table by table.
 
 Rules encoded in the matrix:
 
@@ -190,23 +202,27 @@ individually would be undone by the next `GRANT` restatement.
 
 ## 5. `app.users` and the login lookup — `OPEN-01`
 
-The login path is the one read that happens **before** a tenant context exists,
-and it is the only place the model has no answer.
+The login path is the one read that happens **before** a tenant context exists. It
+was the only place the model had no answer; S4 supplied the database answer, and the
+application workflow is still unbuilt.
 
-What the current state actually means:
+What the state of `app.users` actually means after S4:
 
 | Fact | Consequence |
 |---|---|
-| `app_api` has no privilege on `app.users` | it cannot look up an email at all |
-| `users` has `FORCE ROW LEVEL SECURITY` | even with `SELECT`, a query without `app.user_id` returns zero rows |
-| `app.user_id` is set inside the transaction by `withTenant` | the transaction exists only after the user is known |
+| `app_api` has no privilege on `app.users` | the tenant credential still cannot look up an email — a deliberate omission, unchanged |
+| `app_auth` has `SELECT (id, email, password_hash, role, locale, timezone)` and `INSERT (email, password_hash)` | login and registration are possible before a tenant exists |
+| `app_auth` holds no `UPDATE`, no `DELETE`, and no table-wide privilege | credential rotation is not a database capability, and a row cannot be removed by the auth credential |
+| `users_auth_lookup USING (true)` / `users_auth_register WITH CHECK (true)` | no row filtering by design: the column grant is the boundary, and enumeration of emails and hashes is an accepted, disclosed limitation |
+| `users` has `FORCE ROW LEVEL SECURITY` | `migration_owner` is still policed; `app_auth` reads through its own named policy |
+| `app.user_id` is set inside the transaction by `withTenant` | unchanged — the authentication path never sets it, and does not need to |
 
-So "authenticate, then open a tenant scope" cannot be built from what exists.
-`app_system` cannot do it either: it has `BYPASSRLS` but no grant on `users`, and
+`app_system` cannot do this either: it has `BYPASSRLS` but no grant on `users`, and
 giving it one would put every password hash within reach of the ingestion
 credential.
 
-Three options, none implemented, none approved:
+Three options were weighed. `A` was approved as `AG-1` (ADR-004) and implemented at
+S4; `B` and `C` were rejected:
 
 | Option | Shape | Cost |
 |---|---|---|
@@ -214,14 +230,17 @@ Three options, none implemented, none approved:
 | **B. `SECURITY DEFINER` function** | `app.lookup_credentials(email text)` owned by `migration_owner`, `REVOKE EXECUTE FROM PUBLIC`, `GRANT EXECUTE TO app_api` | one function is a small attack surface and easy to review; but it is a privileged entry point on the credential table and must not be able to return anything but the one row asked for |
 | **C. Column-level grant + scoped policy** | `GRANT SELECT (id, email, password_hash, role) TO app_api` plus a policy that permits lookup when a *separate* authority GUC is set | two context variables with different trust levels; the most error-prone |
 
-Option A is the least clever and the one this document recommends. It is not
-decided here: it is a security decision with a new role in it, and the roles are
-established by a bootstrap script that a review has already approved once.
+Option A is the least clever and the one this document recommended. It is now the
+chosen boundary: `AG-1` approved by the owner on 2026-11-18, recorded in ADR-004,
+and applied as `20261118040000_auth_boundary`. Options B and C remain unimplemented
+and unapproved.
 
-Meanwhile the honest statement is: **authentication is not buildable against this
-schema as specified.** That is `OPEN-01` (**P1**, scope: the authentication slice
-only), and it is
-not worked around by loosening the `users` policy.
+The honest statement is: **authentication is buildable against this schema at the
+database layer, and is not built.** The register entry `OPEN-01` (**P1**, scope: the
+authentication slice only) closes when the migration is committed and applied to the
+canonical database with `db:verify` green, and S6's suite lands — not on the strength
+of an isolated run. It is never worked around by loosening the `users` policy or by
+giving `app_api` a grant.
 
 ## 6. The trust boundary on `app.user_id` — see ADR-003
 
@@ -262,7 +281,7 @@ because both are about a *partial* grant and a *policy exemption* rather than a
 binary allow/deny.
 
 **Where they run now.** 1, 2, 6, 7, 8, 9 and 10 are asserted by `db:verify`
-(355 assertions) and the tenant-isolation suite (39 tests, as `app_api` through
+(417 assertions after S4) and the tenant-isolation suite (39 tests, as `app_api` through
 `withTenant`). 10 is also probed behaviourally as the real role: the three-column
 `INSERT` succeeds with `served_lat` NULL and naming `served_lat` returns `42501`.
 Check 5 — moving a row's `user_id` — is **not** separately tested: the suite proves
