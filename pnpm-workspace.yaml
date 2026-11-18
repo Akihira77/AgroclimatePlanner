@@ -29,3 +29,9 @@ minimumReleaseAgeExclude:
   - "@turbo/windows-64@2.11.12"
   - "@turbo/windows-arm64@2.11.12"
   - turbo@2.11.12
+
+# pnpm 12 blocks dependency build scripts by default. The Prisma CLI and its
+# schema engine need theirs; nothing else in this workspace does.
+allowBuilds:
+  "@prisma/engines": true
+  prisma: true

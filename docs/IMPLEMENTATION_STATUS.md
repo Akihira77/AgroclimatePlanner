@@ -121,6 +121,8 @@ Phase 2 readiness: **yes, and no further architecture pass is warranted**. Remai
 | 2.0 monorepo + shared contracts | done | 3 deployables, 1 package, 42 files, commit `d4b4b89` |
 | 2.0.x contract corrections | done | calendar-valid dates, UTC-only instants, canonical `firstRefId`, commit `9c21576` |
 | 2.1 canonical JSON + SHA-256 | done, runtime-verified | `packages/contracts/src/canonical.ts`, `hash.ts`, golden vectors |
+| 2.1.x canonical serializer hardening | done, runtime-verified | explicit key order, dense arrays, plain objects, no accessor execution |
+| 2.2.1 PostgreSQL + PostGIS foundation | done, runtime-verified | `docker-compose.yml`, `packages/database`, `20261118000000_init_extensions` |
 
 ### Phase 2.1 outcome
 
@@ -137,4 +139,30 @@ Canonical JSON is one implementation with declared rules, and every artifact has
 
 Verification is **runtime for the contract layer** (125 tests including permutation, change-detection, dedupe-conflict, and known-answer vectors) and **absent for everything else** — no database, no queue, no provider adapter exists to verify.
 
-Next: PostgreSQL + PostGIS + role separation, or provider adapters. Nothing is persisted yet, so `inputSnapshotHash` currently has no consumer.
+### Phase 2.1.x outcome
+
+Three serializer defects were reproduced before being fixed, and a fourth was found by external review.
+
+| Defect | Evidence | Fix |
+|---|---|---|
+| Sorted keys were re-ordered on emit | `Object.keys({"10":…,"2":…})` returns `2, 10` | objects carried as an explicit sorted entry list |
+| Own `__proto__` was lost or mutated the prototype | `out["__proto__"] = v` invokes the setter | same entry list; nothing is assigned |
+| Sparse arrays emitted invalid JSON | `[,'x']` from `map()` + `join()` | every index read through `getOwnPropertyDescriptor` |
+| Array accessors were executed | `map()` calls the getter | descriptor check rejects, getter invocation count asserted `0` |
+
+Non-plain objects (`Date`, `Map`, `Set`, `RegExp`, class instances), accessor properties, and symbol keys now throw instead of serialising as `{}`. The reference payload hash `42e89699…` is unchanged, so supported input produces byte-identical output.
+
+### Phase 2.2.1 outcome — PostgreSQL + PostGIS foundation
+
+Runtime-verified against a live container: PostgreSQL 18.6, PostGIS 3.6.4, `uuidv7()` native, `ST_SRID` 4326, session time zone UTC, migration ledger applied, all reached through the Prisma 7 client.
+
+| Decision | Effect |
+|---|---|
+| PostgreSQL 18, so `uuidv7()` is native | no extension, no application generator, no hand-rolled PL/pgSQL; the migration aborts if `uuidv7()` is absent |
+| Migrations are hand-written SQL, applied with `migrate deploy` | `migrate dev` would diff against a shadow database that contains PostGIS's own `spatial_ref_sys` table — verified via `prisma db pull --print` |
+| Prisma 7 driver adapter (`@prisma/adapter-pg` over `pg`) | no bundled query engine; pool behaviour is `pg`'s, which 2.2.3 assertions will target |
+| No domain tables | Phase 3 owns them; nothing is persisted yet, so `inputSnapshotHash` still has no consumer |
+| Port 5442 | the host already runs unrelated PostgreSQL on 5432 and 5433 |
+| `prisma` pinned to 7.10.1 | npm's `latest` tag currently points at `8.0.0-rc.34` |
+
+Next: 2.2.2 database roles and privileges (`app_api`, `app_system`, explicit grants, default-deny), then 2.2.3 RLS with transaction-scoped `set_config`, then 2.2.4 security tests executed as the real roles.

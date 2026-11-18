@@ -12,6 +12,12 @@
     "lint": "turbo run lint",
     "test": "turbo run test",
     "dev": "turbo run dev",
+    "db:up": "docker compose up -d --wait db",
+    "db:down": "docker compose down",
+    "db:reset": "docker compose down -v && docker compose up -d --wait db && pnpm db:migrate",
+    "db:migrate": "pnpm --filter @agroclimate/database db:migrate",
+    "db:generate": "pnpm --filter @agroclimate/database db:generate",
+    "db:status": "pnpm --filter @agroclimate/database db:status",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },

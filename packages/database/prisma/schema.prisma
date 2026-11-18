@@ -1,0 +1,22 @@
+// Phase 2.2.1 — foundation only. No domain tables yet; Phase 3 owns those.
+//
+// Migrations are hand-written SQL, applied with `prisma migrate deploy`.
+// `prisma migrate dev` is deliberately not used: it replays history into a
+// shadow database and diffs the result against this file, and PostGIS alone
+// materialises hundreds of tables and functions in `public`. The diff would be
+// enormous, permanent drift, and every future model change would be blamed on
+// it. Roles, grants, and RLS policies (Phase 2.2.2+) are also SQL that a
+// schema-only diff cannot represent.
+//
+// The consequence, stated plainly: this file and prisma/migrations must be kept
+// consistent by hand. `pnpm --filter @agroclimate/database db:status` reports
+// applied-versus-pending; nothing diffs them for you.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
