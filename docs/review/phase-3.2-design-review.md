@@ -1,19 +1,52 @@
 # Phase 3.2 — Authentication & Tenant Identity: Design Review
 
-Status: **design review only.** Nothing in this document was applied. No code, no
-migration, no role, no grant, no policy, no configuration change exists because of
-it. Every SQL block is a proposal.
+Status: **design review, round 2 — decision preparation.** Documentation only.
+Nothing in this document was applied. No code, no migration, no role, no grant, no
+policy, no configuration change exists because of it. Every SQL block is labelled
+and unimplemented.
 
-Repository state reviewed: `master` at `5b9b959`, working tree clean except this
-file. Reviewed: the Phase 3.2 brief; `packages/database` (bootstrap, scripts,
-`src/tenant.ts`, migrations, tests); `packages/contracts`; `apps/api`;
-`prisma/schema.prisma`; `docs/architecture/{api-conventions,system-architecture,
-database-foundation,domain-model,background-processing}.md`;
-`docs/data-model/*`; `docs/adr/ADR-001..003`; `docker-compose.yml`.
+Repository state reviewed: `master` at `bf0e593`, reviewed again at round 2. Files
+inspected: the Phase 3.2 brief; `packages/database` (`bootstrap/roles.sql`,
+`bootstrap.mjs`, `scripts/lib/{connections,privilege-verification}.mjs`,
+`src/tenant.ts`, all three migrations, `test/{unit,rls,schema}`); `packages/contracts`;
+`apps/api`; `prisma/schema.prisma`; `docs/architecture/{api-conventions,
+system-architecture,database-foundation,domain-model,background-processing}.md`;
+`docs/data-model/{open-decisions,ownership-and-rls,entity-catalog,tables-identity,
+physical-model,indexes-and-query-patterns}.md`; `docs/adr/ADR-001..003`;
+`docker-compose.yml`; `pnpm-workspace.yaml`.
 
-**Verdict: READY AFTER DECISIONS.** Two blocking decisions and eight smaller ones
-are listed in §15. Nothing else in the brief is blocked; the remainder is
-mechanical once those land.
+**Verdict: READY FOR OWNER DECISIONS.** Two architecture gates — `OPEN-01` and
+`OPEN-13` — are specified in §§16-17 as decision sheets that can be approved or
+rejected as written. Eleven implementation gates are listed in §15 — the brief's ten
+plus `IG-11` — and none of them changes the database boundary. Only `IG-5` and
+`IG-11` gate the contract and plumbing tracks; the rest gate the endpoint that
+depends on them. None is decided here. Nothing else in the brief is blocked.
+
+### Correction of record (round 2)
+
+The round-2 brief cites `docs/adr/ADR-002-session-and-authentication.md`. That file
+does **not** exist. `docs/adr/` holds exactly three files, and the sessions decision
+lives in `ADR-002-monorepo-and-backend-architecture.md` (D5). No document was
+renamed or created to accommodate the citation; the review cites the real file.
+`[V]` `ls docs/adr/` → `ADR-001-weather-data-provider-strategy.md`,
+`ADR-002-monorepo-and-backend-architecture.md`,
+`ADR-003-trusted-tenant-context.md`.
+
+### Provenance legend
+
+Every material claim is tagged.
+
+| Tag | Means |
+|---|---|
+| `[V]` | verified in this repository by reading the cited file, or by executing the cited command in an earlier phase |
+| `[R]` | recommendation made by this review |
+| `[A]` | assumption, unmeasured — must not be treated as a completed control |
+
+Nothing in this document is `[V]` for runtime behaviour of code that does not
+exist. No `db:*` command, no `psql`, and no Redis connection was run in producing
+this review.
+
+---
 
 ### Provenance legend
 
@@ -50,6 +83,10 @@ this review.
 | F13 | Medium | `api-conventions.md` contradicts itself: `:41` mandates `403 FORBIDDEN` for "authenticated, not owner"; `:197` mandates 404 for the same case | `[V]` both lines |
 | F14 | Medium | `POST /v1/auth/register` is not in the conventions' endpoint list; `:150` lists login, logout, me | `[V]` `api-conventions.md:150` |
 | F15 | Low | `db:verify` asserts `users: { app_api: NONE, app_system: NONE }` by table privilege; a column grant reports `false` through `has_table_privilege` | `[V]` `privilege-verification.mjs:543-557`, column precedent at `:625-635` |
+| F16 | Medium | The round-2 brief cites `docs/adr/ADR-002-session-and-authentication.md`; no such file exists. The sessions decision is `ADR-002-monorepo-and-backend-architecture.md` D5 | `[V]` `ls docs/adr/` → three files, none named that |
+| F17 | Medium | No rate-limiting dependency exists anywhere (`@nestjs/throttler` absent from every manifest and from the lockfile), and `main.ts` never sets `trust proxy`, so behind Caddy `req.ip` is the proxy address | `[V]` `apps/api/package.json:6-26`, `grep` over `pnpm-lock.yaml`, `main.ts:6-11` |
+| F18 | Medium | `apps/api` has no test runner — its `test` script prints a string. The repository already carries two runners: `node:test` in `packages/database`, vitest in `packages/contracts` | `[V]` `apps/api/package.json:11`; `packages/contracts/package.json` `"test": "vitest run"`; `packages/database/package.json:28-30` |
+| F19 | Low | `app.user_id` is an ordinary GUC: **any** role can set it, `app_auth` included. No grant is implied by that, which is the only thing that keeps it harmless | `[V]` `ADR-003:19-24,104-115`; `ownership-and-rls.md` §6 |
 
 ### 1.1 Why the brief's own premises need correcting
 
@@ -160,6 +197,53 @@ for the wrong reason — either way the suite would be lying.
 
 ---
 
+### 3.4 Compromise blast radius — `app_auth`
+
+What a holder of the `app_auth` DSN can and cannot do. "Permitted" means PostgreSQL
+would allow it given the proposed grants and policies; "rejected" names the mechanism
+that stops it. Nothing here is implemented.
+
+#### Permitted
+
+| Operation | Mechanism | Impact |
+|---|---|---|
+| Bulk email enumeration | `SELECT (email, …)` + `USING (true)` | the whole account list, one query |
+| Bulk password-hash extraction | same | offline cracking of every hash; Argon2id parameters set the cost, so `IG-6` is a security parameter, not tuning |
+| Unauthorized credential lookup for one address | same | confirmation of membership for any address, at whatever rate the API allows |
+| Account creation bypassing the registration flow | `INSERT (email, password_hash)` + `WITH CHECK (true)` | a valid account with a known password, no rate limit, no email verification, no audit — the flow's controls are all in `apps/api`, and this credential does not go through it |
+| Session issuance for an arbitrary `user_id` | `INSERT` on `app.sessions` | **direct impersonation.** This is the most severe permitted operation, and it is why `app_api` must never hold the same grant |
+| Session revocation / un-revocation | `UPDATE (revoked_at)` | denial of service on any user; re-activating a revoked session |
+| Sliding-expiry extension of any session | `UPDATE (expires_at, last_seen_at)` | keeping an otherwise-expiring session alive indefinitely within the absolute window |
+| Read of session rows by `user_id` or `token_hash` | `SELECT` on `app.sessions` | token hashes and the user binding; hashes are not directly usable without a preimage |
+| `set_config('app.user_id', …)` | the GUC is application-defined; every role may set it | **no privilege follows from this**, because no tenant grant exists (§4.2). Recorded so that the absence of effect is not mistaken for a control |
+| Read of `pg_catalog` metadata | default `PUBLIC` access | table and column names; no data, no password hashes (`pg_authid` is superuser-only) |
+
+#### Rejected, and by what
+
+| Operation | Rejected by | SQLSTATE |
+|---|---|---|
+| `SELECT`/`INSERT`/`UPDATE`/`DELETE` on `farms`, `fields`, `field_outlook_cells`, `field_observations`, `plantings`, `harvests`, `suitability_runs`, `planting_windows`, `ai_briefings` | no grant | `42501` |
+| `SELECT` on catalog tables (`crops`, `cultivars`, …) | no grant | `42501` |
+| `SELECT` on the weather plane (`weather_records`, `forecast_runs`, …) | no grant | `42501` |
+| `UPDATE`/`DELETE` on `app.users` | no grant — `UPDATE`/`DELETE` are not in the matrix, deliberately | `42501` |
+| Change a user's `role` to `admin` | `role` is not in the `INSERT` grant and there is no `UPDATE` grant | `42501` |
+| Create a user with a chosen `id` or timestamps | those columns are not in the `INSERT` grant; defaults apply | `42501` |
+| `SET ROLE app_api` / `SET ROLE app_system` / `SET ROLE migration_owner` | `NOINHERIT` plus zero memberships in either direction, measured for the existing three roles | `42501` |
+| `CREATE TABLE` / `CREATE SCHEMA` / `ALTER` an existing object | no `CREATE` on schema `app`; not the owner | `42501` |
+| `CREATE ROLE` / `ALTER ROLE` | `NOCREATEROLE`, `NOSUPERUSER` | `42501` |
+| Read credentials belonging to another *deployment* | out of scope — same cluster | — |
+
+The three defences that actually bound this credential are, in order: **the grant
+list** (what objects), **`FORCE` RLS** (what rows, and it is what makes an accidental
+future grant return zero rows rather than everything), and **separate secrets**. The
+dedication of the role is not itself a defence; it is what makes the first two
+describable.
+
+Two consequences that are easy to miss: a compromise of `app_auth` **is** an account
+takeover path even if the credential table is never read, because it can mint a
+session for any `user_id`; and it can create accounts the application never saw,
+which no `app_api`-level check can detect.
+
 ## 4. RLS policy analysis for the authentication path
 
 Current state: `users_self_only FOR ALL TO app_api USING (id = …) WITH CHECK
@@ -222,37 +306,170 @@ is not available here. `[V]` (PostgreSQL 18.6 core feature set) + `[R]`
 
 ---
 
-## 5. Dedicated role vs `SECURITY DEFINER`
+### 4.3 Session table privileges and RLS — per role, per operation
 
-`ownership-and-rls.md` §5 records three options. Option C (column grant plus a
-second authority GUC) is **disqualified by an existing decision**, not by taste:
-`ADR-003` D3 says a second context variable "would need its own ADR, because two
-variables with different trust levels is how a boundary becomes a suggestion".
-`[V]`
+Proposed table, **not created**:
 
-| Criterion | A — `app_auth` role | B — `SECURITY DEFINER` function |
+```sql
+-- PROPOSED — NOT APPLIED
+CREATE TABLE app.sessions (
+  id                  uuid        PRIMARY KEY DEFAULT uuidv7(),
+  user_id             uuid        NOT NULL REFERENCES app.users (id),
+  token_hash          text        NOT NULL UNIQUE,
+  expires_at          timestamptz NOT NULL,
+  absolute_expires_at timestamptz NOT NULL,
+  revoked_at          timestamptz,
+  last_seen_at        timestamptz NOT NULL DEFAULT now(),
+  created_at          timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT sessions_expiry_order_check
+    CHECK (absolute_expires_at > expires_at AND expires_at > created_at)
+);
+
+ALTER TABLE app.sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app.sessions FORCE  ROW LEVEL SECURITY;
+
+CREATE POLICY sessions_auth_all ON app.sessions
+  FOR ALL TO app_auth USING (true) WITH CHECK (true);
+
+CREATE POLICY sessions_owner_full_access ON app.sessions
+  FOR ALL TO migration_owner USING (true) WITH CHECK (true);
+
+GRANT SELECT (id, user_id, token_hash, expires_at, absolute_expires_at,
+              revoked_at, last_seen_at, created_at) ON app.sessions TO app_auth;
+GRANT INSERT (user_id, token_hash, expires_at, absolute_expires_at) ON app.sessions TO app_auth;
+GRANT UPDATE (expires_at, last_seen_at, revoked_at) ON app.sessions TO app_auth;
+-- no DELETE grant to any runtime role
+```
+
+| Operation | `migration_owner` | `app_auth` | `app_api` | `app_system` | Mechanism |
+|---|---|---|---|---|---|
+| Create session | yes — owner policy | **yes** — column `INSERT` | **no** `42501` | **no** `42501` | grant |
+| Read by `token_hash` | yes | **yes** — column `SELECT` | no | no | grant + `USING (true)` |
+| Read by `user_id` | yes | **yes** | no | no | grant |
+| Extend sliding expiry | yes | **yes** — `UPDATE (expires_at, last_seen_at)` | no | no | column `UPDATE` |
+| Revoke one session | yes | **yes** — `UPDATE (revoked_at)` | no | no | column `UPDATE` |
+| Revoke all sessions for a user | yes | **yes** — same grant, `WHERE user_id = $1` | no | no | column `UPDATE` |
+| Delete expired rows (GC) | yes | **not granted** | no | **`EXECUTE` only** on one function | `SECURITY DEFINER` function, owned by `migration_owner`, `EXECUTE` to `app_system` alone |
+| `SELECT` any row without a tenant context | yes | **yes** — by design | no | no | `USING (true)` |
+
+Column-level `UPDATE` is the mechanism that satisfies requirement 6: an expiry
+extension cannot touch `user_id`, `token_hash`, or `created_at`, because those
+columns are not in the `UPDATE` grant. It does **not** distinguish "set `revoked_at`"
+from "clear `revoked_at`" — grants cannot express direction. Residual risk, stated:
+`app_auth` can un-revoke a session it previously revoked. A trigger or a separate
+revocation function could close that; neither is proposed here, and pretending the
+column grant does it would be false.
+
+GC without granting tenant-wide access (requirement 7): `app_system` receives no
+table privilege at all. It receives `EXECUTE` on
+
+```sql
+-- PROPOSED — NOT APPLIED
+CREATE FUNCTION app.purge_expired_sessions() RETURNS integer
+  LANGUAGE sql
+  SECURITY DEFINER
+  SET search_path = pg_catalog, app
+AS $$
+  DELETE FROM app.sessions WHERE absolute_expires_at < now() RETURNING 1
+$$;
+-- then: REVOKE ALL ON FUNCTION app.purge_expired_sessions() FROM PUBLIC;
+--       GRANT EXECUTE ON FUNCTION app.purge_expired_sessions() TO app_system;
+
+```
+
+This is the **only** place a `SECURITY DEFINER` object is proposed, and it touches
+no credentials and no tenant row. `ADR-003` A1 rejected a definer-based tenant
+validator on measurement grounds; that rejection does not transfer to a function
+whose surface is "delete rows nobody can use any more".
+
+`ENABLE` + `FORCE` on `sessions` mirrors `users`, for the reason `ownership-and-rls.md`
+§3 gives: if a future grant to `app_api` is added by mistake, the absence of a policy
+naming `app_api` returns zero rows instead of the table. Without `FORCE`, the owner
+would silently bypass the same policy.
+
+**Ownership class.** `entity-catalog.md` declares five classes (`identity`, `tenant`,
+`tenant-derived`, `reference`, `global`). A session row is not described by any of
+them cleanly: it belongs to a user but is read **before** identity is established, so
+`tenant` fails; it is not global provider data, not a catalog entry, not a computed
+artifact. Two candidates:
+
+| Option | Cost | Verdict |
 |---|---|---|
-| Fails visibly | yes: `42501` on any ungranted object | partly: one object; a wrong `search_path` fails **open**, not closed |
-| Reviewable surface | 2 policies + 2 column grants, comparable to the existing matrix | one function body, must pin `SET search_path` and qualify names |
-| Leaked-DSN blast radius | full `users` read | one row per call |
-| Effect on `app_api` | none | **grants `app_api` a credential read** — the tenant credential gains a capability it cannot lose |
-| Interaction with `FORCE` | policies apply; owner unaffected | function runs as owner, bypassing RLS by design — the point and the risk |
-| Migration cost | 2 policies, 2 grants, no table change | function + `REVOKE` + `GRANT`; rollback needs `DROP FUNCTION` |
-| Bootstrap cost | fourth role, fourth DSN, fourth secret | none |
-| Precedent in repo | column grant already used (`outlook_cells`) | none |
+| Widen `identity` from "the tenant itself; one row per account" to "the account and its authentication state" | one sentence in one document; no new concept | **recommended** — `users` already establishes that `identity`-class rows are read on the pre-identity path, so the class already carries the right precedent |
+| Add a sixth class `auth` | a new class whose membership is exactly one table; the vocabulary then has a category with no second member | not recommended |
 
-**Recommendation: A**, with B named as the tightening path. The property worth a
-fourth credential is that the credential sits entirely **outside** `app_api`; a
-function executed by `app_api` hands the tenant role a credential-read capability
-permanently. A's cost — bulk read by whoever holds the `app_auth` DSN — is real and
-belongs in the ADR as an accepted limitation, not mitigated with a predicate that
-cannot exist.
+## 5. Dedicated role vs `SECURITY DEFINER` — four alternatives
 
-**Upgrade path, if the threat model later forbids bulk read:** A + B together —
-the role exists, and its only privilege on `users` becomes `EXECUTE` on one
-function. Additive; does not invalidate A.
+Round 1 compared "role" against "function". That collapsed two different functions
+into one option and left the real question unpriced: **who is allowed to call the
+credential read?** The four shapes below are genuinely distinct.
 
----
+| | A — role + columns | B1 — definer, callable by `app_api` | B2 — definer, callable only by `app_auth` | C — separate identity context |
+|---|---|---|---|---|
+| **Shape** | `app_auth` reads `users` directly under column grants and its own policies | `app.lookup_credentials(email)` owned by `migration_owner`, `EXECUTE` to `app_api` | same function, owned by `migration_owner`, `EXECUTE` to `app_auth` only | a second GUC or signed attestation that a downstream role trusts |
+| **Credential exposure** | bulk: every email and hash in one query | one row per call, but **the tenant credential holds the capability** | one row per call; capability stays outside `app_api` | changes nothing — it attests *identity*, it does not read a credential |
+| **Session authority** | `app_auth` issues/revokes (§4.3) | unchanged; `app_api` still cannot touch sessions | unchanged | not addressed |
+| **DB privilege complexity** | 2 column grants + 2 policies on `users`; the shape `db:verify` already models | 1 function + 1 `REVOKE` + 1 `GRANT`, no policies on `users` | same as B1 plus the fourth role | plus a second trust level for one variable |
+| **RLS implications** | `USING (true)` on `users`, `FORCE` retained | policies untouched; the function bypasses RLS **as owner** | same | the whole point is to avoid RLS deciding identity — `ADR-003` D1/D3 territory |
+| **Function ownership** | n/a | `migration_owner` — non-login, `NOBYPASSRLS`, owns the schema; a definer function executes with **its** privileges | same | n/a |
+| **`search_path` safety** | n/a | must pin `SET search_path = pg_catalog, app` and schema-qualify every reference; without it a definer function is a privilege-escalation primitive | same | n/a |
+| **SQL injection impact** | parameterised queries only; a `$queryRawUnsafe` would be a credential dump | injection inside the function body would run as owner; the function must take no SQL text and build none | same | a forged context needs no injection at all |
+| **Operational complexity** | fourth DSN + fourth secret, same shape as the three that exist | no new secret; one more object to review | fourth DSN **and** a function | new attestation key and rotation |
+| **Bootstrap / secrets** | `roles.sql:12,22-24`, `bootstrap.mjs:30-34`, `connections.mjs:26-30` | none | same as A | new secret |
+| **Testing** | extend `db:verify` `EXPECTED` + column-privilege probes; new `auth-boundary` suite | function behaviour tests + `EXECUTE` deny for third roles | same as A **and** B1 | context-forgery tests, which is exactly what `ADR-003` measured as unenforceable |
+| **Migration / rollback** | additive grants + 2 policies; rollback = `DROP POLICY`, `REVOKE` | function + `REVOKE`; rollback needs `DROP FUNCTION` **and** any dependent grant | same | additive, but the trust change is behavioural |
+| **Effect on `app_api`** | none | **hands the tenant credential a credential read it can never lose** | none | none |
+
+### 5.1 `SECURITY DEFINER` specifics, evaluated
+
+- **Fixed `search_path`.** Mandatory, not optional. `SET search_path = pg_catalog,
+  app` plus fully-qualified names, or the function resolves `users` through whatever
+  the caller's path happens to be. `[R]`
+- **Restricted `EXECUTE`.** `REVOKE ALL … FROM PUBLIC` first — PostgreSQL grants
+  `EXECUTE` to `PUBLIC` on new functions by default, and the repository already
+  revokes that class of default for `migration_owner`'s functions
+  (`roles.sql:63-64`). `[V]`
+- **Ownership.** `migration_owner`, which is `NOLOGIN` at the SQL level and
+  `NOBYPASSRLS`; it is already the owner of every object in `app`. `[V]`
+- **Can callers supply arbitrary identifiers?** They supply an email, which *is* an
+  arbitrary identifier. The function cannot distinguish "the caller is allowed to
+  ask" from "the caller is enumerating".
+- **Does it expose the hash?** It must, because Argon2id verification runs in Node
+  (§4.2). Any design that keeps the hash inside Postgres is not available.
+- **Does it prevent enumeration?** No. One row per call is enumeration with extra
+  steps. Claiming otherwise would be the exact overclaim this review exists to avoid.
+- **New escalation path?** Only if `search_path` is unpinned or `EXECUTE` is left on
+  `PUBLIC`. With both pinned, the escalation surface is the function body.
+
+### 5.2 Option C — why it is not an alternative for `OPEN-01`
+
+C is not a credential-read mechanism. It is an *attestation* mechanism: it makes the
+database believe a tenant claim that some other component signed. It cannot answer
+"which row has this email", so it cannot resolve `OPEN-01` at all. It is `OPEN-28`
+material, and `ADR-003` D3 already requires its own ADR, because "two variables with
+different trust levels is how a boundary becomes a suggestion". A second custom GUC
+set by a privileged role does not help either: any role may set any GUC (`F19`) — the
+signature, not the variable, would be the control.
+
+### 5.3 Recommendation
+
+**A stays the provisional recommendation.** B1 is rejected: it moves the credential
+read into the tenant application's trust boundary permanently, which is the one
+property the fourth credential exists to prevent. B2 is the **tightening path** — if
+the accepted threat model later forbids bulk read, A is upgraded by removing its
+`SELECT` grant and replacing it with `EXECUTE` on one function; that change is
+additive and does not invalidate the role. C is deferred to `OPEN-28` and is not a
+solution to `OPEN-01`.
+
+```
+Recommendation: A  (provisional, pending owner approval)
+Tightening path: A + B2, if bulk read becomes unacceptable
+Rejected for OPEN-01: B1 (hands app_api the capability), C (wrong problem)
+```
+
+Residual risks that travel with A, to be written into ADR-004 rather than mitigated
+on paper: bulk credential read; account creation that bypasses application controls;
+session issuance for any user id; un-revocation.
 
 ## 6. Session storage: recommendation and threat model
 
@@ -292,7 +509,7 @@ posture, and the D5 amendment — and the failure policy in §6.3 is unchanged.
 | 3 | Token in a DB backup | store `sha256(token)` only; the raw token exists only in the cookie | a 256-bit random preimage is not brute-forceable — SHA-256 is correct here, and is **not** the password path |
 | 4 | Session fixation | rotate on login; never reuse a pre-auth id | — |
 | 5 | CSRF | double-submit token on non-GET + `SameSite=Lax` | `Lax` already blocks most; keep both, decide once |
-| 6 | Brute force, one account, many IPs | per-IP throttle does not cover it; Argon2id cost raises the price; generic errors | **no per-account control exists** — see decision 8 |
+| 6 | Brute force, one account, many IPs | per-IP throttle does not cover it; Argon2id cost raises the price; generic errors | **no per-account control exists** — see `IG-7` |
 | 7 | Account enumeration by response | identical status, code, and body; verify a dummy hash when the user is absent | timing still leaks if the dummy path is skipped |
 | 8 | Session store compromise (Redis option) | loopback bind, `requirepass`, TLS off-host, no `FLUSHALL` exposure | accepted, recorded |
 | 9 | Forged session by `app_api` credential holder | `app_api` holds **no** grant on `sessions` | a DB superuser is out of scope by definition |
@@ -325,39 +542,70 @@ Ordering is the security content. Each step names the transaction it runs in.
 1. Body parsed; `registerRequestSchema` rejects unknown keys (mass assignment). In
    the **auth context**; no tenant transaction is opened at any point.
 2. Email normalised: `trim()` then `toLowerCase()`. **Application invariant only** —
-   `users_email_key` is case-sensitive, so this is not enforced by the database (§15
-   decision 3).
+   `users_email_key` is case-sensitive, so this is not enforced by the database
+   (`IG-1`).
 3. Password policy applied against the *plaintext*, before hashing; length is
-   counted in bytes for the KDF input cap (`[R]`, decision 6/9).
+   counted in bytes for the KDF input cap (`[R]`; `IG-4` for the policy, `IG-6` for the
+   parameters).
 4. `argon2id` hash computed — parameters from config, never inlined twice.
 5. `INSERT INTO app.users (email, password_hash)` as `app_auth`, `ON CONFLICT
    (email) DO NOTHING` so a duplicate is a decision, not an exception path.
-6. Duplicate → `409` with code `CONFLICT` (discloses existence; see §10 and
-   decision 4).
+6. Duplicate → `409` with code `CONFLICT` (discloses existence; `IG-2` and §10).
 7. Session created and cookie set — or registration and login stay separate. **This
-   is a product decision** (§15 decision 5); the brief implies auto-login by
-   returning a "safe user representation" only, so the default is *no* session.
+   is a product decision** (`IG-3`). The brief returns only a safe user
+   representation, which implies no session; the default is therefore *no* session.
 8. Response contains `{ id, email, role, locale, timezone, createdAt }` and never
    `password_hash`, never the raw token.
 
 ### 7.2 Login — `POST /v1/auth/login`
 
-1. `loginRequestSchema` validated.
-2. Email normalised identically to registration (one shared function, not two
-   copies).
-3. `SELECT id, email, password_hash, role FROM app.users WHERE email = $1` as
-   `app_auth`. No `app.user_id` exists in this transaction, and a test asserts it.
-4. User absent → verify the password against a fixed dummy hash, then fail. Skipping
-   this step is what turns "wrong password" into an enumeration oracle by timing.
-5. User present → `argon2.verify`. Failure → the same `401` body as step 4.
-6. Rate limit checked before the lookup, not after (a limiter that runs post-hash
-   pays the Argon2id cost on every attempt).
-7. Session row inserted (or key written): `token` from 32 CSPRNG bytes, base64url;
-   only `sha256(token)` persisted; `expires_at = now() + 30 d`,
-   `absolute_expires_at = now() + 90 d`.
-8. Cookie set: `HttpOnly`, `Secure` in production, `SameSite=Lax`, `Path=/`, no
-   `Domain`; name per decision 10.
-9. Response: the same safe user representation; never the token in the body.
+Round 1 of this review listed rate limiting as step 6 while asserting it must run
+before the lookup. That was an ordering defect, not a wording defect: a limiter that
+runs after `argon2.verify` pays the full KDF cost on every rejected attempt, which
+hands an attacker the exact amplifier the limiter exists to deny. The sequence below
+is the corrected one, and the numbering is the implementation order.
+
+1. **Validate** the body with `loginRequestSchema`; unknown keys are rejected
+   (`forbidNonWhitelisted`), so no field can smuggle a role or an id.
+2. **Normalise** the email with the single shared function used by registration. Two
+   copies of this logic is how one endpoint starts accepting variants the other
+   rejects.
+3. **Apply rate limiting** — see §7.2.1 for what exists in v1, what is deferred, and
+   what happens when the limiter's store is unavailable.
+4. **Reject over-limit** with `429 RATE_LIMITED` and `Retry-After`, before any
+   database round-trip and before any hashing.
+5. **Look up** `SELECT id, email, password_hash, role FROM app.users WHERE email = $1`
+   as `app_auth`, in the auth context. No `app.user_id` exists in this transaction;
+   a test asserts it is `NULL`.
+6. **User absent** → verify the supplied password against a fixed dummy hash of the
+   same cost parameters, discard the result, fail. Skipping this is what converts
+   "unknown user" into a timing oracle.
+7. **User present** → `argon2.verify(stored, supplied)`.
+8. **Fail identically** for steps 6 and 7: same status, same code, same body, no
+   `details` that differ.
+9. **Create the session** — `token` from 32 CSPRNG bytes, base64url; persist only
+   `sha256(token)`; `expires_at = now() + 30 d`, `absolute_expires_at = now() + 90 d`;
+   `last_seen_at = now()`.
+10. **Set the cookie and return** the safe user representation. The raw token never
+    appears in the response body, and `password_hash` never appears anywhere.
+
+Two negative properties are as important as the steps: no session row is created
+until step 9 succeeds, and no tenant transaction is opened anywhere in this handler.
+
+#### 7.2.1 Rate limiting — what v1 actually has, and what it does not
+
+| Question | Answer | Status |
+|---|---|---|
+| Controls in v1 | a single per-IP token bucket on `POST /v1/auth/login` and `POST /v1/auth/register`, plus the Argon2id cost as the only per-account brake | **proposed** — no limiter dependency exists in the repository today (F17) |
+| Per-IP, per-account, or both | **per-IP in v1.** Per-account is *specified* here and *deferred* (`IG-7`): it requires a store that survives process restarts and replication, and no such store is approved | per-IP proposed; per-account deferred |
+| Added dependency | yes — `@nestjs/throttler` (or an equivalent) is a new dependency, which the repository's dependency rule requires to be justified rather than assumed. Its default store is **in-process**, so N replicas behind Caddy enforce roughly N× the configured limit | **must be approved** |
+| Limiter store unavailable | in-process store: nothing to be unavailable, and the limiter cannot fail open because it is local state. If a shared store is later introduced (Redis), the policy is §6.3: fail closed, `503`, never "allow because the limiter is down" | design rule |
+| Trust proxy | `app.set('trust proxy', 1)` is required or `req.ip` is Caddy's address and every user shares one bucket | **proposed**; absent today |
+| What remains absent with per-account deferred | distributed credential stuffing against one account (one attempt per IP across many IPs); account lockout; any delay that escalates across attempts. The only remaining brake is Argon2id cost per attempt, which is real but linear and parallelisable | **deferred, stated** |
+
+`api-conventions.md:202` already specifies "30 req/min/IP" for public/auth
+endpoints and `:205` the `RateLimit-*` headers. The convention exists; the mechanism
+does not. This review must not be read as claiming otherwise.
 
 ### 7.3 Current session — `GET /v1/auth/me`
 
@@ -417,7 +665,7 @@ against code that **forgets** a filter. It does not protect against code that
 | 6 | `privilege-verification.mjs`: `EXPECTED` + column probes | harness | no | none |
 | 7 | `schema.prisma`: `Session` model (representation only) | Prisma | no | none |
 | 8 | `entity-catalog.md`, `tables-identity.md`, `physical-model.md`, `open-decisions.md`: 23rd table, new class, dispositions | docs | no | none |
-| 9 | `lower(email)` unique index — **only if decision 3 approves** | new file, additive | no | none (`users` is empty) |
+| 9 | `lower(email)` unique index — **only if `IG-1` approves** | new file, additive | no | none (`users` is empty) |
 
 Mechanics that constrain the SQL, all `[V]`:
 
@@ -450,13 +698,13 @@ Needed before any endpoint can be written, because none of it exists (`[V]` F6/F
 |---|---|---|
 | response envelope `{ data, meta? }` | absent | `envelopeSchema` + a `data`-only single-resource variant |
 | error envelope `{ error: { code, message, details?, requestId } }` | absent | `errorResponseSchema`; `requestId` generated by a middleware that does not exist |
-| error codes | prose rows only | a Zod enum seeded from `api-conventions.md:37-47`. Auth needs `VALIDATION_FAILED`, `UNAUTHENTICATED`, `CONFLICT`, `RATE_LIMITED`, and one for store outage (decision 7) |
-| `registerRequestSchema` / `loginRequestSchema` | absent | email (trim, lowercase, ≤254), password (policy per decision 6) |
+| error codes | prose rows only | a Zod enum seeded from `api-conventions.md:37-47`. Auth needs `VALIDATION_FAILED`, `UNAUTHENTICATED`, `CONFLICT`, `RATE_LIMITED`, and one for store outage (`IG-5`) |
+| `registerRequestSchema` / `loginRequestSchema` | absent | email (trim, lowercase, ≤254), password (policy per `IG-4`) |
 | `authenticatedUserSchema` | absent | `{ id, email, role, locale, timezone, createdAt }` — never `passwordHash` |
 | global prefix `/v1` | absent | `app.setGlobalPrefix("v1")`, with `health` exempt as `api-conventions.md:183` already implies |
 | `ValidationPipe` | absent | global, `whitelist: true`, `forbidNonWhitelisted: true` — this is the mass-assignment control |
 | exception filter | absent | maps `ZodError`→400, `23505`→409, `TenantContextError`→500, store outage→503 |
-| cookies / CSRF | absent | `cookie-parser`; double-submit token per `api-conventions.md:196`, details currently unspecified (decision 10) |
+| cookies / CSRF | absent | `cookie-parser`; double-submit token per `api-conventions.md:196`, details currently unspecified (`IG-8`, `IG-9`) |
 | OpenAPI | promised, absent | `api-conventions.md:3,211-215` and `ADR-002` D4 promise generation from Zod. Adding auth without a generator breaks that promise a second time; at minimum the new schemas must be generator-ready and the gap re-recorded |
 | `POST /v1/auth/register` | not in conventions | amend `api-conventions.md:150` in the same change |
 
@@ -467,79 +715,108 @@ error table is being written — auth is the first feature that will hit it.
 
 ## 11. Security risks and mitigations
 
-| # | Risk | Sev. | Mitigation | Residual, stated |
-|---|---|---|---|---|
-| R1 | `app_auth` DSN leak | High | separate credential, column grants, separate secret, never in the API's tenant path | full `users` read (§4.2) |
-| R2 | Registration mass assignment to `role` | High | column grant excludes `role`; `ValidationPipe` rejects unknown keys | both controls, either alone is insufficient by design |
-| R3 | Account enumeration | Medium | identical body/code/status; dummy-hash verification; uniform timing | `409` on duplicate registration still discloses existence (decision 4) |
-| R4 | Credential stuffing | Medium | `429` per IP, Argon2id cost, generic errors | no per-account control (decision 8) |
-| R5 | Session fixation | High | rotate on login; cookie set only after success | — |
-| R6 | Session theft via XSS | Medium | `HttpOnly` | XSS acts as the user regardless |
-| R7 | Forged session via a leaked session-table credential | High | `app_api` gains nothing on `sessions`; only `app_auth` reads it | a superuser is out of scope |
-| R8 | Store outage treated as "no auth needed" | Critical | fail-closed table (§6.3), tested against a closed port | — |
-| R9 | Identity taken from the request body | Critical | guard + `@CurrentUser()`; test with a foreign `userId`; ADR-003 row 5 | RLS cannot catch it — this is a code-path control |
-| R10 | Leaked `app_api` DSN reads every tenant | High | **not mitigated**; `OPEN-28` is the upgrade path | accepted for v1 per ADR-003 D4 |
-| R11 | Hash parameters too weak | Medium | configurable, recorded in ADR-004, one definition | hardware-dependent; re-measure on deploy |
-| R12 | Session table growth | Low | GC in `maintenance`; `(absolute_expires_at)` index | GC job does not exist yet |
-| R13 | Docs claim a control that is not implemented | Medium | every status entry states what was *run*; this review's §16 tags each DoD item | process risk, not technical |
+Columns are the ones the round-2 brief requires. **Status** is the honest axis:
+`implemented` means measured in this repository today; `proposed` means specified
+here and not applied; `deferred` means consciously not in v1. No row is marked
+implemented on the strength of a design document.
 
----
+| # | Threat | Required privilege | Attack impact | Existing mitigation | Residual risk | Status |
+|---|---|---|---|---|---|---|
+| R1 | `app_auth` DSN leaks — bulk credential read | `SELECT (email, password_hash)` + `USING (true)` | every email and hash; offline cracking bounded only by Argon2id cost | separate credential, column grants, fourth secret | bulk read is inherent to the lookup (§4.2) | proposed |
+| R2 | `app_auth` mints a session for an arbitrary `user_id` | `INSERT` on `sessions` | **direct impersonation of any account** | none beyond the credential being separate from `app_api` | highest-severity permitted operation; a stolen auth DSN is account takeover without reading the credential table | proposed |
+| R3 | `app_auth` creates accounts bypassing the flow | `INSERT (email, password_hash)` | valid account, no rate limit, no verification, no audit | column grant excludes `role` so no admin can be minted | flow-level controls live in `apps/api` and are bypassed entirely | proposed |
+| R4 | `app_auth` revokes, un-revokes, or extends any session | `UPDATE (revoked_at, expires_at, last_seen_at)` | targeted denial of service; keeping a session alive | grant is column-scoped | direction is not expressible in a grant — un-revocation stays possible | proposed |
+| R5 | `app_auth` sets `app.user_id` and reads tenant tables | `set_config` (any role) | none — no tenant grant exists | grant boundary; `FORCE` RLS | none today; the property must be re-verified whenever a grant is added | proposed — trivially true today because the role does not exist; must be measured after S3, not assumed |
+| R6 | `app_auth` escalates via `SET ROLE` | none | reading tenant data as `app_api` | `NOINHERIT`, zero memberships, measured for the existing three roles | must be measured for the fourth | proposed |
+| R7 | `app_auth` runs DDL or creates a role | `CREATE` on schema / `CREATEROLE` | schema takeover | no schema `CREATE`; `NOCREATEROLE NOSUPERUSER` | — | proposed |
+| R8 | `app_api` reads `users` or `sessions` | `SELECT` | credential or session enumeration from the tenant credential | no grant on `users` today; **must be extended to `sessions`** | a future grant returns zero rows thanks to `FORCE` + no policy naming `app_api` | users: **implemented** (measured: no grant); sessions: proposed |
+| R9 | Session store outage treated as "no auth needed" | none (logic) | total authentication bypass | §6.3 fail-closed table | — | proposed |
+| R10 | Stolen cookie replayed | the cookie | one user's session until expiry or logout | `HttpOnly`, `Secure`, `SameSite=Lax`, rotation on login | XSS acts as the user regardless | proposed |
+| R11 | Credential stuffing against one account | none | account takeover by volume | per-IP limit + Argon2id cost | **per-account control deferred** (`IG-7`); distributed attacks are unmitigated | proposed / deferred |
+| R12 | Account enumeration by response or timing | none | account list validation | identical failure body; dummy-hash verification | duplicate-registration `409` still discloses (`IG-2`) | proposed |
+| R13 | Leaked `app_api` DSN reads every tenant | `app_api` credential | full cross-tenant read | **none** | accepted for v1 (`ADR-003` D4); `OPEN-28` is the upgrade path | deferred (`OPEN-28`) |
+| R14 | GC deletes rows it should not | `EXECUTE` on the purge function | session loss (availability), not disclosure | function predicate is `absolute_expires_at < now()` only; no parameter | a bug in the function is a global logout | proposed |
+| R15 | Docs claim a control that is not implemented | none | false assurance | this review tags every claim; §19 requires evidence | process risk, not technical | — |
 
 ## 12. Test plan
 
-Existing infrastructure: `packages/database/test/unit` (node:test, no DB),
-`test/rls` (39 real-role tests), `test/schema` (12 catalogue tests), and
-`privilege-verification.mjs` (355 assertions, not a test file). `packages/contracts`
-uses vitest. **`apps/api` has no runner** — its `test` script prints a string.
-`[V]`
+Four statuses, and they are not interchangeable.
 
-### 12.1 Database security (real roles, no mocks)
-
-| Test | Home |
+| Tag | Means |
 |---|---|
-| `app_auth` holds exactly the listed column grants; `app_api` still `NONE` on `users` | `privilege-verification.mjs` `EXPECTED` + `has_column_privilege` |
-| `app_auth` `42501` on `farms`, `fields`, catalog, weather plane, `CREATE TABLE`, `SET ROLE app_api`, `SET ROLE migration_owner` | new `test/rls/auth-boundary.test.mjs` |
-| `app_auth` cannot read a tenant row even after setting `app.user_id` itself | same file |
-| `app_api` cannot read `users` or `sessions` (`42501`) | same file |
-| `users_auth_lookup`/`_register` exist, are `FOR SELECT`/`FOR INSERT` `TO app_auth`, and do not name `app_api` | `test/schema/schema-conformance.test.mjs` |
-| `FORCE`/`ENABLE` still set on all 10 tenant tables; policy count unchanged for `app_api` | existing conformance suite |
-| 39 existing isolation tests still pass | `test/rls/tenant-isolation.test.mjs`, unchanged |
-| nested scope rejected **across two clients** (F10) | `test/unit/tenant.test.mjs` |
+| **EXISTING** | runs today; the count is measured |
+| **PROPOSED** | specified here; the code does not exist |
+| **NEEDS-INFRA** | also needs an artefact that does not exist yet (Redis, a test runner in `apps/api`, a second Prisma client) |
+| **BLOCKED** | cannot be written until an architecture gate is approved |
 
-### 12.2 API
+Nothing in this section has been run. A proposed test that is described as passing
+would be the exact failure mode §11 R15 names.
 
-Registration: valid; duplicate (exact and case-variant); invalid email; short
-password; `password_hash` never in the response; client-supplied `role` ignored or
-rejected; concurrent duplicates yield one row.
+### 12.1 Authentication boundary (database, real roles, no mocks)
 
-Login: correct; wrong password; unknown email — **all three failure bodies
-byte-identical**; rate limit `429` with `Retry-After`; no session row on failure;
-`current_setting('app.user_id', true)` is `NULL` inside the auth transaction.
+| Test | Tag | Home |
+|---|---|---|
+| `app_auth` holds exactly the approved column privileges on `users`; nothing table-wide | PROPOSED | `privilege-verification.mjs` `EXPECTED` + `has_column_privilege` |
+| `app_api` still holds **no** privilege on `users` | **EXISTING** (measured at `202f508`: `users → {app_api: NONE}`) | same |
+| `app_auth` `42501` on `farms`, `fields`, `field_outlook_cells`, `field_observations`, `plantings`, `harvests`, `suitability_runs`, `planting_windows`, `ai_briefings` | PROPOSED | new `test/rls/auth-boundary.test.mjs` |
+| `app_auth` `42501` on the six catalog and six weather-plane tables | PROPOSED | same |
+| `app_auth` `42501` on `SET ROLE app_api`, `SET ROLE app_system`, `SET ROLE migration_owner` | PROPOSED | same |
+| `app_auth` `42501` on `CREATE TABLE`, `CREATE ROLE` | PROPOSED | same |
+| `app_auth` cannot read a tenant row **even after setting `app.user_id` itself** — the §3.4 "permitted but useless" claim, tested rather than asserted | PROPOSED | same |
+| `app_system` still has no grant on any authentication object | PROPOSED | same + `EXPECTED` |
+| `users_auth_lookup` and `users_auth_register` exist, are `FOR SELECT`/`FOR INSERT TO app_auth`, and never name `app_api` | PROPOSED | `test/schema/schema-conformance.test.mjs` |
+| `ENABLE`/`FORCE` still set on all 10 tenant tables; `app_api` policy shape unchanged | **EXISTING** (12 conformance tests) | same |
+| 39 tenant-isolation assertions unchanged | **EXISTING** (39 tests) | `test/rls/tenant-isolation.test.mjs` |
 
-Session: valid resolves the right user; missing/expired/revoked → `401`; logout
-invalidates; replayed old cookie → `401`; the store holds only a hash (assert by
-reading the row and failing if it equals the cookie value); sliding expiry extends
-at most once per window.
+### 12.2 Session security
 
-Tenant integration: body `userId` and query `userId` change nothing; missing session
-→ `401` before any tenant transaction; `withTenant` receives only the subject id.
+| Test | Tag | Note |
+|---|---|---|
+| Only `sha256(token)` is persisted — read the row, fail if it equals the cookie value | BLOCKED | needs `OPEN-13` |
+| The raw token never appears in a database column, a log line, or a response body | BLOCKED | needs the endpoints |
+| `app_api` `42501` on `SELECT`/`INSERT`/`UPDATE`/`DELETE` of `sessions` | BLOCKED | needs the table |
+| `app_system` holds no `sessions` table privilege but can `EXECUTE app.purge_expired_sessions()` | BLOCKED | needs the function |
+| Expired (`expires_at`, `absolute_expires_at`), revoked, and missing sessions all return `401` | BLOCKED | needs the guard |
+| Replayed cookie after logout returns `401`; logout is idempotent for an already-dead session | BLOCKED | — |
+| Sliding-expiry update changes `expires_at`/`last_seen_at` only — assert every other column is byte-identical | BLOCKED | proves the column `UPDATE` grant does what §4.3 claims |
+| `app_auth` **cannot** update `user_id`, `token_hash`, or `created_at` (`42501`, column grant) | BLOCKED | — |
+| `app_auth` **can** un-revoke a session — recorded as a known residual, asserted so the gap cannot be discovered later as a surprise | BLOCKED | negative-by-design |
+| GC deletes only `absolute_expires_at < now()`; a live row survives | BLOCKED | — |
+| Store outage → `503` on `/me`, login, logout; no `200`, no anonymous fallback | NEEDS-INFRA | closed port; no Redis needed |
 
-Outage: session store pointed at a closed port → `503` on `/me`, login, and logout;
-never `200`, never anonymous.
+### 12.3 Login security
 
-### 12.3 Regression
+| Test | Tag |
+|---|---|
+| Rate limiting rejects **before** the credential lookup — assert no `SELECT` is issued by spying on the adapter, or assert the `429` arrives with the database unreachable | PROPOSED |
+| Unknown email and wrong password produce byte-identical status, code, and body | PROPOSED |
+| Dummy-hash verification runs for an unknown email (assert the KDF is invoked) | PROPOSED |
+| No session row exists after a failed login | BLOCKED |
+| Rate-limit backend unavailable has the specified behaviour (§7.2.1) | NEEDS-INFRA |
+| `Retry-After` present on `429`; `RateLimit-*` headers present on success | PROPOSED |
+
+### 12.4 Tenant identity
+
+| Test | Tag |
+|---|---|
+| No tenant transaction is opened before the subject exists — `current_setting('app.user_id', true)` is `NULL` inside the auth transaction | BLOCKED |
+| A `userId` in the body and in the query changes nothing about which rows are visible | PROPOSED |
+| Tenant reads go through `withTenant`; the client is not reused after the callback | **EXISTING** (9 unit tests) |
+| Nested scope rejected **across two clients** — the guard compares against one client instance (F10) | PROPOSED; the gap is real and currently untested |
+| `app_system` remains unable to read tenant tables | **EXISTING** (part of `db:verify` and the RLS suite) |
+
+### 12.5 Regression
 
 `pnpm build`, `lint`, `typecheck`, `test`, `db:status`, `db:verify`,
-`db:verify:probes`, `test:rls`, `test:schema`, plus the new migration applied to a
-**fresh isolated volume** in its own compose project (the Phase 3 pattern), never a
-reset of the dev database.
+`db:verify:probes`, `test:rls`, `test:schema` — all **EXISTING** and green at
+`bf0e593` as recorded in `IMPLEMENTATION_STATUS.md` for `202f508`; they must be
+re-run after any change, not assumed.
 
-Two gaps this review cannot paper over: `apps/api` needs a runner (pick `node:test`
-for consistency with the DB suites, or vitest for consistency with contracts — the
-repo currently uses both and has never chosen), and `apps/api` needs
-`@agroclimate/database` as a dependency before its first integration test.
-
----
+New migration must be applied to a **fresh isolated volume** in its own compose
+project (the Phase 3 pattern), never by resetting the development database.
+**NEEDS-INFRA**: `apps/api` has no test runner (F18) and no `@agroclimate/database`
+dependency, so every API-level test above is blocked on a decision between
+`node:test` (matches `packages/database`) and vitest (matches `packages/contracts`).
 
 ## 13. ADR-004 draft recommendation — Authentication Database Boundary
 
@@ -547,6 +824,9 @@ repo currently uses both and has never chosen), and `apps/api` needs
 Status: Proposed (not written; must not be accepted by its own author)
 Resolves: OPEN-01
 ```
+
+**Decision sheet for approval:** §16. This section is the draft text that would
+become the ADR; the approval record lives in §16, not here.
 
 **Decision.** A fourth role `app_auth`: `NOLOGIN` at SQL level, `NOSUPERUSER`,
 `NOCREATEDB`, `NOCREATEROLE`, `NOREPLICATION`, `NOBYPASSRLS`, `NOINHERIT`, no
@@ -578,6 +858,9 @@ Status: Proposed (not written)
 Resolves: OPEN-13
 ```
 
+**Decision sheet for approval:** §17. This section is the draft text that would
+become the ADR.
+
 **Decision.** Server-side sessions in `app.sessions`, consistent with `ADR-002` D5.
 Opaque 32-byte CSPRNG token, base64url; only `sha256(token)` stored; `token_hash`
 unique; sliding 30 d and absolute 90 d; explicit `revoked_at`; hourly GC in the
@@ -599,85 +882,189 @@ not this one, owns it.
 
 ---
 
-## 15. Unresolved decisions
+## 15. Gates — architecture and implementation, kept separate
 
-| # | Decision | Blocks | Recommendation | Owner |
-|---|---|---|---|---|
-| 1 | `OPEN-01`: A, B, or C | login, sessions, every authenticated request | **A**; C rejected by ADR-003 D3 | owner — a fourth role is a security decision |
-| 2 | `OPEN-13`: table or Redis | session issuance and validation | **table**; Redis requires amending D5 | owner |
-| 3 | Email normalisation: app invariant, or `lower(email)` unique index | registration correctness across writers | index — otherwise two normalisation rules create two accounts for one address | owner (touches `users`) |
-| 4 | Duplicate registration discloses existence (`409`) | account enumeration posture | accept and document, or always `202`; silently picking one is not an option | product |
-| 5 | Register auto-logs-in, or requires a separate login | endpoint shape, test matrix | auto-login is fewer round-trips but implies session creation on `POST /register`; **the brief implies no session** | product |
-| 6 | Password policy | contract schema, Argon2id input cap | length ≥ 12, ≤ 1024 bytes, no composition rules (NIST SP 800-63B shape); record it | owner |
-| 7 | Error code for a session-store outage | filter, contracts enum | add one code to the conventions table; reuse none of the data-plane codes | owner |
-| 8 | Per-account brute-force control | login hardening | defer with a written note; per-IP throttle + Argon2id only in v1 | owner |
-| 9 | Argon2id parameters | cost, hardware sensitivity | OWASP minimum to start (19 MiB, t=2, p=1), in config, measured on the deploy host | owner |
-| 10 | Cookie name/prefix and CSRF token mechanics | implementation | `__Host-` prefix in production (forces `Secure`, `Path=/`, no `Domain`), plain name in dev; double-submit header `X-CSRF-Token` compared in constant time | owner |
-| 11 | Email verification before first login | abuse surface | out of scope per the brief; without it anyone can register any address — accept explicitly | product |
-| 12 | `OPEN-28` timing | production readiness | stay `DEFERRED`; 3.2 neither worsens nor fixes it | owner |
+Round 1 required decisions 1–10 before any implementation. That was too coarse: the
+envelope contract, the global prefix, and the exception filter do not depend on which
+credential reads `users`. Splitting the decisions lets the contract and plumbing
+tracks proceed without pretending the authentication architecture has been approved.
 
-`OPEN-04` is untouched: no deletion endpoint, no `deleted_at` on `users`, no partial
-email index. Auth must not quietly pre-empt it.
+### 15.1 Architecture gates
 
----
+These must be approved **by the repository owner** before the database boundary or
+the session architecture is implemented. Neither is decided by this review.
 
-## 16. Recommended implementation sequence
+| ID | Description | Owner | Recommended | Dependencies | Latest point | If deferred |
+|---|---|---|---|---|---|---|
+| `AG-1` = `OPEN-01` | Which credential reads `app.users` before a tenant context exists | repository owner (security) | Option A — dedicated `app_auth` with column grants and two policies (§16) | none | before migration `auth_boundary` is written | registration and login cannot be written; nothing else in 3.2 can start except contracts and plumbing |
+| `AG-2` = `OPEN-13` | Where a session lives: Postgres table or Redis | repository owner | Postgres table, consistent with `ADR-002` D5 (§17) | `AG-1` (the store is accessed by the same credential) | before migration `sessions` is written | login cannot issue a session; `/me` and `/logout` cannot be written |
 
-Each step ends in something runnable and verifiable; no step is a placeholder.
+### 15.2 Implementation gates
+
+These must be resolved before the subsystem that depends on them. They do not block
+the boundary, the contracts, or the API plumbing.
+
+| ID | Decision | Owner | Recommended | Dependencies | Latest point | If deferred |
+|---|---|---|---|---|---|---|
+| `IG-1` | Email normalisation: application invariant or `lower(email)` unique index | owner | the index — otherwise two normalisation rules create two accounts for one address | none | before the first registration row exists | duplicate-account class of bug, undetectable from the DB |
+| `IG-2` | Duplicate registration: `409` (discloses existence) or always `202` | product | `409` + `CONFLICT`, documented as an accepted disclosure | `IG-5` | before the register endpoint ships | endpoint blocked; enumeration posture unstated |
+| `IG-3` | Register auto-logs-in, or requires a separate login | product | separate login — the brief's "safe user representation" implies no session, and it keeps one issuance path | `AG-2` | before the register endpoint ships | endpoint blocked |
+| `IG-4` | Password policy (length, byte cap, composition) | owner (security) | length ≥ 12, ≤ 1024 bytes, no composition rules (NIST SP 800-63B shape) | none | before `registerRequestSchema` | contract cannot be written; a policy invented in code is a policy nobody approved |
+| `IG-5` | Error-code contract for auth, including a store-outage code | owner | seed from `api-conventions.md:37-47`; add exactly one code for dependency unavailability | none | before the exception filter | filter cannot map failures; codes drift into ad-hoc strings |
+| `IG-6` | Argon2id parameters | owner, measured on the deploy host | OWASP minimum to start (19 MiB, t=2, p=1), in config | none | before hashing is implemented | cost is a security parameter; a guess is an unmeasured claim |
+| `IG-7` | Per-account brute-force control | owner | defer; per-IP + Argon2id cost only in v1, recorded as a stated gap | `IG-5` | before production, not before implementation | distributed credential stuffing unmitigated (R11) |
+| `IG-8` | Cookie name and prefix | owner | `__Host-` in production, plain name in dev | none | before the cookie is set | a cookie attribute chosen by the implementer becomes a de-facto decision |
+| `IG-9` | CSRF mechanics (header name, token length, comparison, rotation) | owner | double-submit, `X-CSRF-Token`, constant-time compare, rotate on login | `IG-8` | before the first non-GET endpoint | `api-conventions.md:196` says "double-submit" and nothing else; the rest would be invented in code |
+| `IG-10` | Email verification before first login | product | out of scope per the brief; record that anyone may register any address | `IG-1` | before any public deployment | abuse surface accepted silently |
+| `IG-11` | Test runner for `apps/api` (`node:test` or vitest) | owner | `node:test`, matching `packages/database`; the repo currently has two runners and has never chosen | none | before the first API test | every API-level test in §12 stays blocked (F18) |
+
+`IG-11` is not in the round-2 list; it is required by F18 and would otherwise be
+decided by whoever writes the first `package.json` line.
+
+**Not gates:** `OPEN-04` (deletion — untouched, no endpoint, no column) and
+`OPEN-28` (signed context — `DEFERRED`; 3.2 neither worsens nor fixes it).
+
+## 16. `OPEN-01` decision sheet — Authentication Database Boundary
+
+| Field | Content |
+|---|---|
+| **Recommended** | Option A: a fourth role `app_auth`, `NOLOGIN` at SQL level, `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT`, zero memberships in either direction |
+| **Exact boundary** | `USAGE` on schema `app`; `SELECT (id, email, password_hash, role, locale, timezone)` and `INSERT (email, password_hash)` on `app.users`; `SELECT`/`INSERT`/column-`UPDATE` on `app.sessions` per §4.3; `EXECUTE` on no function. Nothing else, on any object |
+| **RLS implications** | `users_auth_lookup FOR SELECT TO app_auth USING (true)` and `users_auth_register FOR INSERT TO app_auth WITH CHECK (true)`. `users_self_only` unchanged; `app_api` unmentioned in both. `FORCE` retained — it is what makes a future mistaken grant return zero rows |
+| **Compromise blast radius** | bulk emails + hashes; account creation that bypasses the registration flow; session issuance for any `user_id`; revocation/un-revocation; **no** tenant table, **no** catalog, **no** weather plane, **no** DDL, **no** `SET ROLE` (§3.4) |
+| **Alternatives** | B1 definer callable by `app_api` — rejected, it hands the tenant credential the capability permanently. B2 definer callable only by `app_auth` — the tightening path, not v1. C separate identity context — not a credential-read mechanism; belongs to `OPEN-28` |
+| **Residual risks** | enumeration is inherent (the lookup *is* the enumeration); bulk hash extraction; un-revocation cannot be prevented by a grant; Argon2id is not in core Postgres, so the hash leaves the DB |
+| **Migration changes** | one new migration, additive: 2 `GRANT` + 2 `CREATE POLICY`. No `ALTER TABLE`, no column, no rewrite. Plus a bootstrap change outside the ledger: `roles.sql:12` array member, an `ALTER ROLE` line, `bootstrap.mjs` secret map, `connections.mjs` role map |
+| **Verification evidence required** | `db:verify` with `app_auth` rows: allow and deny per SQLSTATE (`42501` for grant denial, `23503` where a FK is the mechanism); `has_column_privilege` for the column grants; the new `auth-boundary` suite green; 39 tenant-isolation tests unchanged; migration applied to a fresh isolated volume |
+| **Marked `RESOLVED` only when** | ADR-004 is **accepted by the owner**, the migration is **applied**, and `db:verify` passes. A recommendation in a review document is not a resolution — this review does not change the disposition in `open-decisions.md` |
+
+```
+Approve: ☐ A   ☐ B2   ☐ other (specify)      Reject: ☐
+Approved by: ____________________  Date: __________
+```
+
+## 17. `OPEN-13` decision sheet — Session Storage
+
+| Field | Content |
+|---|---|
+| **Recommended** | Postgres table `app.sessions`, accessed only by `app_auth` |
+| **Relationship with `ADR-002` D5** | D5 already decided "server-side sessions in Postgres, not JWT", with JWT + refresh rotation in its rejected list. This recommendation **preserves** D5. Nothing needs amending. Choosing Redis instead would reverse D5 and requires amending it in the same change — it is **not** existing infrastructure (`F8`) |
+| **Lifecycle** | issue on successful login → validate on each request → extend sliding expiry at most once per 5 min → revoke on logout → purge when `absolute_expires_at` passes |
+| **Token format** | 32 CSPRNG bytes, base64url (43 chars), opaque; only `sha256(token)` stored; `token_hash` unique; SHA-256 is correct here because the input is high-entropy — this is **not** the password path and must not be reused as one |
+| **Expiry / revocation** | sliding 30 d (`expires_at`), absolute 90 d (`absolute_expires_at`), `revoked_at` for immediate revocation; all three checked on every validation |
+| **Database access boundary** | `ENABLE` + `FORCE` RLS; `sessions_auth_all FOR ALL TO app_auth USING (true) WITH CHECK (true)`; owner policy for `migration_owner`; column `SELECT`/`INSERT`/`UPDATE` per §4.3; **no `DELETE` grant**; `app_api` and `app_system` hold no table privilege |
+| **Garbage collection** | `app.purge_expired_sessions()`, `SECURITY DEFINER`, owned by `migration_owner`, `EXECUTE` granted to `app_system` only, hourly in the `maintenance` queue (`background-processing.md:19`). `app_system` gains no table grant — requirement 7 |
+| **Outage behaviour** | fail closed per §6.3: `503` on `/me`, login, and logout; never anonymous, never a second authority as "fallback" |
+| **Alternatives** | Redis: cheaper TTL/revocation and it avoids the second pre-identity read, but it reverses D5, adds a service absent from `docker-compose.yml`, and makes an unauthenticated network service the authentication authority |
+| **Operational trade-offs** | one DB round-trip per authenticated request; one more table and a GC job that does not exist; backup/restore already covers it; sessions do not survive nothing — they survive a Redis restart that Redis would have lost |
+| **Verification evidence required** | the §12.2 suite; `db:verify` showing `app_api` `42501` on all four operations; GC test; outage test; fresh-volume migration |
+| **Marked `RESOLVED` only when** | ADR-005 accepted by the owner **and** the migration applied **and** the session suite green. Not on the strength of this sheet |
+
+```
+Approve: ☐ Postgres table   ☐ Redis (requires ADR-002 D5 amendment)   Reject: ☐
+Approved by: ____________________  Date: __________
+```
+
+## 18. Recommended implementation sequence
+
+Three tracks. Only the third is gated on `AG-1`/`AG-2`; the first two are safe to do
+earlier and must not be described as authentication progress.
+
+### Track 0 — approvals
 
 | Step | Work | Gate |
 |---|---|---|
-| S0 | **Decisions 1–10 answered.** No code. | written dispositions updated in `open-decisions.md` |
-| S1 | Contracts: envelope, error codes, auth request/response schemas, shared email normaliser | `pnpm test` in contracts; no endpoint yet |
-| S2 | Bootstrap: `app_auth` role + secret map + `connections.mjs`; `.env.example` | `db:bootstrap` idempotent; `db:verify` still 355/0 with the new role's *negative* assertions |
-| S3 | Migration: 2 policies + 2 column grants | applied to a **fresh** volume; conformance + auth-boundary tests green |
-| S4 | API plumbing: prefix `/v1`, `ValidationPipe`, exception filter, request id, cookie parser, throttle, trust-proxy, database client lifecycle | health still green; existing suites unaffected |
-| S5 | Register + login + hashing + timing equalisation | §12.2 registration/login tests; `app_auth` never opens a tenant transaction |
-| S6 | Sessions: table, guard, `/me`, `/logout`, sliding expiry, GC job | §12.2 session tests; outage test |
-| S7 | Docs: ADR-004/005 accepted, `entity-catalog` 23rd table + new class, `api-conventions` amendments, `IMPLEMENTATION_STATUS`, `auth-deferred.md` pointer resolved | status entries state commands actually run |
+| S0a | Answer `AG-1` and `AG-2` using §§16-17; record the answers in `open-decisions.md` **only when approved** | blocks S3+ |
+| S0b | Answer `IG-11` (test runner) and `IG-5` (error codes) — the tracks below cannot start without them | blocks S1 and T2 |
 
-S3 cannot precede S2 (role must exist); S5 cannot precede S3 (no grant); S6 cannot
-precede S5 (nothing to issue); S4 can run in parallel with S1–S3.
+### Track 1 — contracts and API plumbing (safe before approval)
 
----
-
-## 17. Definition of Done
-
-| # | Criterion | How it will be evidenced |
+| Step | Work | Gate |
 |---|---|---|
-| 1 | ADR-004 accepted | its Status line says Accepted, dated |
-| 2 | ADR-005 accepted | same |
-| 3 | `OPEN-01` resolved | disposition changed to `RESOLVED` **and** the migration applied, verified by `db:verify` |
-| 4 | `OPEN-13` resolved | same, with the entity-catalog entry added |
-| 5 | Role boundary verified | `db:verify` with `app_auth` rows: allow and deny, by SQLSTATE |
-| 6 | Registration, login, `/me`, logout work | API test suite output, not prose |
-| 7 | Identity is the sole source of tenant context | the `app.user_id IS NULL` assertion inside the auth transaction |
-| 8 | Tenant work uses `withTenant` | existing rule + the body/query `userId` tests |
-| 9 | Existing RLS intact | 39 isolation tests + 12 conformance tests, unchanged |
-| 10 | No session-scoped `SET`, no client-supplied identity | grep rule + negative tests |
-| 11 | Fail-closed outage behaviour | test against a closed port |
-| 12 | Regression green | build, lint, typecheck, test, `db:status`, `db:verify`, `test:rls`, `test:schema` |
-| 13 | Fresh-volume migration | isolated compose project, own volume, removed afterwards |
-| 14 | Docs reconciled | status entries cite commands and counts |
-| 15 | No unresolved assumption presented as a control | `OPEN-04`, `OPEN-28`, email verification, per-account throttling, and the `app_auth` bulk-read exposure all appear as stated limitations |
+| S1 | Contracts: response envelope, error envelope, error-code enum, `requestId` shape. **No auth request/response schemas yet** — those depend on `IG-4` | `IG-5`, `IG-11` |
+| S2 | API plumbing: global prefix `/v1`, `ValidationPipe` (`whitelist`, `forbidNonWhitelisted`), exception filter, request-id middleware, cookie parser, helmet, trust-proxy, CORS, `apps/api` → `@agroclimate/database` dependency and client lifecycle | `IG-11` |
 
-Item 15 is the one that fails most quietly. Nothing in this review enables it.
+Both write to `apps/api` and `packages/contracts`; they do not touch roles, grants,
+migrations, or the tenant path.
+
+### Track 2 — database boundary and sessions (**gated**)
+
+| Step | Work | Gate |
+|---|---|---|
+| S3 | Bootstrap: `app_auth` role, secret map, `connections.mjs`, `.env.example` | `AG-1` approved |
+| S4 | Migration `auth_boundary`: 2 policies + 2 column grants. Apply to a fresh volume | S3 — the role must exist before the policy names it (`42704` otherwise) |
+| S5 | Migration `sessions` + policies + grants + purge function | `AG-2` approved, S4 |
+| S6 | `privilege-verification.mjs` `EXPECTED` + `has_column_privilege` probes; `auth-boundary` suite; conformance additions | S4 (and S5 for session rows) |
+
+### Track 3 — authentication endpoints (**gated**)
+
+| Step | Work | Gate |
+|---|---|---|
+| S7 | Register + login: schemas, Argon2id, dummy-hash verification, rate limiting before lookup, generic failures | S1, S2, S4, `IG-1/2/3/4/6/7/10` |
+| S8 | Sessions: guard, `/me`, `/logout`, sliding expiry, purge job wiring | S5, S6, `IG-8/9` |
+| S9 | Docs: ADR-004/005 accepted, `entity-catalog` gains `sessions` in the widened `identity` class, `api-conventions` amendments (`/v1/auth/register`, the 403/404 contradiction), `auth-deferred.md` pointer resolved, `IMPLEMENTATION_STATUS` | everything above |
+
+Dependency rules preserved: role before policy; grants before endpoints; store
+before validation; subject before tenant context; `withTenant` unchanged throughout.
+
+## 19. Definition of Done
+
+Each criterion names the artefact that proves it. "Documented" is not on this list.
+
+| # | Criterion | Evidence | Gate |
+|---|---|---|---|
+| 1 | ADR-004 accepted | its Status line reads Accepted, dated, with the approver recorded | `AG-1` |
+| 2 | ADR-005 accepted | same | `AG-2` |
+| 3 | `OPEN-01` resolved | disposition changed to `RESOLVED` **and** the migration applied **and** `db:verify` green — not one of the three | `AG-1` |
+| 4 | `OPEN-13` resolved | same, plus the `sessions` entry in `entity-catalog.md` | `AG-2` |
+| 5 | Role boundary verified | `db:verify` rows for `app_auth`: allow and deny, by SQLSTATE; column grants via `has_column_privilege` | `AG-1` |
+| 6 | Registration, login, `/me`, logout work | API test output, not prose | `IG-*` |
+| 7 | Identity is the sole source of tenant context | the `current_setting('app.user_id', true) IS NULL` assertion inside the auth transaction | — |
+| 8 | Tenant work uses `withTenant` | the body/query `userId` tests plus the existing 9 unit tests | — |
+| 9 | Existing RLS intact | 39 isolation + 12 conformance tests, unchanged counts | — |
+| 10 | No session-scoped `SET`, no client-supplied identity | the `grep -n "SET app\."` rule + the negative tests | — |
+| 11 | Fail-closed outage behaviour | test against a closed port | — |
+| 12 | Regression green | build, lint, typecheck, test, `db:status`, `db:verify`, `test:rls`, `test:schema` — command output | — |
+| 13 | Fresh-volume migration | isolated compose project, own volume, removed afterwards | — |
+| 14 | Docs reconciled | status entries cite commands and counts | — |
+| 15 | No unresolved assumption presented as a control | `OPEN-04`, `OPEN-28`, `IG-7`, `IG-10`, and the `app_auth` bulk-read/impersonation exposure all appear as stated limitations in the same document that claims completion | — |
+
+Item 15 fails most quietly, and it is the one this review exists to make visible.
 
 ---
 
-## 18. Final recommendation
+## 20. Final recommendation
 
-**READY AFTER DECISIONS.**
+**READY FOR OWNER DECISIONS.**
 
-The design is sound and the constraints in the brief are satisfiable without
-weakening anything that exists. The blocker is not technical: `OPEN-01` and
-`OPEN-13` are both `BLOCKED_EXTERNAL_INPUT`, and the brief's own DoD requires them
-resolved. Decision 1 (role vs function) and decision 2 (table vs Redis) unlock the
-rest.
+The design is coherent and every constraint in the brief is satisfiable without
+weakening anything that exists. Nothing here is blocked on missing engineering work:
+the two architecture gates are owner decisions, and they are written out in §§16-17
+as approve/reject sheets rather than as prose recommendations.
 
-Three of the brief's premises are contradicted by the repository and are corrected
-in §1.1 — most importantly, Redis is not provisioned, and `ADR-002` D5 already
-chose Postgres sessions. Choosing Redis is legitimate, but it is a reversal that
-must be recorded as one, not a gap being filled.
+What is required before implementation begins:
 
-No implementation will begin before explicit approval.
+1. `AG-1` (`OPEN-01`) — approve a credential boundary. Recommended: Option A,
+   `app_auth` with column grants and two policies.
+2. `AG-2` (`OPEN-13`) — approve session storage. Recommended: Postgres table,
+   preserving `ADR-002` D5. Redis is legitimate but is a D5 reversal and is not
+   existing infrastructure.
+3. `IG-11` and `IG-5` — the test runner and the error-code contract, because the
+   contract and plumbing tracks cannot start without them.
+
+Everything else (`IG-1`–`IG-10`) can be answered while the boundary is being built;
+none of them changes the boundary.
+
+Corrections of record, all verified against the repository rather than assumed:
+
+- The brief's `docs/adr/ADR-002-session-and-authentication.md` does not exist; the
+  sessions decision is `ADR-002-monorepo-and-backend-architecture.md` D5.
+- Redis is documented and not provisioned.
+- `OPEN-13` is inconsistently decided rather than undecided.
+- The round-1 login sequence placed rate limiting after password verification; §7.2
+  is corrected, and §7.2.1 states what v1 does and does not have.
+- A session lookup repeats the `OPEN-01` pre-identity read; that is the actual
+  argument for Redis, and it is stated in §1.1 rather than left implicit.
+
+No implementation begins before explicit owner approval, and no `OPEN` disposition
+in `docs/data-model/open-decisions.md` has been changed by this document.
