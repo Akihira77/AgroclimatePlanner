@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "build": "prisma generate && tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "prisma generate && tsc -p tsconfig.json --noEmit",
     "lint": "eslint src",
     "test": "node -e \"console.log('[database] no tests in Phase 2.2.1')\"",
     "db:generate": "prisma generate",

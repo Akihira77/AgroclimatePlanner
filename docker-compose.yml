@@ -10,14 +10,16 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-agroclimate}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agroclimate}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agroclimate-dev}
       POSTGRES_DB: ${POSTGRES_DB:-agroclimate}
       # Timestamps are stored as timestamptz and rendered by the client; a
       # server-local default only makes logs harder to compare.
       TZ: UTC
       PGTZ: UTC
     ports:
-      - "${POSTGRES_PORT:-5442}:5432"
+      # Loopback only. A development database has no business accepting
+      # connections from the rest of the network.
+      - "127.0.0.1:${POSTGRES_PORT:-5442}:5432"
     volumes:
       # PostgreSQL 18 images moved PGDATA under /var/lib/postgresql/18/docker
       # and declare the volume at /var/lib/postgresql, not .../data.

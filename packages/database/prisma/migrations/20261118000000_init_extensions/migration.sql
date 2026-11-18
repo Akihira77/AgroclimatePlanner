@@ -12,9 +12,13 @@ CREATE EXTENSION IF NOT EXISTS postgis;
 
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'uuidv7' AND pronargs = 0) THEN
+  -- Qualified lookup on purpose. The previous check matched any zero-argument
+  -- function named `uuidv7` in any schema, so a user-defined `uuidv7()` would
+  -- have satisfied it while the guarantee it stood for was absent. Resolving
+  -- `pg_catalog.uuidv7()` by exact signature and schema cannot be spoofed.
+  IF to_regprocedure('pg_catalog.uuidv7()') IS NULL THEN
     RAISE EXCEPTION
-      'uuidv7() is required (PostgreSQL 18+) and was not found; server is %',
+      'pg_catalog.uuidv7() is required (PostgreSQL 18+) and was not found; server is %',
       current_setting('server_version');
   END IF;
 
