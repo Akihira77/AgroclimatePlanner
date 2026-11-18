@@ -1,0 +1,13 @@
+{
+  "host": "127.0.0.1",
+  "port": "5442",
+  "database": "agroclimate",
+  "owner": "agroclimate",
+  "ownerPassword": "agroclimate-dev",
+  "schema": "app",
+  "roles": {
+    "migration_owner": "migration-owner-dev",
+    "app_api": "app-api-dev",
+    "app_system": "app-system-dev"
+  }
+}

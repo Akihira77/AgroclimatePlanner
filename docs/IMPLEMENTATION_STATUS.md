@@ -124,6 +124,7 @@ Phase 2 readiness: **yes, and no further architecture pass is warranted**. Remai
 | 2.1.x canonical serializer hardening | done, runtime-verified | explicit key order, dense arrays, plain objects, no accessor execution |
 | 2.2.1 PostgreSQL + PostGIS foundation | done, runtime-verified | `docker-compose.yml`, `packages/database`, `20261118000000_init_extensions` |
 | 2.2.1.x database foundation hardening | done, runtime-verified | single env source, fail-closed production, generated-client lifecycle, loopback binding, `pg_catalog` guard |
+| 2.2.2 roles and privilege boundary | done, runtime-verified | `bootstrap/roles.sql`, `db:bootstrap`, `db:verify` (61 assertions as the real roles) |
 
 ### Phase 2.1 outcome
 
@@ -166,7 +167,7 @@ Runtime-verified against a live container: PostgreSQL 18.6, PostGIS 3.6.4, `uuid
 | Port 5442 | the host already runs unrelated PostgreSQL on 5432 and 5433 |
 | `prisma` pinned to 7.10.1 | npm's `latest` tag currently points at `8.0.0-rc.34` |
 
-Next: 2.2.2 database roles and privileges (`app_api`, `app_system`, explicit grants, default-deny), then 2.2.3 RLS with transaction-scoped `set_config`, then 2.2.4 security tests executed as the real roles.
+Next at the time: 2.2.2 roles and privileges, then 2.2.3 RLS, then 2.2.4 security tests as the real roles. Delivered in the 2.2.2 outcome below.
 
 ### Phase 2.2.1.x outcome — hardening
 
@@ -185,3 +186,29 @@ Also recorded: schema migrations require a dedicated privileged owner connection
 One measurement changed a documented assumption rather than confirming it: `migrate deploy` does not compare migration checksums. Tampering with an applied migration's checksum left `migrate status` reporting "up to date" and `migrate deploy` reporting "no pending migrations". Editing applied SQL is therefore silently accepted, which makes review the only gate — recorded in `database-foundation.md` in place of the earlier claim that Prisma would refuse.
 
 Verification: runtime for all five. Clean-checkout typecheck with an empty Turbo cache (`0 cached, 6 total`), custom `.env` (port 5443, `agro_alt`/`agro_alt_db`) reaching the intended database, process-env override failing on the overridden host, and both absence cases aborting before connecting.
+
+### Phase 2.2.2 outcome — roles and privilege boundary
+
+Three roles, one schema, default deny, and 61 assertions that run over TCP as the role they are about. A denial counts only at SQLSTATE `42501`, so a missing table or a bad credential fails the check rather than passing as a boundary.
+
+| Decision | Effect |
+|---|---|
+| Roles are created by a bootstrap script as the cluster admin, not by a migration | `CREATE ROLE` is a cluster privilege; a compromised migration connection cannot mint roles |
+| Roles are created `NOLOGIN`; passwords applied afterwards from the environment | no credential in any committed file, and none in a statement that gets logged |
+| `NOINHERIT` on all three, no memberships | no privilege path to walk and no `SET ROLE` escalation |
+| Application objects live in schema `app`, owned by `migration_owner` | `public` stays PostGIS's; the ledger moves out of the extension namespace |
+| Runtime roles get `USAGE` on `app` and nothing else | no table, sequence, or function privilege exists until a migration grants one |
+| `db:reset` re-runs `db:bootstrap` before `db:migrate` | the volume owns the roles too — `initdb` runs once |
+| Privileges are verified, not merely granted | the grant matrix is a claim; `db:verify` is the check |
+
+Two of these were decided by measurement, not by preference.
+
+**`ALTER DEFAULT PRIVILEGES … IN SCHEMA app REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC` does nothing.** It records no `pg_default_acl` row, and a function created afterwards was still executable by `app_api`. The unqualified form stores `{migration_owner=X/migration_owner}` and works. Both forms were tried, and the schema-qualified one, with `FOR ROLE migration_owner`, and as the owning role itself — all no-ops.
+
+**Default-privilege entries for tables and sequences are unnecessary.** PostgreSQL grants no table or sequence privilege to other roles by default, so a `REVOKE` for them records nothing because there is nothing to remove. The assertion that matters is behavioural — a table created after the bootstrap is unreadable by both runtime roles — not the presence of a catalogue row.
+
+Probe objects (`app.privilege_probe`, its sequence, its function) exist only for the duration of a verification run and are dropped in a `finally` block.
+
+Not verified here: `app_system` denied `SELECT geom FROM fields` and `SELECT body FROM ai_briefings`. Those tables are Phase 3. The column-level mechanism is proven against a probe table instead — one granted column readable, its neighbour denied, `SELECT *` denied, and removal of the grant taking effect immediately.
+
+Next: 2.2.3 tenant-owned tables and RLS with transaction-scoped `set_config(..., true)`, then 2.2.4 security assertions against the real domain tables.
