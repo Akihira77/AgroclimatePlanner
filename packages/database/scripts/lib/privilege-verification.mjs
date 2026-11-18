@@ -99,6 +99,41 @@ function child(identifier) {
   return `app.${quote(identifier)}`;
 }
 
+/**
+ * Role attribute assertions, in one place because they are also asserted without
+ * a cluster.
+ *
+ * The verifier's own run needs a live PostgreSQL, so an attribute assertion that
+ * lived only inside it could not be tested at all — and an untested assertion is
+ * one that can quietly stop running. `test/unit/privilege-verification.test.mjs`
+ * drives these two functions with a recording `check`.
+ */
+export function checkRoleAttributes(check, name, role) {
+  check(`${name} is not a superuser`, role.rolsuper === false);
+  check(`${name} cannot create databases`, role.rolcreatedb === false);
+  check(`${name} cannot create roles`, role.rolcreaterole === false);
+  check(`${name} can log in`, role.rolcanlogin === true);
+  check(`${name} does not inherit privileges`, role.rolinherit === false);
+  check(`${name} cannot replicate`, role.rolreplication === false);
+}
+
+/**
+ * The session table belongs to S5. Checking that it is absent is not a formality:
+ * a table created early would make the later migration a no-op and leave the
+ * sessions of this phase half-built.
+ *
+ * Unconditional on purpose. A check that only runs when the relation is missing
+ * reports nothing in the one state that matters.
+ */
+export function checkSessionAbsence(check, oid) {
+  const absent = oid === null;
+  check(
+    "app.sessions is absent before S5",
+    absent,
+    absent ? undefined : `app.sessions already exists as ${String(oid)}; S3 must not create it`,
+  );
+}
+
 export async function runPrivilegeVerification({
   log = console.log,
   hooks = {},
@@ -182,7 +217,7 @@ export async function runPrivilegeVerification({
 
     // -------------------------------------------------------------- attributes
     const { rows: roles } = await owner.query(
-      "select rolname, rolsuper, rolcanlogin, rolbypassrls, rolcreatedb, rolcreaterole, rolinherit from pg_roles where rolname = any($1)",
+      "select rolname, rolsuper, rolcanlogin, rolbypassrls, rolcreatedb, rolcreaterole, rolinherit, rolreplication from pg_roles where rolname = any($1)",
       [ROLE_NAMES],
     );
     const attribute = (name) => roles.find((role) => role.rolname === name);
@@ -191,11 +226,7 @@ export async function runPrivilegeVerification({
     for (const name of ROLE_NAMES) {
       const role = attribute(name);
       if (role === undefined) continue;
-      check(`${name} is not a superuser`, role.rolsuper === false);
-      check(`${name} cannot create databases`, role.rolcreatedb === false);
-      check(`${name} cannot create roles`, role.rolcreaterole === false);
-      check(`${name} can log in`, role.rolcanlogin === true);
-      check(`${name} does not inherit privileges`, role.rolinherit === false);
+      checkRoleAttributes(check, name, role);
     }
     check("app_api lacks BYPASSRLS", attribute("app_api")?.rolbypassrls === false);
     check("app_system has BYPASSRLS", attribute("app_system")?.rolbypassrls === true);
@@ -312,7 +343,7 @@ export async function runPrivilegeVerification({
     const { rows: sessionsRelation } = await owner.query(
       "select to_regclass('app.sessions') as oid",
     );
-    if (sessionsRelation[0].oid === null) check("app.sessions is absent before S5", true);
+    checkSessionAbsence(check, sessionsRelation[0].oid);
 
     // --------------------------------------------- default privileges declared
     const { rows: defaultAcl } = await owner.query(
