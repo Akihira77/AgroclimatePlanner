@@ -56,10 +56,19 @@ export type SingletonErrorCode = z.infer<typeof singletonErrorCodeSchema>;
  * A closed enumeration was rejected here: it would have to grow with every new
  * resource, and a forgotten member turns "not found" into "invalid contract" at
  * exactly the moment a client is handling an absence.
+ *
+ * The brand is what stops the type from collapsing back to `string`. A regex
+ * schema infers `string`, so without it `ErrorCode` would be
+ * `SingletonErrorCode | string` — every arbitrary string assignable in
+ * TypeScript while still being rejected at runtime. The brand is compile-time
+ * only: `parse` still returns the plain string value, and no runtime behaviour
+ * changes. A member of this family can therefore only be obtained by parsing it,
+ * which is the validation the type is supposed to represent.
  */
 export const notFoundErrorCodeSchema = z
   .string()
-  .regex(/^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_NOT_FOUND$/, "expected a <RESOURCE>_NOT_FOUND code");
+  .regex(/^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)*_NOT_FOUND$/, "expected a <RESOURCE>_NOT_FOUND code")
+  .brand<"NotFoundErrorCode">();
 export type NotFoundErrorCode = z.infer<typeof notFoundErrorCodeSchema>;
 
 export const errorCodeSchema = z.union([singletonErrorCodeSchema, notFoundErrorCodeSchema]);

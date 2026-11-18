@@ -4,7 +4,8 @@
  * regression, not a style issue.
  */
 import type { DerivationDescriptor, FieldSnapshot, FieldSnapshotPayload } from "./provenance.js";
-import type { Envelope, ErrorResponse } from "./response.js";
+import type { Envelope, ErrorCode, ErrorResponse, NotFoundErrorCode } from "./response.js";
+import { notFoundErrorCodeSchema } from "./response.js";
 import type { WeatherValue } from "./weather.js";
 
 type Expect<T extends true> = T;
@@ -78,6 +79,30 @@ export const dependencyUnavailable: ErrorResponse = {
   error: {
     code: "DEPENDENCY_UNAVAILABLE",
     message: "Layanan autentikasi tidak tersedia.",
+    requestId: "018f5b7e-6f3a-7c2b-9d1e-4a5b6c7d8e9f",
+  },
+};
+
+/** A singleton code is assignable without parsing: it is a closed literal set. */
+export const dependencyCode: ErrorCode = "DEPENDENCY_UNAVAILABLE";
+
+/** A family member is only a code once it has been through the schema. */
+export const fieldNotFoundCode: ErrorCode = notFoundErrorCodeSchema.parse("FIELD_NOT_FOUND");
+
+// @ts-expect-error — unvalidated family member: the brand, not the spelling, is the proof
+export const unvalidatedNotFoundCode: NotFoundErrorCode = "FIELD_NOT_FOUND";
+
+// @ts-expect-error — a misspelling is not a code
+export const misspelledCode: ErrorCode = "FIELD_NOT_FOUDN";
+
+// @ts-expect-error — arbitrary strings are not codes
+export const arbitraryCode: ErrorCode = "UNKNOWN_ERROR";
+
+/** An error response carrying a validated family member. */
+export const notFoundErrorResponse: ErrorResponse = {
+  error: {
+    code: notFoundErrorCodeSchema.parse("FIELD_NOT_FOUND"),
+    message: "Petak tidak ditemukan.",
     requestId: "018f5b7e-6f3a-7c2b-9d1e-4a5b6c7d8e9f",
   },
 };
