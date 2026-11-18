@@ -44,16 +44,22 @@ function firstCommand(): string {
  * url", and any command that would connect fails. A missing `NODE_ENV` is
  * *not* development, so a production container cannot silently reach localhost.
  */
-function resolveDatasourceUrl(): string | undefined {
-  const explicit = process.env["DATABASE_URL"];
+export function resolveDatasourceUrl(
+  environment: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const explicit = environment["DATABASE_URL"];
   if (explicit !== undefined && explicit !== "") return explicit;
 
-  if (process.env["NODE_ENV"] !== "development") return undefined;
+  if (environment["NODE_ENV"] !== "development") return undefined;
 
-  const user = encodeURIComponent(process.env["POSTGRES_USER"] ?? DEFAULTS.user);
-  const password = encodeURIComponent(process.env["POSTGRES_PASSWORD"] ?? DEFAULTS.password);
-  const database = encodeURIComponent(process.env["POSTGRES_DB"] ?? DEFAULTS.database);
-  const port = process.env["POSTGRES_PORT"] ?? DEFAULTS.port;
+  // `||`, not `??`: Compose's `${VAR:-default}` treats an empty value as absent,
+  // and an empty string here would build a URL with no user and no port while
+  // Compose quietly used the defaults — the same desync this function exists to
+  // prevent, reachable by leaving one `=` empty.
+  const user = encodeURIComponent(environment["POSTGRES_USER"] || DEFAULTS.user);
+  const password = encodeURIComponent(environment["POSTGRES_PASSWORD"] || DEFAULTS.password);
+  const database = encodeURIComponent(environment["POSTGRES_DB"] || DEFAULTS.database);
+  const port = environment["POSTGRES_PORT"] || DEFAULTS.port;
 
   return `postgresql://${user}:${password}@127.0.0.1:${port}/${database}`;
 }

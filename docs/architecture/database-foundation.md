@@ -43,6 +43,12 @@ the rule depends on it — `process.loadEnvFile` fills in only variables that ar
 not already set, so a `DATABASE_URL` in the process environment wins over the
 file without any save-and-restore dance.
 
+Empty values are treated as absent on both sides. Compose uses `${VAR:-default}`,
+which falls back for an unset *or empty* value; the config therefore uses `||`
+rather than `??`. With `??`, `POSTGRES_PORT=` produced
+`postgresql://:@127.0.0.1:/` while Compose quietly used 5442 — the exact desync
+this file exists to prevent, reachable by leaving one `=` blank.
+
 ## Fail-closed outside development
 
 Development is the only mode permitted to guess:
