@@ -118,6 +118,43 @@ export function checkRoleAttributes(check, name, role) {
 }
 
 /**
+ * The column grant on `app.users` is the whole authentication boundary (S4), so it
+ * is asserted as an exact set rather than as a floor: a column added by accident is
+ * a failure even though it still satisfies "these columns are readable".
+ *
+ * Takes what the catalogue reported so the same function can be driven by a unit
+ * test; the verifier fills it from `has_column_privilege`.
+ */
+export function checkAuthUserColumnGrants(check, held) {
+  const sameSet = (actual, expected) => {
+    const sorted = [...new Set(actual)].sort();
+    return (
+      sorted.length === expected.length && sorted.every((name, index) => name === expected[index])
+    );
+  };
+
+  const select = held.select_columns ?? [];
+  const insert = held.insert_columns ?? [];
+  const update = held.update_columns ?? [];
+
+  check(
+    "app_auth SELECTs exactly the six approved columns of app.users",
+    sameSet(select, ["email", "id", "locale", "password_hash", "role", "timezone"]),
+    JSON.stringify([...select].sort()),
+  );
+  check(
+    "app_auth INSERTs exactly the two approved columns of app.users",
+    sameSet(insert, ["email", "password_hash"]),
+    JSON.stringify([...insert].sort()),
+  );
+  check(
+    "app_auth holds UPDATE on no column of app.users",
+    update.length === 0,
+    JSON.stringify([...update].sort()),
+  );
+}
+
+/**
  * The session table belongs to S5. Checking that it is absent is not a formality:
  * a table created early would make the later migration a no-op and leave the
  * sessions of this phase half-built.
@@ -293,9 +330,8 @@ export async function runPrivilegeVerification({
       JSON.stringify(authOwnership[0]),
     );
 
-    // Same shape one level up. app_auth is the credential that exists before a
-    // tenant does; ADR-004 keeps it at zero table privileges until S4 grants the
-    // identity columns, so the expected set is empty today.
+    // Same shape one level up, over every app table: S4 grants columns on `users`
+    // but no table privilege anywhere, so the expected set is still empty.
     const { rows: authTablePrivileges } = await owner.query(
       `select coalesce(
                 array_agg(c.relname || ':' || p.priv::text order by c.relname, p.priv::text),
@@ -314,8 +350,9 @@ export async function runPrivilegeVerification({
       JSON.stringify(authTablePrivileges[0].held),
     );
 
-    // One aggregate rather than one assertion per column: in S3 the expected set is
-    // empty, so any privilege of any verb on any column of any app table is a defect.
+    // One aggregate rather than one assertion per column, over the tables S4 does
+    // not touch. `users` is excluded here and asserted exactly below; an aggregate
+    // that silently tolerated the six granted columns would prove nothing there.
     const { rows: authColumnPrivileges } = await owner.query(
       `select coalesce(
                 array_agg(c.relname || '.' || a.attname || ':' || p.priv order by c.relname, a.attname),
@@ -327,15 +364,218 @@ export async function runPrivilegeVerification({
          cross join (values ('SELECT'), ('INSERT'), ('UPDATE')) as p(priv)
         where n.nspname = 'app'
           and c.relkind = 'r'
+          and c.relname <> 'users'
           and a.attnum > 0
           and not a.attisdropped
           and has_column_privilege('app_auth', a.attrelid, a.attnum, p.priv)`,
     );
     check(
-      "app_auth holds no column privilege on any app table",
+      "app_auth holds no column privilege on any app table other than users",
       authColumnPrivileges[0].held.length === 0,
       JSON.stringify(authColumnPrivileges[0].held),
     );
+
+    // ------------------------------------- authentication boundary on app.users
+    // S4 in one section: the grant as a set, the policies as text, and the
+    // behaviour as a real login — because a column grant that has never carried a
+    // query is a claim about the catalogue, not about the credential.
+    const { rows: usersRelation } = await owner.query("select to_regclass('app.users') as oid");
+    check("app.users exists", usersRelation[0].oid !== null);
+
+    // `attname` is `name`, and `coalesce(name[], '{}')` resolves the unknown
+    // literal to text — the driver then hands back the array's text form. Casting
+    // the aggregate keeps a genuine `text[]` in the result.
+    const { rows: authUserColumns } = await owner.query(
+      `select coalesce(array_agg(distinct a.attname::text)
+                         filter (where has_column_privilege('app_auth', a.attrelid, a.attnum, 'SELECT')),
+                       '{}'::text[]) as select_columns,
+              coalesce(array_agg(distinct a.attname::text)
+                         filter (where has_column_privilege('app_auth', a.attrelid, a.attnum, 'INSERT')),
+                       '{}'::text[]) as insert_columns,
+              coalesce(array_agg(distinct a.attname::text)
+                         filter (where has_column_privilege('app_auth', a.attrelid, a.attnum, 'UPDATE')),
+                       '{}'::text[]) as update_columns
+         from pg_attribute a
+        where a.attrelid = 'app.users'::regclass
+          and a.attnum > 0
+          and not a.attisdropped`,
+    );
+    checkAuthUserColumnGrants(check, authUserColumns[0]);
+
+    const { rows: authUserTablePrivileges } = await owner.query(
+      `select coalesce(array_agg(p.priv::text order by p.priv::text), '{}') as held
+         from (values ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')) as p(priv)
+        where has_table_privilege('app_auth', 'app.users', p.priv)`,
+    );
+    check(
+      "app_auth holds no table-level privilege on app.users",
+      authUserTablePrivileges[0].held.length === 0,
+      JSON.stringify(authUserTablePrivileges[0].held),
+    );
+
+    // The neighbours must not have gained anything from the new role's arrival.
+    // `has_table_privilege` and `has_column_privilege` are both consulted: a
+    // column grant to app_api would be invisible to the first.
+    for (const role of ["app_api", "app_system"]) {
+      const { rows } = await owner.query(
+        `select coalesce(array_agg(p.priv::text order by p.priv::text), '{}') as table_privs,
+                (select count(*)::integer
+                   from pg_attribute a
+                  where a.attrelid = 'app.users'::regclass
+                    and a.attnum > 0
+                    and not a.attisdropped
+                    and (has_column_privilege($1, a.attrelid, a.attnum, 'SELECT')
+                      or has_column_privilege($1, a.attrelid, a.attnum, 'INSERT')
+                      or has_column_privilege($1, a.attrelid, a.attnum, 'UPDATE'))) as column_privs
+           from (values ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')) as p(priv)
+          where has_table_privilege($1, 'app.users', p.priv)`,
+        [role],
+      );
+      check(
+        `${role} holds no privilege on app.users`,
+        rows[0].table_privs.length === 0 && rows[0].column_privs === 0,
+        JSON.stringify(rows[0]),
+      );
+    }
+
+    const { rows: usersRls } = await owner.query(
+      `select c.relrowsecurity as rls,
+              c.relforcerowsecurity as force_rls,
+              pg_get_userbyid(c.relowner) as owner_name
+         from pg_class c
+        where c.oid = 'app.users'::regclass`,
+    );
+    check("app.users keeps ENABLE ROW LEVEL SECURITY", usersRls[0]?.rls === true);
+    check("app.users keeps FORCE ROW LEVEL SECURITY", usersRls[0]?.force_rls === true);
+    check(
+      "app.users is owned by migration_owner",
+      usersRls[0]?.owner_name === "migration_owner",
+      usersRls[0]?.owner_name,
+    );
+
+    const { rows: userPolicies } = await owner.query(
+      `select policyname, cmd, roles::text as roles, qual, with_check
+         from pg_policies
+        where schemaname = 'app' and tablename = 'users'`,
+    );
+    const userPolicy = (name) => userPolicies.find((policy) => policy.policyname === name);
+
+    check(
+      "users_auth_lookup is FOR SELECT TO app_auth USING (true)",
+      userPolicy("users_auth_lookup")?.cmd === "SELECT" &&
+        userPolicy("users_auth_lookup")?.roles === "{app_auth}" &&
+        userPolicy("users_auth_lookup")?.qual === "true",
+      JSON.stringify(userPolicy("users_auth_lookup") ?? null),
+    );
+    check(
+      "users_auth_register is FOR INSERT TO app_auth WITH CHECK (true)",
+      userPolicy("users_auth_register")?.cmd === "INSERT" &&
+        userPolicy("users_auth_register")?.roles === "{app_auth}" &&
+        userPolicy("users_auth_register")?.with_check === "true",
+      JSON.stringify(userPolicy("users_auth_register") ?? null),
+    );
+    // S4 adds two policies and rewrites none. The tenant policy is quoted here
+    // because a rewrite would look like a working login and a broken isolation.
+    check(
+      "users_self_only is still FOR ALL TO app_api keyed on app.user_id",
+      userPolicy("users_self_only")?.cmd === "ALL" &&
+        userPolicy("users_self_only")?.roles === "{app_api}" &&
+        userPolicy("users_self_only")?.qual?.includes("app.user_id") === true &&
+        userPolicy("users_self_only")?.with_check?.includes("app.user_id") === true,
+      JSON.stringify(userPolicy("users_self_only") ?? null),
+    );
+    check(
+      "users_owner_full_access is still FOR ALL TO migration_owner",
+      userPolicy("users_owner_full_access")?.cmd === "ALL" &&
+        userPolicy("users_owner_full_access")?.roles === "{migration_owner}",
+      JSON.stringify(userPolicy("users_owner_full_access") ?? null),
+    );
+    check(
+      "no authentication policy is FOR ALL, and none names PUBLIC",
+      !userPolicies.some(
+        (policy) =>
+          policy.roles === "{public}" || (policy.roles === "{app_auth}" && policy.cmd === "ALL"),
+      ),
+      JSON.stringify(
+        userPolicies.map((policy) => `${policy.policyname}:${policy.cmd}:${policy.roles}`),
+      ),
+    );
+
+    // Behavioural half. The row is inserted by app_auth — which is the
+    // registration probe — and removed by migration_owner, because app_auth has
+    // no DELETE. A row of its own is the only way to prove the lookup works with
+    // no `app.user_id` set.
+    const authEmail = `auth_probe_${probes.token}@verify.invalid`;
+    try {
+      const { rows: registered } = await auth.query(
+        "insert into app.users (email, password_hash) values ($1, $2) returning id",
+        [authEmail, "verification-probe-not-a-hash"],
+      );
+      check(
+        "app_auth can INSERT a user and read the generated columns back",
+        typeof registered[0]?.id === "string" && registered[0].id.length === 36,
+        JSON.stringify(registered[0] ?? null),
+      );
+
+      const { rows: lookup } = await auth.query(
+        `select id, email, password_hash, role, locale, timezone
+           from app.users where email = $1`,
+        [authEmail],
+      );
+      check(
+        "app_auth can SELECT the six granted columns with no app.user_id set",
+        lookup.length === 1 &&
+          lookup[0].email === authEmail &&
+          lookup[0].role === "owner" &&
+          lookup[0].locale === "id" &&
+          lookup[0].timezone === "Asia/Jakarta",
+        JSON.stringify(lookup[0] ?? null),
+      );
+
+      // Defaults are the reason `role`/`locale`/`timezone` need no INSERT grant:
+      // the database owns them, and the row above proves it.
+      await denied(
+        auth,
+        "app_auth cannot SELECT app.users.created_at",
+        "select created_at from app.users",
+      );
+      await denied(
+        auth,
+        "app_auth cannot SELECT app.users.updated_at",
+        "select updated_at from app.users",
+      );
+      await denied(
+        auth,
+        "app_auth cannot SELECT every column of app.users",
+        "select * from app.users",
+      );
+      // One probe per ungranted column, with a value of the column's own type: an
+      // ill-typed parameter would fail 22P02 during bind, and a check that cannot
+      // tell a type error from a denial proves nothing.
+      const unapprovedInsertValues = {
+        id: "00000000-0000-7000-8000-000000000000",
+        role: "admin",
+        locale: "id",
+        timezone: "Asia/Jakarta",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+      };
+      for (const [column, value] of Object.entries(unapprovedInsertValues)) {
+        await denied(
+          auth,
+          `app_auth cannot INSERT app.users.${column}`,
+          `insert into app.users (email, password_hash, ${column}) values ($1, $2, $3)`,
+          [`auth_probe_rejected_${column}_${probes.token}@verify.invalid`, "x", value],
+        );
+      }
+      await denied(auth, "app_auth cannot UPDATE app.users", "update app.users set locale = 'en'");
+      await denied(auth, "app_auth cannot DELETE from app.users", "delete from app.users");
+    } finally {
+      // Cleanup cannot be a denial: it runs as the owner, through its own policy.
+      await owner
+        .query("delete from app.users where email = $1", [authEmail])
+        .catch(() => undefined);
+    }
 
     // S3 and S4 do not create the session table; asserting its absence here keeps a
     // `42P01` from ever being recorded as a privilege denial. When S5 lands, S6 owns
@@ -562,9 +802,9 @@ export async function runPrivilegeVerification({
     // ---------------------------------------------------------- app_auth: deny
     // This credential is the one ADR-004 says must not be trusted as a second
     // boundary. Its bounds are asserted behaviourally rather than inferred from
-    // an empty ACL: `app.users` exists, so a denial here is 42501 and not a
-    // missing relation.
-    await denied(auth, "app_auth cannot SELECT app.users", "select * from app.users");
+    // a narrow ACL: the probe table exists, so a denial here is 42501 and not a
+    // missing relation. Its one granted table — `app.users` — is exercised in the
+    // authentication-boundary section above, which also proves the column limits.
     await denied(
       auth,
       "app_auth cannot SELECT an ungranted table",
@@ -921,8 +1161,21 @@ export async function runPrivilegeVerification({
 
     // app_api owns its tenant's data on farms and fields, and holds no grant at
     // all on users: email lookup is the authentication path, which runs before a
-    // tenant context exists and is deliberately deferred rather than half-built.
+    // tenant context exists and runs as `app_auth`, not as the request credential.
+    // INSERT is asserted separately because a table-wide SELECT denial says nothing
+    // about the write path, and a column grant is invisible to both.
     await denied(api, "app_api holds no grant on app.users", "select * from app.users");
+    await denied(
+      api,
+      "app_api cannot insert into app.users",
+      "insert into app.users (email, password_hash) values ('api_probe@verify.invalid', 'x')",
+    );
+    await denied(system, "app_system cannot select from app.users", "select * from app.users");
+    await denied(
+      system,
+      "app_system cannot insert into app.users",
+      "insert into app.users (email, password_hash) values ('system_probe@verify.invalid', 'x')",
+    );
   } finally {
     // Only what this run created, and only if creation succeeded. A name that
     // collided with something else is reported by the check above, not dropped.
