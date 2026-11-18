@@ -105,7 +105,20 @@ rather than the values re-listed. Re-listing is how the two drift.
 | 5.10 | no document claims the database enforces an application-level invariant | checked: the partition invariant, freshness, and `inputRefs` referential integrity are all stated as *not* database-enforced (`provenance-storage.md` §2, §4, §5) |
 | 5.11 | no document references a nonexistent file as a valid destination | one existed: `open-decisions.md` pointed at `ADR-004`, which does not exist. **Fixed** — it now says the ADR does not exist and is not written |
 | 5.12 | no ADR status changed silently | `ADR-003` is **Proposed**, matching `ADR-001`/`ADR-002`. It has been Proposed since it was written; nothing was promoted or demoted |
-| 5.13 | no document claims implemented code where only a specification exists | checked: every spec table is marked `spec` in `entity-catalog.md`, and only `users`/`farms`/`fields` are marked `impl` |
+| 5.13 | no document claims implemented code where only a specification exists | *(Phase 2.3 snapshot)* checked at the time: every spec table was marked `spec` in `entity-catalog.md`, and only `users`/`farms`/`fields` were marked `impl`. **Superseded — see the amendment below.** |
+
+> **Amendment (Phase 3).** The row above is the Phase 2.3 result, preserved apart
+> from a `Phase 2.3 snapshot` label and a pointer to this note, because the finding
+> was correct for the repository as it stood then:
+> three tables existed and nineteen did not. Phase 2.4 classified the decisions and
+> Phase 3 created the other nineteen tables in
+> `20261118030000_domain_tables`, so the `impl`/`spec` distinction no longer
+> describes anything real — `entity-catalog.md`'s `State` column was relabelled
+> `Phase 2.2.3` / `Phase 3` in the Phase 3.1 pass, recording *when* each table
+> arrived rather than whether it exists. The check itself still holds in its
+> general form: no document claims a runtime capability because its table exists —
+> ingestion, agronomy evaluation, the AI briefing, and authentication are all
+> unimplemented and are described as such.
 
 ## §6 — Defects found in *other* documents (not fixed here)
 

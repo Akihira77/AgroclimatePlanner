@@ -4,9 +4,25 @@ Tenant-owned: 10 tables. Global/reference: 12 tables. This document is the
 complete matrix, the policy text, and the two problems the matrix creates that
 are **not** solved here.
 
-Nothing in this document is implemented. The three existing policies are quoted
-from `prisma/migrations/20261118020000_tenant_tables/migration.sql`; the rest is
-the specification Phase 3 applies.
+This model is **implemented** for all 22 domain tables. Ten tenant-owned tables
+carry `ENABLE` + `FORCE ROW LEVEL SECURITY` with a `FOR ALL TO app_api` policy and
+a `*_owner_full_access` policy for `migration_owner`. The twelve global/reference
+tables have no RLS because they have no tenant ownership column to filter on.
+Runtime grants and privilege boundaries are applied and verified — `db:verify`
+(355 assertions), the tenant-isolation suite (39 tests, as the real `app_api` role
+through `withTenant`), and the schema-conformance suite (12 tests).
+
+Implementation is not the same as resolution. `OPEN-01` is still open: `app_api`
+holds no grant on `app.users`, so nothing can read the credential that would
+establish a tenant context in the first place. The trusted-tenant-context problem
+analysed in §5 is likewise still open, and RLS remains containment of forgotten
+filters, not a boundary against arbitrary SQL executed with a compromised
+`app_api` credential. Neither is solved here or anywhere else in the repository.
+
+The policy text for `users`/`farms`/`fields` is quoted from
+`prisma/migrations/20261118020000_tenant_tables/migration.sql`; the remaining
+nineteen tables' policies and grants are in
+`prisma/migrations/20261118030000_domain_tables/migration.sql`.
 
 ## 1. Roles
 

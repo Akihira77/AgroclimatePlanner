@@ -10,7 +10,7 @@ workflow.
 
 | Layer                                           | State                                                                                                                                     |
 | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Monorepo                                        | implemented — pnpm workspaces + Turborepo, four packages, pinned versions                                                                 |
+| Monorepo                                        | implemented — pnpm workspaces + Turborepo, three applications and two shared packages, pinned versions                                    |
 | Contracts                                       | implemented — Zod schemas, provenance contract, canonical serialisation, SHA-256 golden vectors                                           |
 | Database                                        | implemented — 22 domain tables in schema `app`, RLS forced on every tenant-owned table, three explicit roles, hand-written SQL migrations |
 | API                                             | scaffold only — one health endpoint, no authentication, no domain routes                                                                  |
