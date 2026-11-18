@@ -2,27 +2,39 @@
 
 | Field | Value |
 |---|---|
-| Status | **AWAITING OWNER DECISION** — nothing in this document is approved |
+| Status | **OWNER DECISIONS RECORDED** — 4 of 4 decided on 2026-11-18 |
 | Prepared from | `8799160` (`docs(review): split approval from implementation dependency`) |
 | Authoritative source | `docs/review/phase-3.2-design-review.md` (verdict: `READY FOR OWNER DECISIONS`) |
 | Decisions requested | 4 — `AG-1`, `AG-2`, `IG-5`, `IG-11` |
-| Owner decisions made so far | **0** |
-| Implementation started | **No** |
-| `OPEN-nn` dispositions changed | **No** |
+| Owner decisions made so far | **4 of 4** |
+| Implementation started | **No** — a decision is not a line of code, a migration, or an ADR |
+| `OPEN-nn` dispositions changed | **No** — `OPEN-01` and `OPEN-13` remain unresolved |
 
 This record exists so the owner can decide without reading 1,100 lines of review. It
 restates the review's recommendations; it does not add to them. Where a detail is
 shortened, §16 and §17 of the review remain the authority.
 
-Nothing here is a decision. Every field that could be read as approval is left
-blank, and no `OPEN` disposition has moved.
+**Approval is not implementation.** The four decisions below are recorded; no code,
+migration, role, grant, policy, or ADR exists because of them. `OPEN-01` and `OPEN-13`
+stay below `RESOLVED`: per the review's Definition of Done, resolution requires an
+accepted ADR **and** an applied migration **and** green verification evidence — not an
+approval. Until then the register's dispositions are unchanged.
+
+## Recorded decisions
+
+| ID | Decided | Date | Approver |
+|---|---|---|---|
+| `AG-1` | **A** — dedicated `app_auth` role, column grants on `app.users` only | 2026-11-18 | Repository owner |
+| `AG-2` | **A** — PostgreSQL `app.sessions`, preserving `ADR-002` D5 | 2026-11-18 | Repository owner |
+| `IG-5` | **A / C-1** — shared envelope plus one new code, `DEPENDENCY_UNAVAILABLE` | 2026-11-18 | Repository owner |
+| `IG-11` | **`node:test`** for `apps/api` | 2026-11-18 | Repository owner |
 
 ## Reading legend
 
 | Tag | Means |
 |---|---|
 | `[V]` | verified in this repository by reading the cited file |
-| `[P]` | proposal from the design review — **not approved** |
+| `[P]` | proposal from the design review — approved only where the corresponding owner decision form records it |
 | `[O]` | this document's own inference or wording, not a repository fact |
 
 ## Decision index
@@ -274,16 +286,16 @@ with the named evidence:
 | Field | Value |
 |---|---|
 | Recommended option | **A** — dedicated `app_auth` role, `NOINHERIT`, `NOBYPASSRLS`, column grants on `app.users` only |
-| Selected option | **Pending owner decision** |
-| Decision | **Pending** |
-| Approved by | ____________________ |
-| Approval date | ____________________ |
-| Rationale / notes | ____________________ |
-| Accepted residual risks | ____________________ |
+| Selected option | **A** — dedicated `app_auth` role with column-level grants on `app.users` |
+| Decision | **Approved by repository owner** |
+| Approved by | Repository owner |
+| Approval date | 2026-11-18 |
+| Rationale / notes | Separates credential lookup from the tenant-facing `app_api`. No access to tenant, weather, or catalog tables. The login path needs no `SECURITY DEFINER` function. The privilege boundary is verifiable through `db:verify`. |
+| Accepted residual risks | `app_auth` can read every email and password hash, and can create accounts outside the registration flow (R-1, R-2, R-5). With `AG-2` = table it can also mint a session for any `user_id` and un-revoke one (R-3, R-4). Compromise of the API process yields **both** credentials together (R-7), since both clients run in one process. Enumeration is inherent: the lookup *is* the enumeration. |
 
 ```
-Approve:  ☐ A   ☐ B2   ☐ other (specify): ____________      Reject: ☐
-Approved by: ____________________   Date: __________
+Approved:  ☑ A   ☐ B2   ☐ other (specify): ____________      Rejected: ☐
+Approved by: Repository owner   Date: 2026-11-18
 ```
 
 ---
@@ -476,22 +488,22 @@ implementer's fallback.
 | Field | Value |
 |---|---|
 | Recommended option | **A** — PostgreSQL table `app.sessions`, preserving `ADR-002` D5 |
-| Selected option | **Pending owner decision** |
-| Decision | **Pending** |
-| Approved by | ____________________ |
-| Approval date | ____________________ |
-| Rationale / notes | ____________________ |
-| Accepted residual risks | ____________________ |
+| Selected option | **A** — PostgreSQL `app.sessions`, accessed only by `app_auth`; opaque 32-byte CSPRNG tokens, base64url, only `sha256(token)` stored, 30-day sliding and 90-day absolute expiry, explicit revocation via `revoked_at`, hourly garbage collection |
+| Decision | **Approved by repository owner** |
+| Approved by | Repository owner |
+| Approval date | 2026-11-18 |
+| Rationale / notes | Preserves `ADR-002` D5. PostgreSQL is already provisioned and already covered by backup and restore. No Redis infrastructure dependency is added. Session lifecycle and the privilege boundary are testable with the existing database harness. |
+| Accepted residual risks | One database round-trip per authenticated request (S-1) and a second pre-identity read (S-2), which is the real argument for Redis. A GC job that does not exist yet (S-3). Session rows readable by the auth credential without a tenant context (S-4). Un-revocation cannot be prevented by a column grant (S-5). S-6 and S-7 do not apply: option B was not selected and neither option was rejected. |
 
 ```
-Approve A (PostgreSQL table):  ☐
-Approve B (Redis, requires ADR-002 D5 amendment in the same change):  ☐
-Reject both (OPEN-13 stays unresolved; no session storage may be implemented):  ☐
-Approved by: ____________________   Date: __________
+Approved A (PostgreSQL table):  ☑
+Approved B (Redis, requires ADR-002 D5 amendment in the same change):  ☐
+Rejected both (OPEN-13 stays unresolved; no session storage may be implemented):  ☐
+Approved by: Repository owner   Date: 2026-11-18
 ```
 
-An unsigned form is **no decision**, not a rejection. Exactly one box may be marked;
-marking two leaves the decision unmade.
+Exactly one box is marked. Two marked boxes would leave the decision unmade; none
+marked would have meant no decision, not a rejection.
 
 ---
 
@@ -532,7 +544,7 @@ UnauthorizedException('...')`.
 `[P]` **Option A: extend, do not fork.** Seed the enum from `api-conventions.md:37-47`
 and add exactly one code for dependency unavailability.
 
-### Proposed mapping (for owner review — not approved)
+### Decided mapping
 
 | Status | Code | Use in the auth subsystem | New? |
 |---|---|---|---|
@@ -543,24 +555,24 @@ and add exactly one code for dependency unavailability.
 | 409 | `CONFLICT` | duplicate registration (`IG-2` has not chosen this yet) | existing |
 | 429 | `RATE_LIMITED` | login/register attempts over budget, with `Retry-After` | existing |
 | 503 | `PROVIDER_UNAVAILABLE` | weather provider has no usable value and no permitted fallback — **weather only, as currently worded** | existing |
-| 503 | *one new code* | session store / database unreachable | **proposed** |
+| 503 | **`DEPENDENCY_UNAVAILABLE`** | session store / database unreachable | **approved 2026-11-18** |
 
-`[O]` The single genuinely open wording question, which the owner decides rather than
-the implementer: `503 PROVIDER_UNAVAILABLE` already exists for a *weather* dependency.
-Two readings are defensible and they produce different clients:
+`[O]` The one genuinely open wording question — `503 PROVIDER_UNAVAILABLE` already
+exists for a *weather* dependency — was put to the owner rather than settled by the
+implementer. Two readings were defensible and they produce different clients:
 
-- **C-1** — add one code, e.g. `DEPENDENCY_UNAVAILABLE`, and keep
-  `PROVIDER_UNAVAILABLE` for weather providers only. Explicit, but two 503 codes
-  exist and clients must handle both.
-- **C-2** — redefine `PROVIDER_UNAVAILABLE` as "any upstream dependency is
-  unavailable" and add no code at all. Simpler client surface, but it widens the
+- **C-1 (approved)** — add one code, `DEPENDENCY_UNAVAILABLE`, and keep
+  `PROVIDER_UNAVAILABLE` for weather providers only. Explicit, at the cost of two
+  distinct 503 codes that clients must handle.
+- **C-2 (not selected)** — redefine `PROVIDER_UNAVAILABLE` as "any upstream dependency
+  is unavailable" and add no code at all. Simpler client surface, but it widens the
   meaning of a code the provenance contract already relies on, and a weather-specific
-  `retryAfter` semantic now applies to a database outage.
+  `retryAfter` semantic would then apply to a database outage.
 
-The review's wording ("add exactly one code for dependency unavailability") matches
-**C-1**. This document records that reading and flags it rather than assuming the
-owner agrees; choosing C-2 is a legitimate answer that would revise the review's
-sentence, not violate it.
+The owner selected **C-1** on 2026-11-18: the two codes stay distinct so that a client
+can tell a weather outage from an authentication-infrastructure outage, and
+`PROVIDER_UNAVAILABLE` keeps its existing meaning in the weather domain. The trade-off
+accepted with it is two 503 codes on the client side.
 
 ### Behavioural rules the contract must carry
 
@@ -643,16 +655,16 @@ track, not one endpoint.
 | Field | Value |
 |---|---|
 | Recommended option | **A** — extend the existing envelope; seed the enum from `api-conventions.md:37-47`; add exactly one dependency-unavailability code (C-1) |
-| Selected option | **Pending owner decision** |
-| Decision | **Pending** |
-| Approved by | ____________________ |
-| Approval date | ____________________ |
-| Rationale / notes | ____________________ |
-| Accepted residual risks | ____________________ |
+| Selected option | **A / C-1** — one shared error envelope, plus one new code `DEPENDENCY_UNAVAILABLE`; `PROVIDER_UNAVAILABLE` stays specific to weather providers |
+| Decision | **Approved by repository owner** |
+| Approved by | Repository owner |
+| Approval date | 2026-11-18 |
+| Rationale / notes | Specific meanings: a client can distinguish a weather outage from an authentication-infrastructure outage. `PROVIDER_UNAVAILABLE` keeps its existing semantics in the weather domain, so the provenance contract is untouched. |
+| Accepted residual risks | Two distinct 503 codes exist and clients must handle both (E-1). The `message` is user-facing copy and may change; clients must key on `code` (E-3). The contract cannot prevent an implementer throwing an unmapped `Error` — that is the filter's job and the contract tests' subject (E-2). Duplicate-registration disclosure (`IG-2`) stays outside this decision (E-4). |
 
 ```
-Approve:  ☐ A (C-1: one new code)   ☐ A (C-2: widen PROVIDER_UNAVAILABLE)   ☐ other (specify): ____________      Reject: ☐
-Approved by: ____________________   Date: __________
+Approved:  ☑ A (C-1: one new code)   ☐ A (C-2: widen PROVIDER_UNAVAILABLE)   ☐ other (specify): ____________      Rejected: ☐
+Approved by: Repository owner   Date: 2026-11-18
 ```
 
 ---
@@ -782,16 +794,16 @@ record — installation is implementation.
 | Field | Value |
 |---|---|
 | Recommended option | **`node:test`**, matching `packages/database` |
-| Selected option | **Pending owner decision** |
-| Decision | **Pending** |
-| Approved by | ____________________ |
-| Approval date | ____________________ |
-| Rationale / notes | ____________________ |
-| Accepted residual risks | ____________________ |
+| Selected option | **`node:test`** — the built-in Node.js test runner for `apps/api` |
+| Decision | **Approved by repository owner** |
+| Approved by | Repository owner |
+| Approval date | 2026-11-18 |
+| Rationale / notes | Already used by `packages/database`. Adds no dependency, so no third runner enters the repository. Fits the integration and security tests that need a real PostgreSQL and real privilege grants. |
+| Accepted residual risks | API TypeScript needs a compile step or a TS loader before the tests run (T-1). Less ergonomic assertions than `expect` (T-2). Two runners continue to coexist — `node:test` and Vitest — which this decision records rather than resolves (T-3). Database-backed API tests require a running database (T-4). |
 
 ```
-Approve:  ☐ node:test   ☐ Vitest   ☐ other (specify): ____________      Reject: ☐
-Approved by: ____________________   Date: __________
+Approved:  ☑ node:test   ☐ Vitest   ☐ other (specify): ____________      Rejected: ☐
+Approved by: Repository owner   Date: 2026-11-18
 ```
 
 ---
@@ -845,6 +857,10 @@ sessions). Track 3 cannot — `S7` and `S8` additionally require `IG-1` through 
 `IG-6` through `IG-10`, none of which is answered here and none of which changes the
 boundary.
 
+**As of 2026-11-18 the gates for S1, S2, S3, S4, and S5 are satisfied by approval.**
+They are not satisfied by work: no contract schema, no exception filter, no `app_auth`
+role, no migration, and no verification row exists yet.
+
 # What these decisions do not settle
 
 | Not settled | Where it lives | Blocks |
@@ -865,6 +881,15 @@ boundary.
 
 No `OPEN` disposition has changed in `docs/data-model/open-decisions.md`, no ADR has
 been created or modified, and no implementation exists for any of the above.
+
+`IG-1` through `IG-4` and `IG-6` through `IG-10` are **not** approved by this record and
+were not part of it. Only `AG-1`, `AG-2`, `IG-5`, and `IG-11` were put to the owner, and
+only those four carry an approval date.
+
+`OPEN-01` and `OPEN-13` remain **unresolved** despite their decisions being approved.
+The review's rule stands: a disposition moves to `RESOLVED` when the ADR is accepted,
+the migration is applied, and the verification evidence is green — three facts about
+the repository, none of which an approval can supply.
 
 # Source inconsistencies encountered while preparing this record
 
