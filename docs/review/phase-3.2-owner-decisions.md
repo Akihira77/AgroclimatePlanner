@@ -133,10 +133,17 @@ instead of data.
 
 `[O]` The boundary is worth a fourth role because it separates two capabilities that
 have nothing to do with each other: *"read one credential row for an address"* and
-*"read and write every tenant row the caller owns"*. Today those live in different
-processes anyway. Merging them into `app_api` would make every tenant-facing code
-path a credential-read surface, permanently, with no way to tell from a grant dump
-which repository code was allowed to do what.
+*"read and write every tenant row the caller owns"*. Merging them into `app_api`
+would make every tenant-facing code path a credential-read surface, permanently,
+with no way to tell from a grant dump which repository code was allowed to do what.
+
+**This is a database-privilege boundary, not a process boundary.** The design review
+places the `app_auth` client in the same process as the tenant client
+(`phase-3.2-design-review.md:143` — "a second client in the same process"). The
+separation therefore constrains what each *credential* may do; it does not constrain
+what an attacker holding the *process* can do, because such an attacker has both
+credentials. An earlier revision of this section said the two capabilities already
+live in different processes today. That was wrong and is corrected here.
 
 Column-level grants express the intended read precisely: the login path needs six
 columns, not the row. `email_normalized` does not exist, `updated_at` triggers are
@@ -174,6 +181,13 @@ credential table. Choosing Redis for AG-2 does not remove this: it relocates the
 same power to whoever holds the store credential. The owner must accept this
 residual risk explicitly, not as a footnote.
 
+**And the role boundary does not survive process compromise.** Both clients live in
+one process (`phase-3.2-design-review.md:143`), so an attacker who owns that process —
+RCE, a compromised dependency, a poisoned config read — holds the tenant credential
+and the auth credential together. The fourth role limits what each credential reaches;
+it says nothing about what the process reaches. Hardening the process is out of scope
+for this decision and must not be inferred from it.
+
 Operational implications: a fourth DSN to provision, rotate, and audit; a fourth row
 in every privilege-verification matrix; one more credential whose leak is an
 incident rather than a bug.
@@ -188,6 +202,7 @@ incident rather than a bug.
 | R-4 | Un-revocation cannot be prevented by a column grant | Accepted, disclosed — the grant expresses which columns may change, not in which direction |
 | R-5 | Argon2id is not in core PostgreSQL, so the hash necessarily leaves the database | Accepted; not addressed by this decision |
 | R-6 | `users_email_key UNIQUE (email)` is case-sensitive; normalisation is an application invariant | Untouched by AG-1; belongs to `IG-1` |
+| R-7 | Both credentials are held by one API process, so compromising that process yields `app_auth` and `app_api` together — the role boundary does not survive it | Accepted, disclosed. A property of the deployment, not of the grants; hardening the process is out of scope for this decision |
 
 None of these is resolved here. They are the price of a password-based login, and
 the purpose of recording them is that item 15 of the review's Definition of Done
