@@ -4,3 +4,9 @@
  */
 export const APP_CONFIG = Symbol("APP_CONFIG");
 export const DATABASE_CLIENT = Symbol("DATABASE_CLIENT");
+/**
+ * The `app_auth` pool. A separate token, not a second name for
+ * `DATABASE_CLIENT`: injecting the wrong one has to be a wiring error, and the
+ * two clients must never be substitutable.
+ */
+export const AUTH_DATABASE_CLIENT = Symbol("AUTH_DATABASE_CLIENT");

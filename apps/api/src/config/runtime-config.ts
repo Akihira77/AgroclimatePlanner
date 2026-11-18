@@ -17,6 +17,8 @@ export interface RuntimeConfig {
   readonly port: number;
   /** `app_api` connection string. Never a migration credential. */
   readonly databaseUrl: string;
+  /** `app_auth` connection string. Separate credential, separate pool. */
+  readonly authDatabaseUrl: string;
   readonly corsOrigins: readonly string[];
   /** Express `trust proxy` value. `false` unless an operator says otherwise. */
   readonly trustProxy: false | readonly string[];
@@ -41,14 +43,37 @@ const DATABASE_DEFAULTS = {
 
 const DEVELOPMENT_CORS_ORIGIN = "http://localhost:5173";
 
-/** The only role the API may run as. See `assertRuntimeRole`. */
+/** The only role the tenant-facing API may run as. See `assertRuntimeRole`. */
 const RUNTIME_ROLE = "app_api";
+
+/**
+ * The authentication role. It reaches credentials before a tenant context
+ * exists, which is exactly why it gets its own client and its own URL rather
+ * than sharing the runtime pool (ADR-004).
+ */
+const AUTH_ROLE = "app_auth";
+
+/**
+ * Development-only placeholder, mirrored from
+ * `packages/database/database.defaults.json` so a volume bootstrapped with the
+ * package defaults accepts the API's derived auth URL. Production never derives
+ * this URL, so the literal cannot travel there.
+ */
+const DEVELOPMENT_AUTH_PASSWORD = "app_auth_dev";
 
 /** Roles this project defines that are explicitly not runtime identities. */
 const NON_RUNTIME_ROLES: ReadonlySet<string> = new Set([
   "migration_owner",
   "app_system",
   "app_auth",
+  "postgres",
+]);
+
+/** Roles that must never be the authentication credential. */
+const NON_AUTH_ROLES: ReadonlySet<string> = new Set([
+  "migration_owner",
+  "app_api",
+  "app_system",
   "postgres",
 ]);
 
@@ -67,6 +92,7 @@ export function parseRuntimeConfig(env: EnvironmentInput): RuntimeConfig {
     nodeEnv,
     port: parsePort(env["PORT"]),
     databaseUrl: parseDatabaseUrl(env, nodeEnv),
+    authDatabaseUrl: parseAuthDatabaseUrl(env, nodeEnv),
     corsOrigins: parseCorsOrigins(env, nodeEnv),
     trustProxy: parseTrustProxy(env["TRUST_PROXY"]),
     trustRequestIdHeader: parseBoolean(env["TRUST_REQUEST_ID_HEADER"], "TRUST_REQUEST_ID_HEADER"),
@@ -113,10 +139,47 @@ function parseDatabaseUrl(env: EnvironmentInput, nodeEnv: NodeEnvironment): stri
     );
   }
 
+  return developmentUrl(env, RUNTIME_ROLE, password);
+}
+
+/**
+ * The authentication connection string.
+ *
+ * Production must state it. There is deliberately no fallback to
+ * `APP_API_DATABASE_URL` or `MIGRATION_DATABASE_URL`: deriving one role's URL
+ * from another's credential would erase the separation the two pools exist to
+ * preserve, and a misconfiguration would then look like a working system.
+ *
+ * Development may derive it, because a local volume is bootstrapped with the
+ * package defaults. The derived password comes from `APP_AUTH_PASSWORD` when it
+ * is set, otherwise from the same development placeholder the bootstrap uses.
+ */
+function parseAuthDatabaseUrl(env: EnvironmentInput, nodeEnv: NodeEnvironment): string {
+  const explicit = env["APP_AUTH_DATABASE_URL"];
+  if (explicit !== undefined && explicit !== "") {
+    assertAuthRole(parsePostgresUrl(explicit, "APP_AUTH_DATABASE_URL"));
+    return explicit;
+  }
+
+  if (nodeEnv === "production") {
+    throw new ConfigurationError(
+      "APP_AUTH_DATABASE_URL is required in production; it is never derived from another role's connection string",
+    );
+  }
+
+  const password = env["APP_AUTH_PASSWORD"];
+  return developmentUrl(
+    env,
+    AUTH_ROLE,
+    password === undefined || password === "" ? DEVELOPMENT_AUTH_PASSWORD : password,
+  );
+}
+
+function developmentUrl(env: EnvironmentInput, role: string, password: string): string {
   const host = env["POSTGRES_HOST"] ?? DATABASE_DEFAULTS.host;
   const port = env["POSTGRES_PORT"] ?? DATABASE_DEFAULTS.port;
   const database = env["POSTGRES_DB"] ?? DATABASE_DEFAULTS.database;
-  return `postgresql://${RUNTIME_ROLE}:${encodeURIComponent(password)}@${host}:${port}/${database}?schema=app`;
+  return `postgresql://${role}:${encodeURIComponent(password)}@${host}:${port}/${database}?schema=app`;
 }
 
 function parsePostgresUrl(value: string, variable: string): URL {
@@ -162,6 +225,35 @@ function assertRuntimeRole(url: URL): void {
 
   throw new ConfigurationError(
     `APP_API_DATABASE_URL must connect as ${RUNTIME_ROLE}; refusing an unrecognised role`,
+  );
+}
+
+/**
+ * The authentication identity, with the allowed and forbidden sets swapped.
+ *
+ * Kept separate from `assertRuntimeRole` on purpose: one function taking an
+ * "expected role" parameter would make the two boundaries look symmetric, and a
+ * later caller could then pass whichever role was convenient. Two functions with
+ * hard-coded literals cannot be called with the wrong expectation.
+ */
+function assertAuthRole(url: URL): void {
+  let username: string;
+  try {
+    username = decodeURIComponent(url.username);
+  } catch {
+    throw new ConfigurationError("APP_AUTH_DATABASE_URL has a malformed username");
+  }
+
+  if (username === AUTH_ROLE) return;
+
+  if (NON_AUTH_ROLES.has(username)) {
+    throw new ConfigurationError(
+      `APP_AUTH_DATABASE_URL must connect as ${AUTH_ROLE}; ${username} is not the authentication identity`,
+    );
+  }
+
+  throw new ConfigurationError(
+    `APP_AUTH_DATABASE_URL must connect as ${AUTH_ROLE}; refusing an unrecognised role`,
   );
 }
 

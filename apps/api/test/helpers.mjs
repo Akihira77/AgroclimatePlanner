@@ -9,6 +9,9 @@ export function testConfig(overrides = {}) {
     // purpose, so a test that accidentally used the real factory would fail
     // instead of hanging.
     databaseUrl: "postgresql://app_api:test@127.0.0.1:1/agroclimate?schema=app",
+    // A different role and a different port, so a test that mixed the two
+    // clients up would fail on the value rather than silently pass.
+    authDatabaseUrl: "postgresql://app_auth:test@127.0.0.1:1/agroclimate?schema=app",
     corsOrigins: ["http://localhost:5173"],
     trustProxy: false,
     trustRequestIdHeader: false,

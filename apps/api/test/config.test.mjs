@@ -149,3 +149,90 @@ describe("runtime credential boundary", () => {
     );
   });
 });
+
+describe("authentication database configuration", () => {
+  const url = (user, password = "s3cretp4ss") => `postgresql://${user}:${password}@db:5432/app`;
+
+  it("accepts only the app_auth role", () => {
+    const config = parse({ APP_AUTH_DATABASE_URL: url("app_auth") });
+    assert.equal(new URL(config.authDatabaseUrl).username, "app_auth");
+  });
+
+  it("rejects the tenant, schema-owner, and BYPASSRLS roles", () => {
+    for (const role of ["app_api", "migration_owner", "app_system", "postgres", "someone"]) {
+      assert.throws(
+        () => parse({ APP_AUTH_DATABASE_URL: url(role) }),
+        ConfigurationError,
+        `${role} must be rejected`,
+      );
+    }
+  });
+
+  it("requires an explicit url in production and never derives one", () => {
+    const production = {
+      NODE_ENV: "production",
+      APP_API_DATABASE_URL: url("app_api"),
+      CORS_ORIGINS: "https://app.example",
+    };
+
+    // The api is configured; only the auth url is missing, so the failure is
+    // about auth rather than about the first thing that happened to be absent.
+    assert.throws(
+      () => parseRuntimeConfig({ ...production, APP_AUTH_PASSWORD: "authsecret" }),
+      (error) => {
+        assert.ok(error instanceof ConfigurationError);
+        assert.match(error.message, /APP_AUTH_DATABASE_URL/);
+        assert.equal(error.message.includes("authsecret"), false, "password leaked");
+        return true;
+      },
+    );
+
+    // Naming another role's url does not satisfy it either.
+    assert.throws(
+      () => parseRuntimeConfig({ ...production, APP_AUTH_DATABASE_URL: url("app_api") }),
+      ConfigurationError,
+    );
+
+    // The approved shape parses.
+    const config = parseRuntimeConfig({ ...production, APP_AUTH_DATABASE_URL: url("app_auth") });
+    assert.equal(config.authDatabaseUrl, url("app_auth"));
+  });
+
+  it("rejects a malformed or non-postgres url", () => {
+    assert.throws(() => parse({ APP_AUTH_DATABASE_URL: "not a url" }), ConfigurationError);
+    assert.throws(
+      () => parse({ APP_AUTH_DATABASE_URL: "mysql://app_auth@db/app" }),
+      ConfigurationError,
+    );
+  });
+
+  it("derives the app_auth url in development from its own credential", () => {
+    const derived = new URL(parse({ APP_AUTH_PASSWORD: "authsecret" }).authDatabaseUrl);
+    assert.equal(derived.username, "app_auth");
+    assert.equal(derived.password, "authsecret");
+    assert.equal(derived.port, "5442");
+    assert.equal(derived.searchParams.get("schema"), "app");
+
+    // Never the runtime credential, even when only that one is configured.
+    const fallback = new URL(parse({}).authDatabaseUrl);
+    assert.equal(fallback.username, "app_auth");
+    assert.notEqual(fallback.password, "devsecret");
+    assert.notEqual(fallback.toString(), parse({}).databaseUrl);
+  });
+
+  it("does not echo the password or the connection string when rejecting", () => {
+    for (const role of ["app_api", "someone"]) {
+      try {
+        parse({ APP_AUTH_DATABASE_URL: url(role) });
+        assert.fail("expected a ConfigurationError");
+      } catch (error) {
+        assert.ok(error instanceof ConfigurationError);
+        assert.equal(error.message.includes("s3cretp4ss"), false, "password leaked");
+        assert.equal(error.message.includes("@db:5432"), false, "connection string leaked");
+        if (role === "someone") {
+          assert.equal(error.message.includes("someone"), false, "arbitrary username echoed");
+        }
+      }
+    }
+  });
+});
