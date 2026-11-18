@@ -4,8 +4,9 @@ Status: **PLAN ONLY — nothing in this document is applied.**
 Prepared 2026-11-18 against `master` at `75607d8`; revised after independent review.
 Architecture records: `ADR-004` (`app_auth` boundary) and `ADR-005` (session storage),
 both **Proposed**, formalising the owner decisions `AG-1`/`AG-2` of 2026-11-18.
-Approval still needed: owner acceptance of those two ADRs (see §16). `AG-1` and `AG-2`
-are **not** re-opened here and are not asked for again.
+Approval still needed, per gate: **`ADR-004` before S3**; **`ADR-005` before S5**. The
+two are independent — a decision about a session table does not gate the role bootstrap
+(§13.2, §16). `AG-1` and `AG-2` are **not** re-opened here and are not asked for again.
 
 **Document location.** This is the first file under `docs/implementation/`. The
 existing directories each answer a different question — `adr/` records accepted
@@ -275,9 +276,21 @@ Three artefacts, three different meanings, and none of them substitutes for anot
 | this plan | how the approved architecture becomes schema and evidence | plan only |
 
 Approval is not acceptance of a document, and neither is implementation. Nothing here
-asks the owner to decide `AG-1`/`AG-2` a second time; the open question is whether the
-two ADRs faithfully record what was approved, and that is the only thing S3 waits on
-beyond the plan itself (§16).
+asks the owner to decide `AG-1`/`AG-2` a second time; the open question is whether each
+ADR faithfully records what was approved, and that is the only thing its milestone waits
+on beyond this plan.
+
+The gates are per-milestone, not per-phase:
+
+| Milestone | Gate |
+|---|---|
+| S3 | `ADR-004` accepted |
+| S4 | S3 completed |
+| S5 | `ADR-005` accepted **and** S4 completed |
+| S6 | the stages whose rows it verifies — S3/S4 for the `users` half, S5 for the session half |
+
+So `ADR-005` does **not** gate S3, S4, or anything else that creates no session table;
+and S3 does not wait on a decision about sessions (§13.2, §16).
 
 ---
 
@@ -1328,12 +1341,12 @@ the session table in the diff.
 
 **GO when all of the following hold:**
 
-1. The owner has **accepted `ADR-004`** (§13.2: it gates S3). `ADR-005` is written
-   and `Proposed` too, and gates **S5** — not S3. Both are records; acceptance adds a
-   date and an approver to each, and is the owner's act, not an implementer's
-   assertion. Note what this does *not* mean: `AG-1` and `AG-2` are already decided
-   (2026-11-18), so acceptance is a statement that the records are faithful — not a
-   fresh architecture decision, and not a re-vote.
+1. The owner has **accepted `ADR-004`** — the only ADR gate that precedes S3 (§13.2).
+   `ADR-005` is written and `Proposed` as well, and gates **S5**; S3 does not wait on
+   it. Acceptance adds a date and an approver to the record and is the owner's act, not
+   an implementer's assertion. Note what this does *not* mean: `AG-1` and `AG-2` are
+   already decided (2026-11-18), so acceptance is a statement that the record is
+   faithful — not a fresh architecture decision, and not a re-vote.
 2. `master` is at or after `75607d8` with a clean tree, and the S2 checks are green —
    the baseline this work builds on. `ADR-005` acceptance is required before the S5
    commit, not before S3.

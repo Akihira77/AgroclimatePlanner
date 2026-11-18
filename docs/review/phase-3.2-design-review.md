@@ -30,21 +30,34 @@ this note exists only to keep the chronology complete: `bf0e593` (reviewed) →
 `6d36741` → `c762171` → `38486fd` → `75607d8` (reviewed and approved for the S2 scope).
 The snapshot below is still the object of this review and has not been rewritten.
 
-**Reconciled 2026-11-18 after the plan-review remediation.** One track definition is
+**Reconciled 2026-11-18 after the plan-review remediation.** One track definition was
 clarified, not changed. `ADR-004` and `ADR-005` now exist as `Proposed` records of
-`AG-1`/`AG-2`, so §18's Track 2 gate reads "`AG-1`/`AG-2` approved **and** their ADRs
-accepted" before S3. §18's Track 3 `IG` gates stay exactly where that row puts them —
-S7 and S8 — and none of them moves into Track 2. §3.2's "PROPOSED — not applied"
-status remains accurate: this note records documents, not schema.
+`AG-1`/`AG-2`, and the reading recorded at this point was that §18's Track 2 gate became
+"`AG-1`/`AG-2` approved **and** their ADRs accepted" before S3 — **superseded by the
+correction immediately below.** §18's Track 3 `IG` gates stay exactly where that row
+puts them — S7 and S8 — and none of them moves into Track 2. §3.2's "PROPOSED — not
+applied" status remains accurate: this note records documents, not schema.
 
 **Corrected 2026-11-18 after the ADR review.** The sentence above over-coupled the two
 tracks: reading it as "both ADRs before S3" makes a decision about a session table gate
-work that never mentions a session, which is not what §18's own per-step table says.
-The gate follows the object each step builds — `ADR-004` before **S3**, `ADR-005`
-before **S5** — and §18's rows are unchanged by this reading. The correction lives in
-`phase-3.2.3-authentication-database-boundary.md` §13.2 and in the owner record's
-dependency table, which is where an implementer looks before starting a step. The `IG`
-gates still block only S7 and S8.
+work that never mentions a session. What the historical snapshot actually records is
+the **`AG` approval** and the original milestone dependencies (`S3` ← `AG-1`, `S5` ←
+`AG-2` + `S4`, `S6` ← `S4`/`S5`); it does not contain an ADR-acceptance gate, and it is
+not rewritten here to pretend it does. ADR acceptance is a **later, separate
+documentation gate** added when the ADRs were written, and the operational form of it
+lives in two places an implementer actually reads: §13.2 of
+`phase-3.2.3-authentication-database-boundary.md` and the dependency table in
+`phase-3.2-owner-decisions.md`. Those are authoritative:
+
+| Milestone | Gate |
+|---|---|
+| S3 | `ADR-004` accepted |
+| S4 | S3 completed |
+| S5 | `ADR-005` accepted **and** S4 completed |
+| S6 | the stages whose rows it verifies |
+
+The `IG` gates still block only S7 and S8. The snapshot below is unchanged, including
+its `AG`-only gate column.
 
 Repository state reviewed: `master` at `bf0e593`, reviewed again at round 2. Files
 inspected: the Phase 3.2 brief; `packages/database` (`bootstrap/roles.sql`,
