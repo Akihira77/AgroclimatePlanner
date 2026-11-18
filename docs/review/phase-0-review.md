@@ -66,7 +66,7 @@ These were flagged by the external review but had already been corrected in the 
 - Cell-identification contract (requested-cell key, interpolation semantics, polygon → centroid).
 - Ingest-on-the-5th architecture with no backfill; per-member monthly persistence.
 - Per-class staleness/TTL; handling of a month changing temporal class when a run arrives.
-- `outlookRunId` on every derived recommendation; recalculation and notification policy.
+- `inputRunRefs[]` + `inputSnapshotHash` on every derived recommendation; recalculation and notification policy.
 - Schema-level enforcement of "no 12-month daily forecast" rather than discipline.
 - Horizon constants in one declarative table validated by both adapters and API.
 - Verification re-plan before Phase 9: independent truth (CHIRPS route or IMERG Final), archived-member availability, C3S hindcast extraction, minimum sample sizes, "cannot rank" rule.

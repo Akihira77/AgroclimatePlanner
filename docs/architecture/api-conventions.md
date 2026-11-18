@@ -43,9 +43,12 @@ Single resource: `{ "data": { … } }`. Errors never return `data`.
 | 409 | `CONFLICT` | duplicate slug, published profile edit |
 | 422 | `INSUFFICIENT_DATA` | agronomic input missing; body lists `missingInputs[]` |
 | 429 | `RATE_LIMITED` | with `Retry-After` |
-| 503 | `PROVIDER_UNAVAILABLE` / `DATA_STALE` | with `retryAfter`, and a `lastKnown` block when available |
+| 503 | `PROVIDER_UNAVAILABLE` | no usable value exists **and** no permitted fallback — with `retryAfter` |
+| 202 | *(no error)* | data missing while ingest is `pending`; body carries `retryAfter` and no fabricated value |
 
-`DATA_STALE` is a first-class outcome, not a 200 with a footnote. A client that ignores freshness must be forced to acknowledge it.
+`DATA_STALE` is **not** an error status. Stale-but-usable data returns `200` with `freshness.dataAvailability = "stale"` and its reason. Mapping staleness to `503` would train clients to retry a request that can be answered, and would hide the distinction between "old" and "absent". Full matrix in `provenance-contract.md` §7.
+
+Staleness is stated in the body on **every** response that carries weather-derived data, including `200`. There is no successful weather response without a `freshness` object, so a client cannot accidentally render a value with no age attached. `DATA_STALE` is not an error code; it does not exist as one.
 
 ## 4. Weather and climate responses carry provenance, always
 
@@ -55,19 +58,40 @@ Every object containing a weather-derived value includes:
 {
   value: 247.6,
   unit: "mm",
-  dataClass: "seasonal_forecast",     // one of the 9 classes, ADR-001 D9
-  source: { provider: "open-meteo", model: "ecmwf_seas5", runId: "…", initializedAt: "…" },
+  dataClass: "seasonal_forecast",              // one of the 9 classes, ADR-001 D9
+  evaluationBasis: "monthly",                  // daily | weekly | monthly | climatology | mixed
+  dataAvailability: "available",               // available | stale | pending | unavailable | not_applicable
+  source: {
+    provider: "open-meteo", model: "ecmwf_seas5", modelVersion: "5",
+    forecastRunId: "f_run_…", ingestionRunId: "i_run_…",
+    initializedAt: "2026-11-05T12:00:00Z"
+  },
   spatialResolutionKm: 36,
   servedValueIsInterpolated: true,
-  freshness: { isStale: false, ageSeconds: 86400, ttlSeconds: 3024000 },
+  freshness: { kind: "source", ageSeconds: 86400, ttlSeconds: 3024000 },
   attribution: "ECMWF / Open-Meteo"
 }
 ```
 
+For a month beyond the seasonal horizon, both axes are explicit:
+
+```ts
+{
+  date: "2027-03-01",
+  forecast:    { dataAvailability: "not_applicable", reason: "beyond_horizon" },
+  climatology: { dataAvailability: "available", baselineVersion: "ERA5:1991-2020:v1" },
+  value: 244.2, unit: "mm",
+  displayedClass: "climatology",
+  evaluationBasis: "climatology"
+}
+```
+
 Rules:
-1. `temporalClass` may not be inferred by the client from the date. It is always sent.
-2. A response may contain several classes (a 12-month outlook). It may never emit a single aggregate that spans classes.
-3. `anomaly` objects carry `anomalyKind` (`model_relative` | `baseline_difference`) plus `baseline` and, for the latter, `modelClimateOffsetMm`.
+1. `evaluationBasis`, `dataClass`, and `dataAvailability` are **required** on any weather-derived value. A client may not infer any of them from the date.
+2. A response may contain several classes (a 12-month outlook). It may never emit a single aggregate that spans classes; containers carry `evidenceSegments`.
+3. `anomaly` objects carry `anomalyKind` (`model_relative` | `baseline_difference`), `baselineVersion`, and, for the latter, `modelClimateOffsetMm`.
+4. When a source failed and a previous value is still shown, the value lives under `lastKnown` with `dataAvailability = "stale"` and `reason = "provider_unavailable"`. It is never promoted to the current field.
+5. A window responses include `evidenceSegments[]`, `missingRanges[]`, `primaryBasis`, `mixedEvidence`, and `weakestEvidenceClass`.
 
 ## 5. Pagination, filtering, sorting
 
@@ -109,7 +133,7 @@ GET    /v1/activities/plantings        POST /v1/activities/plantings
 POST   /v1/activities/harvests
 GET    /v1/observations                POST /v1/observations
 
-POST   /v1/ai/briefing?fieldId=…        (cached per runId)
+POST   /v1/ai/briefing?fieldId=…        (cached per inputSnapshotHash)
 GET    /v1/monitoring/sources
 GET    /v1/monitoring/queues
 GET    /health  |  /health/ready
@@ -138,10 +162,10 @@ GET    /health  |  /health/ready
 
 ## 10. Versioning of semantics, not just routes
 
-The API exposes `engineVersion`, `profileVersionId`, and `outlookRunId` on derived resources. Two responses with the same URL can legitimately differ because the underlying run changed; the client must be able to tell why without diffing values.
+The API exposes `engineVersion`, `profileVersionId`, `derivationVersion`, `inputRunRefs`, and `inputSnapshotHash` on derived resources — plus `primaryForecastRunId` as a convenience when one run dominates. Two responses with the same URL can legitimately differ because the underlying run changed; the client must be able to tell why without diffing values. There is no single `outlookRunId`; a derived artifact consumes several runs.
 
 ## 11. OpenAPI requirements
 
 - Every endpoint documented, including error variants.
-- `dataClass`, `runId`, and `freshness` are required properties in the generated schema — not optional, so an implementation cannot forget them.
+- `dataClass`, `evaluationBasis`, `dataAvailability`, `forecastRunId`/`ingestionRunId`, and `freshness` are required properties in the generated schema — not optional, so an implementation cannot forget them.
 - Contract tests (Phase 9) assert that responses validate against the schema for both fresh and stale fixtures.

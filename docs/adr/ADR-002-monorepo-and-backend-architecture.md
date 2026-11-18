@@ -21,9 +21,20 @@ None of those justify distribution. All of them justify strict boundaries inside
 
 Nest gives module boundaries, DI, guards, and a pipe/interceptor model that maps cleanly onto "validate at boundary, authorize at boundary, provenance on every response". The worker is a **separate process, not an in-process queue consumer**, because provider ingest must survive API deploys and must be scaled independently — and because a slow provider must never be able to starve request handling.
 
-**D3. Prisma as ORM, raw SQL for PostGIS and analytics.**
+**D3. Prisma as ORM; a narrow, typed raw-SQL boundary for PostGIS.**
 
-Prisma for CRUD and migrations; `$queryRaw` for geometry, aggregations, and the monthly rollups. PostGIS geometry columns are `Unsupported("geometry")` in Prisma and accessed through typed raw helpers. Rationale: Prisma's spatial support is insufficient for polygon area and centroid correctness, but its migration and type generation are otherwise the best fit.
+Prisma for CRUD and migrations; `$queryRaw` for geometry, aggregations, and monthly rollups. PostGIS geometry columns are `Unsupported("geometry")` in Prisma. Rationale: Prisma's spatial support cannot express the correctness requirements below.
+
+Binding engineering constraints (all are tested, not aspirational):
+
+1. **SRID.** Every geometry column is `geometry(Point|Polygon, 4326)`. A migration that omits the SRID fails review. Mixed-SRID rows are rejected by a check constraint.
+2. **Validity.** Inserts validate with `ST_IsValid`; invalid polygons are rejected at the API boundary with `422` and the `ST_IsValidReason` detail. No silent `ST_MakeValid` — a self-intersecting plot is a user error, not something to repair invisibly.
+3. **Complexity.** Polygons above 5 000 vertices are rejected; the API offers simplification (`ST_SimplifyPreserveTopology`, tolerance documented in metres) rather than accepting a shapefile dump that will degrade every spatial query.
+4. **Indexing.** GiST on every geometry column, created in the same migration as the column. A geometry column without an index is a defect. Spatial joins use `ST_DWithin` on geography casts, not `ST_Distance < x` on geometry.
+5. **Area.** `ST_Area(geom::geography) / 10000` for hectares — **never** planar `ST_Area(geom)` in EPSG:4326, which measures square degrees and is wrong by a latitude-dependent factor. Stored `areaHa` is derived and re-computed when geometry changes; it is not user-editable.
+6. **Centroid vs area-weighted extraction.** The default cell-resolution policy is: polygon → `ST_PointOnSurface` (guaranteed inside the polygon, unlike `ST_Centroid` for concave shapes) → provider cell. Area-weighted extraction is **only** used for climatology baselines and only when the polygon intersects more than one baseline cell; the rule is recorded per resolution row as `extractionPolicy ∈ {centroid, area_weighted}` so a value's spatial provenance is never ambiguous.
+7. **Typed helper boundary.** All spatial SQL lives in `packages/database/src/spatial.ts` with typed inputs/outputs and unit-tested SQL. No geometry SQL inside Nest services, and no `$queryRawUnsafe` anywhere in the repository.
+8. **Integration tests.** PostGIS behaviour cannot be unit-tested with mocks. The suite must run against a real `postgis/postgis` container and assert: SRID rejection, invalid-polygon rejection, GiST index presence (`pg_indexes`), area correctness against a known polygon (e.g. a 1×1 degree cell near the equator), `ST_PointOnSurface` inside a concave polygon, and the `ST_DWithin` join plan using the index.
 
 **D4. REST + OpenAPI, generated from Zod.**
 
@@ -35,11 +46,17 @@ The product is a single-tenant-per-account application with a long-lived session
 
 **D6. Derived data is materialised.**
 
-`MonthlyOutlook`, `SuitabilityRun`, `PlantingWindow`, and briefings are stored rows keyed by `runId`/`engineVersion`/`profileVersionId`. Not computed on read, not cached in Redis as the source of truth. Rationale: freshness, auditability, and the ability to answer "why did this recommendation change" all require a durable record, and Redis eviction must never be able to change what a farmer was told.
+`MonthlyOutlook`, `SuitabilityRun`, `PlantingWindow`, and briefings are stored rows carrying `derivationVersion`, `inputRunRefs[]` (role → forecastRunId + ingestionRunId), `inputSnapshotHash`, `computedAt`, `status`, and supersession links — plus `engineVersion`/`profileVersionId` where applicable. Not computed on read, not cached in Redis as the source of truth. There is deliberately **no single `outlookRunId`**: a 12-month artifact consumes EC46, SEAS5, and a climatology baseline at once, and collapsing that into one id makes the artifact unreplayable. Rationale: freshness, auditability, and answering "why did this recommendation change" all require a durable record, and Redis eviction must never be able to change what a farmer was told.
 
 **D7. One database, one Redis, one object store (optional).**
 
 Raw provider payloads are stored in the object store only where the provider's terms permit. No data warehouse in v1; Phase 9 verification reads from Postgres plus archived payloads.
+
+**D8. Tenant scoping is a transaction, not a convention.**
+
+Prisma multiplexes many requests over few connections, so a session-level `SET app.user_id` is a cross-tenant data leak waiting for a connection to be reused. Decision: the only tenant entry point is `withTenant(user, fn)`, which opens a `$transaction` and calls `set_config('app.user_id', $1, true)` — local to the transaction. No repository may accept a bare `PrismaClient`; CI rejects `SET ` (session-scoped) and `$queryRawUnsafe`. Policies fail closed because an unset `app.user_id` yields `NULL` and matches nothing. Worker jobs use a dedicated `BYPASSRLS` role rather than impersonating a user.
+
+Consequence accepted: every request costs one extra round trip for `set_config`, and long read transactions hold a connection. Both are cheap at this scale; neither is negotiable against silent cross-tenant reads.
 
 ## Consequences
 

@@ -139,9 +139,14 @@ Derived data is **never** computed during a GET.
 
 ```
 GET /climate/outlook?fieldId=…
-  → read stored outlook for (field, cellKey, currentRun)
-  → if missing or older than its class TTL: 202 Accepted + job enqueued + last-known returned with stale flag
+  → read stored outlook for (field, cellKey)
+  → usable but stale      → 200 + dataAvailability="stale" + reason, enqueue re-ingest
+  → absent, ingest running → 202 + retryAfter, no fabricated value
+  → absent, ingest failed  → 503 PROVIDER_UNAVAILABLE, or 200 with lastKnown marked stale
+                             if a previous artifact is still stored and usable
 ```
+
+Staleness is a body field, never a status code (`provenance-contract.md` §7). The read path may enqueue work, but it may never wait for it.
 
 This is the only way the app stays honest about freshness: the read path cannot accidentally fabricate a fresh value.
 
@@ -150,7 +155,8 @@ This is the only way the app stays honest about freshness: the read path cannot 
 | Failure | Behaviour |
 |---|---|
 | Provider 5xx/timeout | job retries with exponential backoff; last good record keeps serving, marked stale; monitoring records the attempt |
-| Seasonal feed absent for a cell | that cell's months 2–7 degrade to climatology **with a different label**, never silently |
+| Seasonal feed absent for a cell, month beyond the horizon | months degrade to climatology **labelled as climatology**, with `reason = beyond_horizon` on the forecast axis |
+| Seasonal run `pending`/`failed` for a cell inside the horizon | month reports `pending`/`unavailable` with its reason; **no climatology substitution** (`provenance-contract.md` §6) |
 | Redis down | API keeps serving reads; job enqueue returns `503` with `retryAfter`; worker backpressure |
 | Postgres down | API `503`; no partial responses |
 | AI provider down | briefing endpoint returns the deterministic briefing skeleton with `narration: unavailable`; nothing else degrades |
@@ -158,7 +164,37 @@ This is the only way the app stays honest about freshness: the read path cannot 
 
 ## 8. Multi-tenancy and isolation
 
-v1 is single-owner-per-account. Ownership is a column (`user_id`) on `farms`, enforced in every repository call and in Postgres via RLS as a second line. No organisation/team model in v1.
+v1 is single-owner-per-account. Ownership is a column (`user_id`) on `farms`, enforced twice: an explicit filter in every repository call, and Postgres RLS as the second line. No organisation/team model in v1.
+
+### RLS with Prisma connection pooling
+
+RLS is only a defence if the setting cannot outlive the request. Prisma pools connections, so `SET app.user_id` on a pooled connection leaks that identity into the next request. The rule is therefore **transaction-scoped**:
+
+```sql
+-- policy shape
+CREATE POLICY farm_owner ON farms
+  USING (user_id = current_setting('app.user_id', true)::uuid);
+-- no user_id set -> current_setting returns NULL -> policy matches nothing (fail closed)
+```
+
+```ts
+// packages/database/src/tenant.ts — the only way tenants are scoped
+export function withTenant<T>(user: AuthUser, fn: (tx: Tx) => Promise<T>): Promise<T> {
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT set_config('app.user_id', ${user.id}, true)`; // true = local to txn
+    return fn(tx);
+  });
+}
+```
+
+Binding rules:
+
+1. `set_config(..., is_local => true)` only. `SET` (session-scoped) is forbidden anywhere in the codebase; a lint/grep check in CI rejects it.
+2. Every request path enters the database through `withTenant(user, fn)`. A repository function never receives a raw `PrismaClient`.
+3. A connection returned to the pool has no `app.user_id` (the transaction reset it), so a missing context fails closed — the policy matches zero rows rather than all of them. This is the property that makes the second line worth having.
+4. Worker jobs have no user. They run as a dedicated role with `BYPASSRLS` granted only to that role, or through an explicitly-scoped service function — never by faking a user id.
+5. Integration test requirement: two concurrent requests for different users inside one pooled client must not see each other's rows, and a query outside `withTenant` must return zero rows.
+6. Ownership is *also* checked at the controller boundary. RLS is a backstop against a forgotten `WHERE`, not the primary authorization mechanism — the two are independent by design.
 
 ## 9. Observability
 

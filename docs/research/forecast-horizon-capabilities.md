@@ -121,7 +121,7 @@ months 8..12    → climatology 1991–2020, explicitly labelled "Normal histori
 
 The seasonal/climatology split is **6 or 7 months depending on the pinned `forecast_days`**, so the boundary must be an asserted property of the adapter, not a comment. Daily rows extend past the monthly product (to 2027-06-05 at 200 days); the monthly axis is authoritative for the seasonal layer, and June 2027 must not be rolled up as a seasonal month.
 
-Every month record must carry `temporalClass` ∈ {observation, short_range_forecast, subseasonal_forecast, seasonal_forecast, annual_outlook, climatology}. Mixing is prohibited at storage and at render time.
+Every month record must carry `dataClass` (the 9-value enum from ADR-001 D9) plus `evaluationBasis` and `dataAvailability`. Mixing classes inside one value is prohibited at storage and at render time.
 
 ---
 

@@ -17,12 +17,12 @@ sequenceDiagram
   P-->>W: raw payload + served coords + initAt
   W->>N: normalize(payload, adapterMeta)
   N-->>W: WeatherRecord[] with dataClass, units, cellKey
-  W->>DB: upsert on (cell, model, variable, validAt, member, runId)
+  W->>DB: upsert WeatherRecord on (forecastRunId, cell, variable, validAt, member)
   W->>DB: record sync attempt (status, latency, bytes, error)
   W->>DB: store raw payload ref (if permitted)
 ```
 
-Normalization is where provider differences die. After this stage nothing downstream knows whether a number came from BMKG or SEAS5 — only `dataClass`, resolution, and `runId` remain, and those are exactly what the product must display.
+Normalization is where provider differences die. After this stage nothing downstream knows whether a number came from BMKG or SEAS5 — only `dataClass`, resolution, `forecastRunId`, and `ingestionRunId` remain, and those are exactly what the product must display.
 
 ### Unit conversion rules (explicit, because silent conversion is a bug class)
 
@@ -55,15 +55,21 @@ flowchart LR
   CL[("Climatology 1991–2020")] --> MO
   MO --> AN[anomaly computation]
   AN --> Q[quality & coverage]
-  Q --> OUT[("MonthlyOutlook rows<br/>temporalClass mandatory")]
+  Q --> OUT[("MonthlyOutlook rows<br/>dataClass + evaluationBasis mandatory")]
   DA --> OUT
 ```
 
-Assembly order per month cell:
-1. If a SEAS5 `seasonal_forecast` month exists for the target month and the run is within TTL → use it.
-2. Else if the month is covered by EC46 daily/weekly (`subseasonal_forecast`) → aggregate, label `subseasonal`.
-3. Else → climatology for that calendar month, `temporalClass = climatology`, no `initializedAt`.
-4. Never blend two classes into one number. If two sources cover a day, the finer class wins for that day and the month records which class dominated, with coverage percentage.
+Assembly order per month cell (`provenance-contract.md` §6 governs):
+1. If a SEAS5 month exists for the target month and its run is within TTL → `seasonal_forecast`.
+2. Else if EC46 covers the month → aggregate, `subseasonal_forecast`.
+3. Else if the month is **beyond the seasonal horizon** → climatology, `climatology`, `missingReason = beyond_horizon` on the forecast axis.
+4. Else (should have existed but is `pending` / `ingest_failed` / `provider_unavailable`) → **no substitution**. The month is `unavailable` or `stale`, with its reason preserved. Climatology is never written into that slot.
+
+Every month cell therefore reports **two axes**, not one value: forecast availability and climatology availability. They are independent and both are returned to the client.
+
+Segments for windows are built from the same availability map, not from calendar convenience: a `seasonal_forecast` segment begins after the last day with genuine subseasonal data, even mid-month.
+
+Never blend two classes into one number. If two sources cover a day, the finer class wins for that day and the month records which class dominated, with coverage percentage.
 
 Anomaly computed as `docs/adr/ADR-001` D3: `modelAnomaly` primary; `baseline_difference` only with grid-matched baseline and disclosed `modelClimateOffsetMm`; both in mm and %.
 
@@ -76,10 +82,10 @@ sequenceDiagram
   participant DB as Postgres
 
   ENG->>DB: load profile version + cultivar + field constraints
-  ENG->>DB: load monthly outlook (with temporalClass per month)
+  ENG->>DB: load monthly outlook (with dataClass + dataAvailability per month)
   ENG->>A: evaluate(field, profile, outlook, options)
-  A-->>ENG: windows[] with dimensionCoverage, missingInputs, evidenceClass
-  ENG->>DB: persist SuitabilityRun + windows (engineVersion, outlookRunId)
+  A-->>ENG: windows[] with evidenceSegments, dimensionCoverage, missingInputs
+  ENG->>DB: persist SuitabilityRun + windows (engineVersion, derivationVersion, inputRunRefs, inputSnapshotHash)
 ```
 
 The agronomy package is a **pure function**. Given the same inputs it must return byte-identical results — that is what makes `docs/data-model` versioning meaningful and Phase 9 backtesting possible.
@@ -124,13 +130,12 @@ The AI never receives credentials, other users' data, or un-normalized provider 
 
 On a new run (SEAS5 on the 5th, EC46 daily, forecast hourly):
 
-1. `ingest.*` completes and writes new `runId`.
-2. `aggregate.monthly` recomputes affected cells.
-3. `recompute.outlook` marks derived rows for those cells as superseded.
-4. `recompute.windows` runs for fields whose cells changed.
-5. Briefings become stale; they are regenerated on next request, not pushed.
+1. `ingest.*` completes and writes a new `ForecastRun` (or a new `IngestionRun` under an existing one).
+2. `aggregate` recomputes affected cells and marks the prior `MonthlyOutlook` rows `superseded` (status change, not deletion).
+3. `recompute.windows` runs for fields whose cells changed.
+4. Briefings become stale; they are regenerated on next request, not pushed.
 
-Every derived row stores `outlookRunId`, so a change is explainable after the fact: "this recommendation moved because the October SEAS5 run arrived".
+Every derived row stores `inputRunRefs[]` (every source consumed, with role) plus `inputSnapshotHash`, so a change is explainable after the fact: "this recommendation moved because the October SEAS5 run arrived" — and the exact inputs are replayable. There is no single `outlookRunId`; a 12-month artifact consumes EC46, SEAS5, and a baseline at once.
 
 ## 8. Failure and partial data
 
@@ -139,5 +144,5 @@ Every derived row stores `outlookRunId`, so a change is explainable after the fa
 | Provider returns fewer rows than the horizon | store what exists; coverage < 100 % recorded; UI shows coverage |
 | Member payload null past day N | truncate horizon to N; never extrapolate |
 | Seasonal run older than TTL | month marked stale; UI shows initialization date prominently |
-| Cell not yet ingested for this run | months fall back to the next class **and say so** |
+| Cell not yet ingested for this run | month reports `pending` with `retryAfter`; **no class substitution**. It becomes `beyond_horizon` → climatology only when the horizon genuinely ends there |
 | Normalization error (unknown unit, missing field) | reject the record, fail the job with the payload reference, never store a guessed value |

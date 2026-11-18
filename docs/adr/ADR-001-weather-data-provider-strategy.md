@@ -73,7 +73,9 @@ No invented confidence numbers such as 95%.
 
 **D7. Provenance is schema, not decoration.**
 
-Every ingested record carries: `provider`, `model`, `modelVersion?`, `initializedAt`, `validAt`, `ingestedAt`, `requestedLat`, `requestedLon`, `servedLatitude`, `servedLongitude`, `servedValueIsInterpolated: boolean`, `cellKey`, `spatialResolutionKm`, `temporalResolution`, `ensembleMember?`, `ensembleSize`, `biasCorrected`, `sourceUrl`, `attribution`, `temporalClass`.
+Every ingested record carries: `provider`, `model`, `modelVersion?`, `initializedAt`, `validAt`, `ingestedAt`, `requestedLat`, `requestedLon`, `servedLatitude`, `servedLongitude`, `servedValueIsInterpolated: boolean`, `cellKey`, `spatialResolutionKm`, `temporalResolution`, `ensembleMember?`, `ensembleSize`, `biasCorrected`, `sourceUrl`, `attribution`, `dataClass`, `forecastRunId`, `ingestionRunId`.
+
+`dataClass` is the canonical name for the 9-value enum in D9. `temporalClass` is **deprecated** — two names for one enum caused drift between this ADR and the architecture documents. Run identity is split (`forecastRunId` vs `ingestionRunId`) so that re-normalization cannot masquerade as a new forecast; full rules in `docs/architecture/provenance-contract.md` §3.
 
 Anomaly-bearing records additionally carry `anomalyKind` ∈ {model_relative, baseline_difference}, `baselineDataset`, `baselinePeriod`, `baselineResolutionKm`, and `modelClimateOffsetMm`.
 
@@ -136,7 +138,7 @@ Negative / accepted costs:
 3. Confirm Copernicus Licence Rev. 12 verbatim text.
 4. Confirm a reachable CHIRPS v3.0 route (direct host timed out on 2026-11-18; try mirror/GEE) or accept ERA5 as shipped baseline.
 5. **Resolved 2026-11-18:** monthly endpoints expose only `mean`/`anomaly` — no spread variable exists (`*_spread` rejected with 400). Ensemble spread for seasonal months must be computed from **50 daily members** (payload delivers 50, not 51) and aggregated. Because members are retained for only ~1 month, this must happen at ingest during the run window — see D8b.
-6. Define the recalculation trigger when SEAS5 refreshes on the 5th, and store the `outlookRunId` on every derived recommendation (a saved plan must be traceable to the forecast run that produced it).
+6. Define the recalculation trigger when SEAS5 refreshes on the 5th, and store `inputRunRefs[]` + `inputSnapshotHash` on every derived recommendation (a saved plan must be traceable to every run that produced it — not to a single `outlookRunId`).
 7. **Re-plan verification before Phase 9 coding.** Truth must be independent of ECMWF: CHIRPS via a reachable route, or IMERG Final (its ~3.5-month latency is irrelevant for retrospective scoring). Probe the historical-forecast archive's retention and whether archived ensemble members exist at all; probe C3S SEAS5 hindcast point extraction; define grid verification over Indonesian cells with minimum sample sizes and an explicit "cannot rank — report only" rule at small n.
 8. Probe the C3S annual-outlook dataset family before permanently conceding months 8–12 to climatology.
 9. Pin `forecast_days` in the seasonal adapter and assert the resulting 6-vs-7 monthly row split in a test; the monthly axis is authoritative for the seasonal layer, and daily rows past it must not be rolled up.

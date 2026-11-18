@@ -52,34 +52,64 @@ WeatherRecord {
   requestedLat, requestedLon, servedLat, servedLon, servedValueIsInterpolated,
   spatialResolutionKm, temporalResolution, ensembleMember?, ensembleSize,
   biasCorrected, sourceUrl, attribution, aggregationLevel,
-  runId
+  forecastRunId, ingestionRunId, normalizerVersion
 }
 ```
 
-**Invariants**
-1. `dataClass` is one of the 9 classes in ADR-001 D9. `observation` requires a `field_observation` source; no provider produces it in v1.
-2. One row per (cellKey, provider, model, variable, validAt, ensembleMember, runId). Duplicate ingest is an upsert, not an insert.
-3. Raw provider payloads may be retained separately (file store) and are never the query surface.
-4. `MonthlyOutlook` rows carry `temporalClass`, `anomalyKind`, `baselineDataset`, `baselinePeriod`, `modelClimateOffsetMm`, `dataCoverage`, `ensembleSpread`, `methodVersion`.
+Supporting identities (normative definition in `provenance-contract.md` §3):
 
-**Invariant:** a `MonthlyOutlook` with `temporalClass = climatology` may not carry `initializedAt`. Climatology has no initialization; faking one is how climatology starts looking like a forecast.
+```
+ForecastRun  { id, provider, model, modelVersion?, product, initializedAt, horizonEnd, receivedAt }
+IngestionRun { id, forecastRunId, adapterVersion, normalizerVersion, targetSelectorHash,
+               status, attempt, startedAt, finishedAt?, recordCount, coveragePercent, error? }
+```
+
+**Invariants**
+1. `dataClass` is one of the 9 classes in ADR-001 D9. `observation` requires a `field_observation` source; no provider produces it in v1. `temporalClass` is deprecated and must not appear in schema.
+2. One row per `(forecastRunId, cellKey, variable, validAt, ensembleMember)` under a given `normalizerVersion`. Duplicate ingest is an upsert; a normalizer change supersedes rows, it does not duplicate them.
+3. Raw provider payloads may be retained separately (file store) and are never the query surface.
+4. `MonthlyOutlook` rows carry `dataClass`, `anomalyKind`, `baselineVersion`, `modelClimateOffsetMm`, `dataCoverage`, `ensembleSpread` (or `spreadUnavailable`), `derivationVersion`, `inputRunRefs[]`, `inputSnapshotHash`, `computedAt`, `status`, `supersededById`.
+5. `ForecastRun` is unique on `(provider, model, product, initializedAt)`; `IngestionRun` on `(forecastRunId, adapterVersion, normalizerVersion, targetSelectorHash, attempt)`.
+6. Re-normalizing a stored payload creates a new `IngestionRun` under the **same** `ForecastRun`. A bug fix in normalization must never appear to users as a new forecast.
+
+**Invariant:** a `MonthlyOutlook` with `dataClass = climatology` may not carry `initializedAt` or `sourceRunIds`. Climatology has no initialization; faking one is how climatology starts looking like a forecast.
+
+**Invariant:** a month that is missing because the source is `beyond_horizon` and a month that is missing because ingest failed are different rows, with different `MissingReason`. They may not share a display state.
 
 ## 5. Suitability and windows
 
 ```
-SuitabilityRun { id, fieldId, profileVersionId, outlookRunId, computedAt, engineVersion,
-                 dimensionCoverage[{dimension, state}], maxAchievableLevel }
-PlantingWindow { id, runId, cropId, cultivarId, fieldId,
-                 startDate, endDate, evaluationBasis ∈ daily|weekly|monthly|climatology,
-                 evidenceClass, suitability, score?, risks[], explanations[],
-                 constraintsEvaluated[], missingInputs[] }
+SuitabilityRun {
+  id, fieldId, profileVersionId, computedAt, engineVersion, derivationVersion,
+  dimensionCoverage[{dimension, state}], maxAchievableLevel,
+  inputRunRefs[{forecastRunId, ingestionRunId, role}], inputSnapshotHash, status
+}
+
+PlantingWindow {
+  id, suitabilityRunId, cropId, cultivarId, fieldId,
+  startDate, endDate,
+  evaluationBasis, primaryBasis, mixedEvidence, weakestEvidenceClass,
+  evidenceSegments[EvidenceSegment],
+  missingRanges[{startDate, endDate, reason}],
+  suitability, score?, risks[], explanations[],
+  constraintsEvaluated[], missingInputs[]
+}
+
+EvidenceSegment {
+  startDate, endDate, evaluationBasis, evidenceClass,
+  sourceRunIds[], coveragePercent,
+  provenance[{provider, model, modelVersion?, initializedAt?, spatialResolutionKm,
+              servedValueIsInterpolated, baselineVersion?}]
+}
 ```
 
 **Invariants**
 1. No `score` when any dimension is `unknown`.
 2. `suitability = insufficient_data` whenever a hard constraint's input is unknown — never `poor`.
-3. `evidenceClass` is mandatory; a window computed on climatology cannot present as forecast-derived.
-4. `engineVersion` and `profileVersionId` make the window replayable.
+3. `evidenceSegments` are non-overlapping, contiguous, and never mix classes inside one segment. Gaps are `missingRanges`, not silently extended segments.
+4. `primaryBasis` is the basis covering the **critical stage**, not the longest interval. A window whose critical stage sits in a climatology segment is reported as such.
+5. `engineVersion`, `profileVersionId`, `derivationVersion`, and `inputSnapshotHash` make the window replayable; `inputRunRefs` must list every source consumed.
+6. A climatology segment carries no `initializedAt` and no `sourceRunIds`; if it does, the record is invalid.
 
 ## 6. Activity and local data
 
@@ -93,8 +123,8 @@ PlantingWindow { id, runId, cropId, cultivarId, fieldId,
 |---|---|
 | Owner isolation | `user_id` on farms; repository-level filter + RLS |
 | Profile immutability | publish creates a new version; no UPDATE on published rows |
-| No silent class mixing | column + check constraint on `temporalClass`; API filter rejects cross-class merges |
-| Staleness is data | every derived row stores the `runId` and `computedAt` it came from |
+| No silent class mixing | column + check constraint on `dataClass`; API rejects cross-class merges |
+| Staleness is data | every derived row stores its `inputRunRefs[]`, `inputSnapshotHash`, `derivationVersion`, and `computedAt` |
 | Deletion | farms/fields soft-delete; weather records never deleted, only superseded |
 
 ## 8. What this model deliberately does not have

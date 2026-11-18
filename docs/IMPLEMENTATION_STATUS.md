@@ -36,7 +36,7 @@ Last updated: 2026-11-18.
 
 ## Next phases
 
-Phase 1 (product requirements, system architecture, ADR-002) — **documents produced, review pending**.
+Phase 1 (product requirements, system architecture, ADR-002) — **complete; reconciled in Phase 1.1 and accepted**.
 
 | Phase 1 deliverable | Status | File |
 |---|---|---|
@@ -46,7 +46,19 @@ Phase 1 (product requirements, system architecture, ADR-002) — **documents pro
 | Data flow | done | `docs/architecture/data-flow.md` |
 | Background processing | done | `docs/architecture/background-processing.md` |
 | API conventions | done | `docs/architecture/api-conventions.md` |
+| **Provenance & evidence contract (normative)** | done | `docs/architecture/provenance-contract.md` |
 | ADR-002 monorepo & backend | done (Proposed) | `docs/adr/ADR-002-monorepo-and-backend-architecture.md` |
-| Oracle architecture review | pending | — |
+| Phase 1.1 architecture review | done | `docs/review/phase-1-architecture-review.md` |
 
-Gate to Phase 2: oracle review of ADR-002 + the four invariants that Phase 2 must not violate (derived data materialised, agronomy pure, dataClass mandatory in contract, no synchronous provider calls).
+### Phase 1.1 outcome
+
+Twelve findings, ten decisions accepted, six rejected. The two that change the physical design, not just the prose:
+
+1. **`ForecastRun` and `IngestionRun` are separate identities**, so re-normalizing a retained payload cannot surface to users as a new forecast.
+2. **`PlantingWindow` carries `EvidenceSegment[]`**, so a window crossing daily → weekly → monthly → climatology reports what it actually used instead of one class that must be a lie.
+
+Vocabulary is now fixed: `dataClass` (canonical), `evaluationBasis`, `dataAvailability`, `forecastRunId`/`ingestionRunId`, `inputRunRefs[]` + `inputSnapshotHash`. `temporalClass`, `precision`, bare `runId`, `outlookRunId`, and `DATA_STALE` are removed or deprecated with no live uses.
+
+Queues reduced 10 → 6 by merging sets that shared provider, budget, retry shape, and failure mode, and by deleting `recompute.briefings` (cache invalidation is not a queue).
+
+Phase 2 gate (unblocked): implement `withTenant` as the only DB entry point and prove isolation before features land; make `dataClass`/`evaluationBasis`/`dataAvailability`/`freshness` required in `packages/contracts` from the first weather-emitting commit; build adapters against the split run identity from the start.

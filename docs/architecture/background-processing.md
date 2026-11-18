@@ -8,24 +8,39 @@ Ingestion is slow, bursty, and provider-limited; user requests are fast and must
 
 ## 2. Queues
 
-| Queue | Job | Trigger | Concurrency | Idempotency key |
-|---|---|---|---|---|
-| `ingest.short` | BMKG + Open-Meteo deterministic, 0–16 d | hourly | 5 | `short:{cellKey}:{yyyymmddhh}` |
-| `ingest.ensemble` | 4–14 d members | every 6 h | 3 | `ens:{cellKey}:{runId}` |
-| `ingest.subseasonal` | EC46 15–45 d | daily ~21:00 UTC | 3 | `ec46:{cellKey}:{runId}` |
-| `ingest.seasonal` | SEAS5 daily members + monthly | monthly, day 5 + jitter | 2 | `seas5:{cellKey}:{runId}` |
-| `ingest.climatology` | 1991–2020 baseline per cell | on first use, then yearly | 2 | `clim:{cellKey}:{baselineVersion}` |
-| `aggregate.monthly` | build `MonthlyOutlook` | after ingest | 5 | `monthly:{cellKey}:{runId}` |
-| `recompute.windows` | agronomy for affected fields | after monthly | 5 | `win:{runId}:{profileVersionId}:{fieldId}` |
-| `recompute.briefings` | invalidate, do not pre-generate | after windows | 5 | `brief:{fieldId}:{runId}` |
-| `verify.forecast` | score against truth | weekly | 1 | `verify:{model}:{cellKey}:{period}` |
-| `maintenance.sweep` | stale detection, orphan cleanup | hourly | 1 | `sweep:{yyyy-mm-dd-hh}` |
+Six queues, not ten. Each one exists because of an isolation requirement that a shared queue cannot express (concurrency ceiling, timeout, rate bucket, or blast radius). Queues that shared all four were merged.
+
+| Queue | Jobs | Why it needs independent isolation | Resource profile | Concurrency | Timeout | Retry | Rate constraint | Priority / SLA |
+|---|---|---|---|---|---|---|---|---|
+| `ingest.forecast` | BMKG cuaca; OM forecast; OM ensemble (0–14 d) | must stay responsive hourly; a monthly burst must never delay it | small JSON, 3–50 member columns, 0.3–3 s | 5 | 20 s | 5, backoff 1/5/20 m | BMKG 60/min/IP; OM 10k/day bucket | high · p95 < 60 s after trigger |
+| `ingest.climate` | EC46 daily; SEAS5 monthly; climatology (on first use, yearly) | huge payloads and multi-minute fetches; must not consume `ingest.forecast` slots, and must be paused independently when a provider degrades | 50 members × 45–200 d, MB-scale, 5–120 s | 3 | 180 s | 4, backoff 2/10/30 m | OM 10k/day; seasonal endpoint has its own budget share | low · SEAS5 must finish within 6 h of the 5th |
+| `aggregate` | daily→monthly rollup, spread computation, coverage | pure transformation of stored data; different failure mode (no provider involved), and safe to replay in bulk | CPU + DB writes, no network | 5 | 60 s | 3, immediate | — | medium · after ingest |
+| `recompute.windows` | agronomy fan-out per field | largest blast radius: a bug here writes wrong recommendations to every user; must be pauseable and rate-limited separately | CPU-bound, DB-heavy, 50–500 ms/field | 5 | 120 s | 3 | — | high · near-term fields first |
+| `verify` | forecast scoring against truth | weekly, GPU-of-the-poor (long loops), must never compete with user-facing recompute | CPU + large reads | 1 | 30 m | 2 | archive provider budget | lowest · off-hours only |
+| `maintenance` | stale sweep, orphan cleanup, **briefing invalidation**, dead-letter reaper | cheap, frequent, must never be blocked behind heavy work; and must be able to run while everything else is paused | trivial | 1 | 30 s | 5 | — | lowest · hourly |
+
+### Merges applied, with reasons
+
+| Was | Now | Why the split was unjustified |
+|---|---|---|
+| `ingest.short` + `ingest.ensemble` | `ingest.forecast` | same provider, same adapter family, same failure semantics, same retry shape. The only difference was payload size — expressed as a per-job timeout, not a queue. |
+| `ingest.subseasonal` + `ingest.seasonal` + `ingest.climatology` | `ingest.climate` | one endpoint family (seasonal), one budget, one degrade-together failure mode. Cadence differences are handled by schedule and priority inside the queue. The monthly SEAS5 burst is protected by a 3-slot ceiling and a 180 s timeout, not by a separate queue. |
+| `recompute.briefings` | **deleted** | it only invalidated cached briefing state — deleting a cache key does not need a worker. Invalidation now happens in `maintenance` (sweep) and at the end of `recompute.windows` for touched fields. Pre-generating briefings would also mean paying for AI calls nobody reads. |
+
+### Merges deliberately **not** applied
+
+- `ingest.climate` vs `ingest.forecast`: a 120 s seasonal fetch would otherwise occupy the slots that keep the 0–3 day forecast current.
+- `aggregate` vs `recompute.windows`: aggregation failure must not block window recompute, and vice versa; they also have different replay costs.
+- `verify` vs everything: verification reads years of history and must be schedulable off-hours without touching interactive latency.
+- `maintenance` vs everything: it must run when other queues are paused or wedged — that is its purpose.
 
 Concurrency is deliberately low. Open-Meteo's free tier is 10 000 calls/day and BMKG's is 60/min; a parallel ingest that fans out per user request would burn the budget in an afternoon.
 
 ## 3. Scheduling and run identity
 
-- `runId` = `{provider}:{model}:{initializedAt ISO}`. Everything derived carries it.
+- `forecastRunId` = `{provider}:{model}:{product}:{initializedAt ISO}`, unique on that tuple. It is an identity of the **model output**, not of our attempt to fetch it.
+- `ingestionRunId` = a new row per attempt/version: `{forecastRunId, adapterVersion, normalizerVersion, targetSelectorHash, attempt}`. Re-normalizing stored payloads bumps `normalizerVersion` and creates a new `IngestionRun` under the **same** `ForecastRun` — a normalization fix must never surface to users as a new forecast.
+- Every derived artifact stores `inputRunRefs[]` (role → forecastRunId + ingestionRunId), `inputSnapshotHash`, `derivationVersion`, `computedAt`.
 - SEAS5: run at day 5, 12:00 UTC. Ingest starts +30 min, jittered per cell to spread load.
 - EC46: daily, after ~20:30 UTC.
 - Climatology: computed once per baseline version, not per request.
@@ -47,7 +62,7 @@ Dead-lettered jobs surface in `/monitoring/queues` with the error and the last p
 
 - Token-bucket per provider in Redis (`om:free:10000/day`, `bmkg:60/min`).
 - If a bucket is exhausted, jobs are deferred, not failed.
-- Per-cell deduplication: one in-flight job per `(cellKey, source, runId)`; duplicates are dropped by jobId, which is the idempotency key.
+- Per-cell deduplication: one in-flight job per `(cellKey, source, forecastRunId)`; duplicates are dropped by `jobId`, which is the idempotency key.
 - Batch multi-coordinate requests where the provider supports them; a single request for N cells costs one call.
 
 ## 6. Staleness rules (per class)
@@ -61,7 +76,17 @@ Dead-lettered jobs surface in `/monitoring/queues` with the error and the last p
 | `climatology` | baseline version age (yearly) | rebuild baseline |
 | `field_observation` | none | user data, always current-by-definition, show `observedAt` |
 
-Derived rows inherit the **oldest** freshness of their inputs. A planting window is never fresher than the stalest month it consumed.
+Derived artifacts do **not** inherit a single "oldest" freshness. That rule was wrong twice: climatology has no initialization time (so it would age a whole outlook forever), and a month missing for `beyond_horizon` is not stale at all.
+
+`DerivedFreshness` records `computedAt`, `oldestInputInitializedAt` (computed over **non-climatology** inputs only), and `staleInputRoles[]`. The artifact's availability is a function of those plus its own policy:
+
+| Artifact | Policy | Becomes stale when |
+|---|---|---|
+| `MonthlyOutlook` | derived | any non-climatology role was stale at compute time, or its own TTL (6 h) elapsed |
+| `PlantingWindow` | derived | older than the shortest-lived input TTL, floor 6 h, or any segment's source went stale |
+| `AiBriefing` | derived | any input run id changed — invalidation by identity, not by clock |
+
+A failed recompute leaves the previous artifact `active` with `reason = "recompute_failed"`; it is never deleted and never silently replaced by a worse class. New runs supersede by status change (`supersededById`), preserving the audit trail.
 
 ## 7. Recompute fan-out control
 
