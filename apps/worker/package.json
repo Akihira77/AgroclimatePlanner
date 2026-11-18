@@ -1,0 +1,20 @@
+{
+  "name": "@agroclimate/worker",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src",
+    "test": "node -e \"console.log('[worker] no tests in Phase 2.0')\"",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@agroclimate/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:"
+  }
+}
