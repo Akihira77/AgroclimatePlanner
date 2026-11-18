@@ -29,7 +29,12 @@ Binding engineering constraints (all are tested, not aspirational):
 
 1. **SRID.** Every geometry column is `geometry(Point|Polygon, 4326)`. A migration that omits the SRID fails review. Mixed-SRID rows are rejected by a check constraint.
 2. **Validity.** Inserts validate with `ST_IsValid`; invalid polygons are rejected at the API boundary with `422` and the `ST_IsValidReason` detail. No silent `ST_MakeValid` — a self-intersecting plot is a user error, not something to repair invisibly.
-3. **Complexity.** Polygons above 5 000 vertices are rejected; the API offers simplification (`ST_SimplifyPreserveTopology`, tolerance documented in metres) rather than accepting a shapefile dump that will degrade every spatial query.
+3. **Complexity.** Polygons above 5 000 vertices are rejected with `422` and a stated limit. v1 does **not** simplify. The earlier wording — "`ST_SimplifyPreserveTopology` with a tolerance in metres" — was wrong: that function's tolerance is expressed in the **units of the geometry's SRID**, so a metre value applied to EPSG:4326 means metres of *degrees*, roughly 111 km per unit, which would erase the plot. If simplification is ever added, the only correct sequence is: transform to the plot's local UTM zone, simplify with a metre tolerance there, transform back, then re-validate:
+   ```sql
+   -- zone from centroid: EPSG:326xx north / 327xx south, xx = floor((lon + 180) / 6) + 1
+   ST_Transform(ST_SimplifyPreserveTopology(ST_Transform(geom, 32748), 5.0), 4326)
+   ```
+   Zone selection is by centroid longitude, never a hardcoded zone — Indonesia spans UTM 46S–54S. This is a deliberate non-feature in v1: a phone-captured plot boundary is tens of vertices, and rejecting a 50 000-vertex shapefile dump is cheaper than owning a projection-aware geometry pipeline.
 4. **Indexing.** GiST on every geometry column, created in the same migration as the column. A geometry column without an index is a defect. Spatial joins use `ST_DWithin` on geography casts, not `ST_Distance < x` on geometry.
 5. **Area.** `ST_Area(geom::geography) / 10000` for hectares — **never** planar `ST_Area(geom)` in EPSG:4326, which measures square degrees and is wrong by a latitude-dependent factor. Stored `areaHa` is derived and re-computed when geometry changes; it is not user-editable.
 6. **Centroid vs area-weighted extraction.** The default cell-resolution policy is: polygon → `ST_PointOnSurface` (guaranteed inside the polygon, unlike `ST_Centroid` for concave shapes) → provider cell. Area-weighted extraction is **only** used for climatology baselines and only when the polygon intersects more than one baseline cell; the rule is recorded per resolution row as `extractionPolicy ∈ {centroid, area_weighted}` so a value's spatial provenance is never ambiguous.
@@ -46,7 +51,7 @@ The product is a single-tenant-per-account application with a long-lived session
 
 **D6. Derived data is materialised.**
 
-`MonthlyOutlook`, `SuitabilityRun`, `PlantingWindow`, and briefings are stored rows carrying `derivationVersion`, `inputRunRefs[]` (role → forecastRunId + ingestionRunId), `inputSnapshotHash`, `computedAt`, `status`, and supersession links — plus `engineVersion`/`profileVersionId` where applicable. Not computed on read, not cached in Redis as the source of truth. There is deliberately **no single `outlookRunId`**: a 12-month artifact consumes EC46, SEAS5, and a climatology baseline at once, and collapsing that into one id makes the artifact unreplayable. Rationale: freshness, auditability, and answering "why did this recommendation change" all require a durable record, and Redis eviction must never be able to change what a farmer was told.
+`MonthlyOutlook`, `SuitabilityRun`, `PlantingWindow`, and briefings are stored rows carrying `derivationVersion`, `inputRefs[]` (a discriminated union: forecast run, baseline, observation set, dataset — a baseline is not a run), `fieldSnapshot` where applicable, `inputSnapshotHash`, `computedAt`, `status`, and supersession links — plus `engineVersion`/`profileVersionId` where applicable. Not computed on read, not cached in Redis as the source of truth. There is deliberately **no single `outlookRunId`**: a 12-month artifact consumes EC46, SEAS5, and a climatology baseline at once, and collapsing that into one id makes the artifact unreplayable. Rationale: freshness, auditability, and answering "why did this recommendation change" all require a durable record, and Redis eviction must never be able to change what a farmer was told.
 
 **D7. One database, one Redis, one object store (optional).**
 
@@ -54,7 +59,9 @@ Raw provider payloads are stored in the object store only where the provider's t
 
 **D8. Tenant scoping is a transaction, not a convention.**
 
-Prisma multiplexes many requests over few connections, so a session-level `SET app.user_id` is a cross-tenant data leak waiting for a connection to be reused. Decision: the only tenant entry point is `withTenant(user, fn)`, which opens a `$transaction` and calls `set_config('app.user_id', $1, true)` — local to the transaction. No repository may accept a bare `PrismaClient`; CI rejects `SET ` (session-scoped) and `$queryRawUnsafe`. Policies fail closed because an unset `app.user_id` yields `NULL` and matches nothing. Worker jobs use a dedicated `BYPASSRLS` role rather than impersonating a user.
+Prisma multiplexes requests over few connections, so a session-level `SET app.user_id` is a cross-tenant leak waiting for a connection to be reused. Decision: the only tenant entry point is `withTenant(user, fn)`, which opens a `$transaction` and calls `set_config('app.user_id', $1, true)` — local to the transaction, through the **row-returning** raw API (`$queryRaw`, or `db.query(...)` on ORM 7), because `set_config` returns a row and the write-path API would discard the failure. No repository may accept a bare `PrismaClient`; CI rejects session-scoped `SET ` and `$queryRawUnsafe`. Policies fail closed because an unset `app.user_id` yields `NULL` and matches nothing.
+
+Role split: `app_system` (`BYPASSRLS`) is confined to jobs that touch no tenant rows (ingest, aggregate, verify, maintenance sweeps). `recompute.windows` writes tenant-owned artifacts and therefore runs as `app_api` inside `withTenant(ownerId)`; the owner id is resolved at enqueue time and carried in the job payload, not looked up from inside a bypass transaction.
 
 Consequence accepted: every request costs one extra round trip for `set_config`, and long read transactions hold a connection. Both are cheap at this scale; neither is negotiable against silent cross-tenant reads.
 

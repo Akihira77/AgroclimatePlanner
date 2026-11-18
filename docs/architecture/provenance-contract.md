@@ -30,7 +30,9 @@ Rules:
 |---|---|---|---|
 | `temporalClass` | **deprecated** | `dataClass` | Two names for one enum caused drift between ADR-001 and the architecture docs. Survives only in Phase 0 research prose describing history. |
 | `precision` (`daily\|dekadal\|monthly`) | **deprecated** | `evaluationBasis` | `dekadal` was never derivable from the monthly product and the enum could not express `mixed` or `climatology`. |
-| `outlookRunId` | **deprecated** | `inputRunRefs[]` (+ `primaryForecastRunId` when a single run dominates) | A derived artifact routinely consumes EC46 + SEAS5 + climatology baseline; one id cannot represent that. |
+| `outlookRunId` | **deprecated** | `inputRefs[]` (+ `primaryForecastRunId` when a single run dominates) | A derived artifact routinely consumes EC46 + SEAS5 + climatology baseline; one id cannot represent that. |
+| `inputRunRefs` | **deprecated** | `inputRefs[]` | The field required `forecastRunId` **and** `ingestionRunId` on every entry, which climatology cannot supply — the type could not describe the thing it was created for. A discriminated union replaces it; "run" was also the wrong noun for a baseline or a field snapshot. |
+| `sourceRunIds` (on a segment) | **deprecated** | `provenance: SegmentProvenance` | An empty array was the only way to express "climatology", which made an empty list indistinguishable from a bug. |
 | `runId` (bare) | **deprecated** | `forecastRunId` or `ingestionRunId` explicitly | The two were conflated, which would let a re-normalization masquerade as a new forecast. |
 
 ### Intentional distinction: `evidenceClass` vs `dataClass`
@@ -49,33 +51,59 @@ interface EvidenceSegment {
   endDate: string;            // inclusive
   evaluationBasis: "daily" | "weekly" | "monthly" | "climatology";
   evidenceClass: WeatherDataClass;
-  sourceRunIds: string[];     // forecastRunId values; empty for climatology
   coveragePercent: number;    // 0..100, share of days with a value
-  provenance: Array<{
-    provider: string;
-    model: string;
-    modelVersion?: string;
-    initializedAt?: string;   // absent for climatology
-    spatialResolutionKm: number;
-    servedValueIsInterpolated: boolean;
-    baselineVersion?: string; // present for climatology
-  }>;
+  provenance: SegmentProvenance;
 }
+
+// Discriminated: an entry cannot claim a run id it does not have.
+type SegmentProvenance =
+  | { kind: "forecast";                     // weather / subseasonal / seasonal / annual_outlook
+      forecastRunIds: [string, ...string[]]; // at least one; a segment may span two runs
+      initializedAt: string }
+  | { kind: "climatology";                  // baselines are not runs
+      baselineVersion: string }             // e.g. "ERA5:1991-2020:v1"
+  | { kind: "observation";                  // user-entered measurements only
+      observationIds: [string, ...string[]] }
+  | { kind: "dataset";                      // reanalysis, satellite_estimate
+      datasetVersion: string };
 ```
+
+`evidenceClass` remains a separate field rather than being derived from `kind`, because `reanalysis` and `satellite_estimate` are distinct classes that share a provenance shape, and `weather_forecast`/`subseasonal_forecast`/`seasonal_forecast` likewise. One field answers "what kind of evidence", the other "where exactly did it come from".
 
 ### Segment construction rules
 
-1. Segments are **non-overlapping and contiguous** within a window. No gaps: a day either has a segment or has `dataAvailability = unavailable` recorded in `missingRanges`.
+1. Segments are **non-overlapping and contiguous** within a window.
 2. Segment boundaries are set by data availability, never by convenience — a `seasonal_forecast` segment starts after the last day with genuine subseasonal data, not at the start of a calendar month.
 3. `coveragePercent < 100` is allowed and is reported; it is never silently rounded to 100.
 4. A segment may not mix classes. If a source changes mid-interval, split the segment.
-5. Climatology segments carry **no** `initializedAt` and **no** `sourceRunIds`. If either is present, the segment is mislabelled.
+5. A `provenance.kind = "climatology"` segment carries **no** `forecastRunIds` and **no** `initializedAt` — the type forbids it. A climatology segment that can name a run is a forecast mislabelled.
 6. `startDate`/`endDate` for `monthly` and `climatology` segments snap to calendar months. A monthly segment may not be used to justify a day-level recommendation.
+
+### Partition invariant (checked in code, not just documented)
+
+For a window `[windowStart, windowEnd]`:
+
+```
+segments ∪ missingRanges  ≡  every date in [windowStart, windowEnd], exactly once
+```
+
+Formally, the test that must exist before any window is persisted:
+
+1. **No overlap.** `∀ s₁ ≠ s₂ : s₁.end < s₂.start  ∨  s₂.end < s₁.start`. Adjacent means `s₁.end + 1 day = s₂.start`, not overlapping.
+2. **No uncovered date.** After sorting segments and missing ranges together by `startDate`, every gap between consecutive intervals is zero: `next.start = prev.end + 1 day`.
+3. **Full span.** The first interval starts at `windowStart`; the last ends at `windowEnd`.
+4. **Each segment is internally contiguous.** A segment with an internal hole is a modelling bug — the hole belongs in `missingRanges`.
+5. **Every missing range carries a `MissingReason` and a non-empty range.** `reason: undefined` is not permitted, and `startDate = endDate` for a *missing* single day is legal but must still be explicit.
+6. **Coverage reconciles.** `Σ coveragePercent × segment_length / window_length` plus missing-day share equals 100 %, within rounding. A reported 100 % coverage alongside missing ranges is a defect.
+
+A window that fails any of these is **not persisted** — the recompute job fails and the previous window stays `active` with `reason = "recompute_failed"`. Persisting a partial partition would let a dashboard silently render a gap as coverage.
 
 ### Window-level rollup
 
 ```ts
 interface PlantingWindow {
+  windowStart: string;
+  windowEnd: string;
   evaluationBasis: "daily" | "weekly" | "monthly" | "climatology" | "mixed";
   evidenceSegments: EvidenceSegment[];
   primaryBasis: "daily" | "weekly" | "monthly" | "climatology"; // basis of the critical stage
@@ -93,7 +121,7 @@ interface PlantingWindow {
 
 ```ts
 interface ForecastRun {
-  id: string;                 // f_run_…
+  id: string;                 // UUIDv7 — identity of the model output, not of our fetch
   provider: string;           // bmkg | open-meteo | ecmwf
   model: string;              // ecmwf_ifs025 | ecmwf_ec46 | ecmwf_seas5 | …
   modelVersion?: string;
@@ -104,13 +132,14 @@ interface ForecastRun {
 }
 
 interface IngestionRun {
-  id: string;                 // i_run_…
+  id: string;                 // UUIDv7 — identity of one *logical* ingest of one run
   forecastRunId: string;
   adapterVersion: string;     // weather-core adapter semver
   normalizerVersion: string;
   targetSelectorHash: string; // hash of the cells/variables requested
-  status: "queued" | "running" | "succeeded" | "partial" | "failed";
-  attempt: number;
+  ingestionVersion: string;   // sha256(adapterVersion, normalizerVersion, targetSelectorHash)
+  status: "queued" | "running" | "partial" | "succeeded" | "failed";
+  attempt: number;            // PHYSICAL execution counter, not identity
   startedAt: string;
   finishedAt?: string;
   recordCount: number;
@@ -119,10 +148,24 @@ interface IngestionRun {
 }
 ```
 
+### `attempt` is a counter, not a version
+
+Two different things were previously collapsed into the uniqueness key:
+
+| Event | Creates | Effect on `attempt` |
+|---|---|---|
+| BullMQ retries a failed job (network, 5xx, timeout) | nothing new | `attempt` increments **in place** |
+| Same job reprocessed after the process died mid-flight | nothing new | `attempt` increments in place |
+| A new `adapterVersion` or `normalizerVersion` ships | new `IngestionRun` | starts at 1 |
+| The target cell/variable set changes | new `IngestionRun` | starts at 1 |
+
+So: `attempt` records *how many times we tried the same logical ingest*. `ingestionVersion` records *which logical ingest it was*. Neither substitutes for the other, and a retry storm must never look like history.
+
 ### Uniqueness
 
-- `ForecastRun` is unique on `(provider, model, product, initializedAt)`. Optional `modelVersion` participates in identity when the provider publishes one that can change mid-run.
-- `IngestionRun` is unique on `(forecastRunId, adapterVersion, normalizerVersion, targetSelectorHash, attempt)`.
+- `ForecastRun` unique on `(provider, model, product, initializedAt)`. `modelVersion` participates in identity only where the provider publishes one that can change mid-run; otherwise it is descriptive metadata.
+- `IngestionRun` unique on `(forecastRunId, ingestionVersion)`. **`attempt` is not in the key** — if it were, every transient retry would mint a row, the record count would multiply, and "how many times did we ingest this run" would have no answer.
+- `WeatherRecord` supersession key includes `normalizerVersion`, so a reprocess replaces rows in place rather than accumulating parallel copies.
 
 ### Idempotency and reprocessing
 
@@ -147,38 +190,99 @@ interface DerivationProvenance {
   derivationVersion: string;        // version of the derivation rule set
   engineVersion?: string;           // agronomy engine semver (windows only)
   profileVersionId?: string;        // crop profile version (windows only)
-  baselineVersion?: string;         // e.g. "ERA5:1991-2020:v1" (outlook only)
-  inputRunRefs: Array<{
-    forecastRunId: string;
-    ingestionRunId: string;
-    role: "short_range" | "subseasonal" | "seasonal" | "climatology" | "verification_truth";
-  }>;
-  inputSnapshotHash: string;        // sha256 over canonical input descriptor
+  inputRefs: DataInputRef[];        // discriminated — see below
+  fieldSnapshot?: FieldSnapshot;    // required for SuitabilityRun / PlantingWindow
+  inputSnapshotHash: string;        // sha256 over the canonical descriptor (below)
   computedAt: string;
+  reproducible: boolean;            // false when a required input can no longer be replayed
+  unreproducibleReason?: string;
   supersedesId?: string;
   supersededById?: string;
   status: "active" | "superseded" | "failed";
 }
 ```
 
+### `DataInputRef` — discriminated by kind
+
+A baseline is not a run. An observation set is not a run. Forcing all three into `{ forecastRunId, ingestionRunId }` produced a type that could only be satisfied by writing `null` into required fields — which is exactly what happened before this correction.
+
+```ts
+type DataInputRef =
+  | { kind: "forecast";
+      role: "short_range" | "subseasonal" | "seasonal" | "verification_truth";
+      forecastRunIds: [string, ...string[]];
+      ingestionRunIds: [string, ...string[]];
+      recordSetHash: string }         // over the exact records consumed
+  | { kind: "baseline";
+      role: "climatology";
+      baselineVersion: string;        // "ERA5:1991-2020:v1"
+      baselineHash: string;           // over the stored monthly normals used
+      cellKeys: [string, ...string[]] }
+  | { kind: "observation";
+      role: "field_observation";
+      observationIds: [string, ...string[]];  // user-entered measurements
+      recordSetHash: string }
+  | { kind: "dataset";
+      role: "reanalysis" | "satellite_estimate";
+      datasetVersion: string;         // "ERA5:0.25deg:v1" | "CHIRPS:v3.0"
+      recordSetHash: string };
+```
+
+Rules:
+
+1. `kind: "baseline"` carries no run ids and no `initializedAt` — climatology has no initialization. Any artifact that renders a climatology value and also names an `initializedAt` is mislabelled.
+2. `role` is not free text. Every role maps to exactly one `dataClass`, and the mapping is asserted at persist time.
+3. `recordSetHash` = SHA-256 over the canonical JSON of the consumed records, each as `(cellKey, variable, validAt, ensembleMember|null, value, unit, dataClass)`, sorted. It answers "which numbers", not just "which run" — two runs can be fetched differently and still be the same run.
+
+### `FieldSnapshot` — the agronomic inputs that are not weather
+
+The previous hash covered cells, variables, and runs. It did **not** cover soil, irrigation, drainage, geometry, or the plot's own measurements — so two windows computed on different fields could share a hash, and a field edit would not change it. That breaks the invariant.
+
+```ts
+interface FieldSnapshot {
+  fieldId: string;
+  geometryHash: string;          // sha256 of geometry in canonical EWKB
+  areaHa: number;                // derived, ST_Area(geom::geography)
+  elevationM: number | null;
+  soilType: string | null;
+  soilPh: number | null;
+  drainageClass: string | null;
+  irrigationAvailable: boolean;
+  irrigationSource: string | null;
+  extractionPolicy: "centroid" | "area_weighted";
+  resolvedCells: Array<{ provider: string; model: string; cellKey: string;
+                         servedLat: number; servedLon: number; distanceKm: number }>;
+  observationsUsed: Array<{ observationId: string; kind: string;
+                            value: number; unit: string; observedAt: string }>;
+  fieldSnapshotHash: string;     // sha256 over every field above
+}
+```
+
+`null` is preserved as `null`, never normalised to a default — the agronomy engine distinguishes "unknown" from "known to be neutral", and that distinction is what produces `insufficient_data` instead of a fabricated score.
+
 ### Snapshot hash definition
 
 `inputSnapshotHash` = SHA-256 of the canonical JSON of:
 
 ```
-{ artifact, cells[], variables[], variablesUnits[], evaluationBasis[],
-  inputRunRefs (sorted by role,forecastRunId), baselineVersion?, profileVersionId?, engineVersion?,
-  derivationVersion }
+{ artifact,
+  dataInputRefs[]  (sorted by kind, role, then first id),
+    each contributing: kind, role, ids/versions, recordSetHash | baselineHash,
+  fieldSnapshot: { fieldSnapshotHash, extractionPolicy, resolvedCells[] }  // when applicable,
+  profileVersionId?, engineVersion?, derivationVersion }
 ```
 
-Canonical = sorted keys, fixed number formatting, no timestamps. Two derivations with the same hash must produce identical outputs; a hash change with identical outputs is a defect, not a feature.
+Canonical = sorted keys, fixed number formatting (no `-0`, no float re-printing), no timestamps of the computation itself.
+
+**The invariant:** identical `inputSnapshotHash` ⇒ identical complete computation inputs ⇒ byte-identical output. A hash change with identical output is a defect (something irrelevant leaked into the descriptor); an identical hash with different output is a **critical** defect (something relevant is missing from the descriptor).
 
 ### Reproducibility requirements
 
-1. Every derived row records **every** run it consumed, not one. A 12-month outlook consumes EC46, SEAS5, and a climatology baseline simultaneously.
-2. Given `inputRunRefs` + `inputSnapshotHash` + `derivationVersion`, re-running must yield byte-identical results. If it cannot (e.g. provider payload was not retained), the row is marked `reproducible: false` and the reason is stored.
-3. `profileVersionId` is mandatory on windows: editing a crop profile must not retroactively change a stored recommendation.
-4. Supersession is a linked list: `active → superseded`. Historical artifacts are never deleted by a recompute.
+1. Every derived row records **every** input, not one. A 12-month outlook consumes EC46 + SEAS5 + a baseline at once; a window consumes weather **and** field state **and** a profile version.
+2. Given `inputRefs` + `fieldSnapshot` + `inputSnapshotHash` + `derivationVersion`, re-running must yield byte-identical results.
+3. If a required input can no longer be replayed — raw payload not retained, baseline rebuilt with a different dataset, field edited and history not versioned — the row stores `reproducible: false` **and** `unreproducibleReason`. Silent unreproducibility is not permitted.
+4. `profileVersionId` is mandatory on windows: editing a crop profile must not retroactively change a stored recommendation.
+5. Supersession is a linked list: `active → superseded`. Historical artifacts are never deleted by a recompute.
 
 ---
 
@@ -251,19 +355,30 @@ type MissingReason =
 | `ingest_failed` / `provider_unavailable` | We have no value and no basis to claim one | `unavailable`; previous value may be shown as `stale` with the failure reason; never replaced by climatology |
 | `insufficient_history` | Baseline missing for the cell | `unavailable` on both axes; say so |
 
-The API therefore carries **two parallel axes** for every month/day:
+The API therefore carries **two parallel axes** for every month/day, and the value itself is a discriminated union:
 
 ```json
 {
   "date": "2027-03-01",
-  "forecast":   { "dataAvailability": "not_applicable", "reason": "beyond_horizon" },
-  "climatology":{ "dataAvailability": "available", "baselineVersion": "ERA5:1991-2020:v1" },
-  "value": 244.2, "unit": "mm",
-  "displayedClass": "climatology"
+  "forecast":    { "dataAvailability": "not_applicable", "reason": "beyond_horizon" },
+  "climatology": { "dataAvailability": "available",
+                   "baselineVersion": "ERA5:1991-2020:v1" },
+  "value": {
+    "dataClass": "climatology",
+    "evaluationBasis": "climatology",
+    "amount": 244.2,
+    "unit": "mm",
+    "baseline": { "baselineVersion": "ERA5:1991-2020:v1",
+                  "periodFrom": "1991-01-01", "periodTo": "2020-12-31" },
+    "spatialResolutionKm": 28,
+    "servedValueIsInterpolated": true,
+    "freshness": { "kind": "source", "dataAvailability": "available" },
+    "attribution": "Copernicus / ECMWF"
+  }
 }
 ```
 
-A month never renders as a forecast because the slot needed filling.
+`dataClass` is the discriminant, and it is the **only** place the class is stated — there is no `displayedClass` or similar escape hatch. A month never renders as a forecast because the slot needed filling, and a climatology value cannot borrow a forecast's provenance shape by leaving `initializedAt` empty.
 
 ---
 
@@ -288,9 +403,9 @@ A month never renders as a forecast because the slot needed filling.
 
 | Document | Obligation |
 |---|---|
-| `domain-model.md` | persist `EvidenceSegment`, `ForecastRun`, `IngestionRun`, `DerivationProvenance`; no bare `runId` |
-| `data-flow.md` | construct segments from availability, never from convenience; report both axes |
-| `api-conventions.md` | expose `evaluationBasis`, `evidenceClass`, `dataAvailability`, per-source freshness |
-| `background-processing.md` | enqueue by `forecastRunId`; reprocessing bumps `normalizerVersion` only |
+| `domain-model.md` | persist `EvidenceSegment`, `ForecastRun`, `IngestionRun`, `DerivationProvenance`, `FieldSnapshot`; no bare `runId`; `userId` denormalised onto tenant-owned derived tables |
+| `data-flow.md` | construct segments from availability, never from convenience; report both axes; capture `FieldSnapshot` at compute time |
+| `api-conventions.md` | expose `evaluationBasis`, `dataClass`, `dataAvailability`, per-source freshness; per-class **conditional** provenance through a discriminated union |
+| `background-processing.md` | enqueue by `forecastRunId`; reprocessing bumps `normalizerVersion` (and therefore `ingestionVersion`); a retry bumps `attempt` only; group fan-out by owner |
 | ADR-001 | `dataClass` is the canonical enum; `temporalClass` is deprecated |
-| ADR-002 | derived artifacts must carry `inputSnapshotHash` and be replayable |
+| ADR-002 | derived artifacts must carry `inputRefs`, `inputSnapshotHash`, and be replayable; `BYPASSRLS` never writes tenant-owned rows |

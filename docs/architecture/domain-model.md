@@ -68,11 +68,11 @@ IngestionRun { id, forecastRunId, adapterVersion, normalizerVersion, targetSelec
 1. `dataClass` is one of the 9 classes in ADR-001 D9. `observation` requires a `field_observation` source; no provider produces it in v1. `temporalClass` is deprecated and must not appear in schema.
 2. One row per `(forecastRunId, cellKey, variable, validAt, ensembleMember)` under a given `normalizerVersion`. Duplicate ingest is an upsert; a normalizer change supersedes rows, it does not duplicate them.
 3. Raw provider payloads may be retained separately (file store) and are never the query surface.
-4. `MonthlyOutlook` rows carry `dataClass`, `anomalyKind`, `baselineVersion`, `modelClimateOffsetMm`, `dataCoverage`, `ensembleSpread` (or `spreadUnavailable`), `derivationVersion`, `inputRunRefs[]`, `inputSnapshotHash`, `computedAt`, `status`, `supersededById`.
-5. `ForecastRun` is unique on `(provider, model, product, initializedAt)`; `IngestionRun` on `(forecastRunId, adapterVersion, normalizerVersion, targetSelectorHash, attempt)`.
+4. `MonthlyOutlook` rows carry `dataClass`, `anomalyKind`, `baselineVersion`, `modelClimateOffsetMm`, `dataCoverage`, `ensembleSpread` (or `spreadUnavailable`), `derivationVersion`, `inputRefs[]`, `inputSnapshotHash`, `computedAt`, `status`, `supersededById`.
+5. `ForecastRun` is unique on `(provider, model, product, initializedAt)`; `IngestionRun` on `(forecastRunId, ingestionVersion)` where `ingestionVersion = sha256(adapterVersion, normalizerVersion, targetSelectorHash)`. `attempt` is a physical retry counter on that row, not part of identity — including it would mint a row per retry.
 6. Re-normalizing a stored payload creates a new `IngestionRun` under the **same** `ForecastRun`. A bug fix in normalization must never appear to users as a new forecast.
 
-**Invariant:** a `MonthlyOutlook` with `dataClass = climatology` may not carry `initializedAt` or `sourceRunIds`. Climatology has no initialization; faking one is how climatology starts looking like a forecast.
+**Invariant:** a `MonthlyOutlook` with `dataClass = climatology` may not carry `initializedAt`, and its baseline input is `{ kind: "baseline", baselineVersion, baselineHash, cellKeys }` — not a run reference. Climatology has no initialization; faking one is how climatology starts looking like a forecast.
 
 **Invariant:** a month that is missing because the source is `beyond_horizon` and a month that is missing because ingest failed are different rows, with different `MissingReason`. They may not share a display state.
 
@@ -80,14 +80,15 @@ IngestionRun { id, forecastRunId, adapterVersion, normalizerVersion, targetSelec
 
 ```
 SuitabilityRun {
-  id, fieldId, profileVersionId, computedAt, engineVersion, derivationVersion,
+  id, fieldId, userId, profileVersionId, computedAt, engineVersion, derivationVersion,
   dimensionCoverage[{dimension, state}], maxAchievableLevel,
-  inputRunRefs[{forecastRunId, ingestionRunId, role}], inputSnapshotHash, status
+  inputRefs[DataInputRef], fieldSnapshot{…, fieldSnapshotHash}, inputSnapshotHash,
+  reproducible, status
 }
 
 PlantingWindow {
-  id, suitabilityRunId, cropId, cultivarId, fieldId,
-  startDate, endDate,
+  id, suitabilityRunId, cropId, cultivarId, fieldId, userId,
+  windowStart, windowEnd,
   evaluationBasis, primaryBasis, mixedEvidence, weakestEvidenceClass,
   evidenceSegments[EvidenceSegment],
   missingRanges[{startDate, endDate, reason}],
@@ -97,19 +98,22 @@ PlantingWindow {
 
 EvidenceSegment {
   startDate, endDate, evaluationBasis, evidenceClass,
-  sourceRunIds[], coveragePercent,
-  provenance[{provider, model, modelVersion?, initializedAt?, spatialResolutionKm,
-              servedValueIsInterpolated, baselineVersion?}]
+  coveragePercent, provenance
 }
 ```
+
+`DataInputRef`, `FieldSnapshot`, and `SegmentProvenance` are defined normatively in `provenance-contract.md` §2/§4 — they are discriminated unions, not flat records with nullable fields.
+
+`userId` is denormalised onto `suitability_runs` and `planting_windows` so the RLS policy is a column comparison rather than a join through `fields`.
 
 **Invariants**
 1. No `score` when any dimension is `unknown`.
 2. `suitability = insufficient_data` whenever a hard constraint's input is unknown — never `poor`.
-3. `evidenceSegments` are non-overlapping, contiguous, and never mix classes inside one segment. Gaps are `missingRanges`, not silently extended segments.
+3. `evidenceSegments ∪ missingRanges` **partition** `[windowStart, windowEnd]` exactly — no overlap, no gap, every missing range carrying a `MissingReason`. A window failing the partition test is not persisted.
 4. `primaryBasis` is the basis covering the **critical stage**, not the longest interval. A window whose critical stage sits in a climatology segment is reported as such.
-5. `engineVersion`, `profileVersionId`, `derivationVersion`, and `inputSnapshotHash` make the window replayable; `inputRunRefs` must list every source consumed.
-6. A climatology segment carries no `initializedAt` and no `sourceRunIds`; if it does, the record is invalid.
+5. `engineVersion`, `profileVersionId`, `derivationVersion`, `fieldSnapshot.fieldSnapshotHash`, and `inputSnapshotHash` make the window replayable; `inputRefs` must list every data input consumed, including the climatology baseline when one was used.
+6. A `SegmentProvenance` of kind `climatology` can carry no run ids and no `initializedAt` — the type forbids it, which is why the union exists.
+7. `reproducible: false` is a legal stored state **with** a reason; silent unreproducibility is not.
 
 ## 6. Activity and local data
 
@@ -121,10 +125,10 @@ EvidenceSegment {
 
 | Rule | Enforcement |
 |---|---|
-| Owner isolation | `user_id` on farms; repository-level filter + RLS |
+| Owner isolation | `user_id` on farms, fields, and every tenant-owned derived table; repository filter + transaction-scoped RLS |
 | Profile immutability | publish creates a new version; no UPDATE on published rows |
 | No silent class mixing | column + check constraint on `dataClass`; API rejects cross-class merges |
-| Staleness is data | every derived row stores its `inputRunRefs[]`, `inputSnapshotHash`, `derivationVersion`, and `computedAt` |
+| Staleness is data | every derived row stores its `inputRefs[]`, `fieldSnapshot`, `inputSnapshotHash`, `derivationVersion`, and `computedAt` |
 | Deletion | farms/fields soft-delete; weather records never deleted, only superseded |
 
 ## 8. What this model deliberately does not have

@@ -6,6 +6,8 @@ Method: read every document end to end, grep for the ten vocabulary terms, then 
 
 Outcome: **Phase 1.1 accepted. Phase 2 may begin**, subject to the blockers in §6.
 
+> **Partially superseded by Phase 1.2** (`docs/review/phase-1-architecture-review.md` §10). This document is a dated record of what Phase 1.1 decided and stays as written. Phase 1.2 corrected five of its contracts: `inputRefs` (was `inputRunRefs`), `SegmentProvenance` (was `sourceRunIds`), conditional per-class API provenance, `FieldSnapshot`, and `IngestionRun.attempt` semantics. Where this document and the provenance contract disagree, the contract wins.
+
 ---
 
 ## 1. Findings
@@ -185,3 +187,99 @@ Not checked, because it cannot be checked in documents: whether the policies act
 2. The agronomy engine is a pure function of (profile version, outlook, field).
 3. `dataClass` + `evaluationBasis` + `dataAvailability` are required in the contract.
 4. No synchronous provider call exists on a request path.
+
+---
+
+## 10. Phase 1.2 — final consistency correction
+
+Nine corrective items, each verified against the actual file text before changing anything. Two premises were adjusted, and one was rejected in favour of a third option.
+
+### Findings
+
+| # | Finding | Severity |
+|---|---|---|
+| F13 | `DerivationProvenance.inputRunRefs` required `forecastRunId` **and** `ingestionRunId` on every entry, while one of its own `role` values was `climatology`. The type could only be satisfied by writing nulls into required fields — a baseline is not a run. This is the Phase 1.1 union that was still not a union. | **P0** |
+| F14 | The API contract required `forecastRunId`/`ingestionRunId`/`initializedAt` on *every* weather value, so a climatology value could only be expressed by inventing them, and the worked example did exactly that by introducing `displayedClass` — a field that states the class without being the class. | **P0** |
+| F15 | `inputSnapshotHash` covered cells, variables, runs, and baseline — but **not** soil, pH, drainage, irrigation, geometry, extraction policy, or the plot's own observations. Two windows computed on different fields could share a hash; editing a field's soil type would not change it. The hash therefore did not mean "identical computation inputs". | **P0** |
+| F16 | Contradiction between three documents: "IDs are opaque ULID strings", `current_setting('app.user_id')::uuid`, and `withTenant(user.fn)` taking `user.id`. ULID cannot be cast to `uuid`; the RLS policy would have thrown at runtime. | **P0** |
+| F17 | The `withTenant` example used `$executeRaw` for `SELECT set_config(...)`. That API is for statements returning a count; the returned value is discarded. A silently failing context set is a cross-tenant read, which is the worst possible failure for this block. | **P0** |
+| F18 | `background-processing.md` §8 still said "if SEAS5 is unavailable for a cell, months fall to climatology because the class rule says so" — the exact substitution the contract forbids everywhere else. | **P0** |
+| F19 | ADR-002 D3 said "`ST_SimplifyPreserveTopology`, tolerance documented in metres" on raw EPSG:4326 geometry. That function's tolerance is in SRID units — degrees — so 5.0 would mean 5 degrees, roughly 550 km. | P1 |
+| F20 | `BYPASSRLS` was granted to "the worker" wholesale, including `recompute.windows`, which writes tenant-owned rows. Worse, fan-out was specified as "batches of 100 fields", which spans tenants and therefore cannot run under one `app.user_id` at all. | **P0** |
+| F21 | The segment invariant said "non-overlapping and contiguous" but never stated that segments **plus** missing ranges must partition the window, so a window could be persisted with a gap that the UI renders as coverage. | P1 |
+| F22 | `IngestionRun.attempt` sat inside the uniqueness key. Every BullMQ retry would then mint a new row, multiplying record counts and making "how many times did we ingest this run" unanswerable. Retry and reprocessing had one field between them. | P1 |
+
+### Decisions accepted
+
+**A12. `inputRefs` is a four-variant discriminated union** — `forecast` (run ids + `recordSetHash`), `baseline` (`baselineVersion` + `baselineHash` + `cellKeys`, no run ids), `observation` (`observationIds` + hash), `dataset` (`datasetVersion` + hash). `inputRunRefs` is deprecated because "run" was the wrong noun and the required fields were unsatisfiable.
+
+**A13. The API value type is a union discriminated on `dataClass`**, with `source?: never` and `initializedAt?: never` on climatology and observation variants. This makes "climatology carrying an `initializedAt`" a compile error rather than a review comment. `displayedClass` is deleted.
+
+**A14. `FieldSnapshot` is a hashed input**, not an implicit read. It carries `geometryHash`, `areaHa`, elevation, soil type, pH, drainage, irrigation, extraction policy, resolved cells, and the observations used — each `null` preserved as `null`, never defaulted. `inputSnapshotHash` now covers it.
+
+**A15. One id space: UUIDv7 everywhere.** API ids, primary keys, and `app.user_id` are the same value. Rejected "UUID internally + ULID publicly" (every policy, join, and URL parse needs a mapping) and rejected ULID as the PK (26-char text doubles the index, needs a CHECK, buys sortability that v7 already has).
+
+**A16. Row-returning raw SQL uses the row-returning API.** Verified against the current Prisma docs: `$queryRaw` returns rows, `$executeRaw` runs a write; ORM 7 renames these to `db.query()` / `db.execute()` with `.returnsRow(spec)`. Also recorded: ORM 7's `db.transaction(cb)` takes no isolation options, and `tx` cannot nest — so transaction-aware helpers must accept `tx`.
+
+**A17. Climatology is licensed only by `beyond_horizon`,** and "we have nothing" is never a reason to conclude "the horizon ends here". Failure states stay failure states.
+
+**A18. Worker roles are split by what the job writes.** `app_system` (`BYPASSRLS`) is confined to ingest, aggregate, verify, and maintenance — none of which touch a tenant row. `recompute.windows` runs as `app_api` inside `withTenant(ownerId)`, with `ownerId` resolved at enqueue time and carried in the payload.
+
+**A19. Fan-out is grouped by owner, then batched to ≤100 fields.** Batching across tenants was incompatible with transaction-scoped RLS, not merely inelegant.
+
+**A20. `IngestionRun` has `ingestionVersion` (identity) and `attempt` (physical counter).** Uniqueness is `(forecastRunId, ingestionVersion)`. Retries increment `attempt` in place; adapter/normalizer/target changes mint a new `IngestionRun` at `attempt = 1`.
+
+**A21. v1 rejects complex polygons instead of simplifying them.** 5 000-vertex cap; no projection-aware geometry pipeline. The UTM sequence is documented for the day it is actually needed, with zone selection by centroid longitude (Indonesia spans 46S–54S, so a hardcoded zone is wrong).
+
+**A22. The partition invariant is executable**, with six assertions (no overlap, no gap, full span, internal contiguity, reason present, coverage reconciles). A window failing it is not persisted.
+
+### Decisions rejected
+
+**R7. Do not make every provenance property optional to fit one flat shape.** That was the underlying proposal of "reconcile the three documents"; it would have made the contract unable to express the one rule the product depends on. Conditional requiredness via a union is the fix.
+
+**R8. Do not store a hash *instead of* run references.** A hash proves sameness; it cannot tell you which run to re-fetch. Both are kept — `recordSetHash` per input ref answers "which numbers", `forecastRunIds` answers "which run".
+
+**R9. Do not add a separate weather-snapshot table.** `recordSetHash` over the stored records achieves verifiability without duplicating bytes, and raw-payload retention is ToS-gated anyway. A second copy of provider data would be a licensing problem disguised as a provenance feature.
+
+**R10. Do not extend `attempt` to mean both retry and reprocessing.** Two meanings in one field is what caused F22; splitting the field is cheaper than adding a table, which is why no new table was introduced.
+
+### Remaining risks introduced by this pass
+
+| Risk | Mitigation | Next check |
+|---|---|---|
+| `recordSetHash` is only verifiable if the records still exist; supersession keeps history but a normalizer change replaces rows | `reproducible: false` + reason stored | Phase 4: verify that superseded rows remain readable for hashing, or store the hash input separately |
+| `FieldSnapshot` is captured at compute time, so a window computed before a soil edit cannot be recomputed against the *new* soil — by design | `fieldSnapshotHash` on the artifact makes the difference explicit | Phase 6: test that editing soil marks windows stale |
+| `source?: never` requires the Zod/OpenAPI generation to emit real `oneOf` variants | contract test with a climatology fixture carrying `initializedAt` must fail | Phase 2: generate the schema and assert the negative case |
+| Grouping fan-out by owner can produce many small jobs | per-owner batching, priority ordering | Phase 4: measure job count on a synthetic 10k-owner set |
+| UUIDv7 exposes a millisecond timestamp | identical exposure to ULID; ids are opaque and not secrets | accepted, no action |
+
+### Consistency matrix
+
+Each corrected contract, and every document that had to move with it.
+
+| Contract | Corrected in | Dependent documents updated |
+|---|---|---|
+| `inputRefs` discriminated union (A12) | `provenance-contract.md` §4 | `domain-model.md` §5, `data-flow.md` §4/§7, `api-conventions.md` §10, `background-processing.md` §3, ADR-001 follow-up 6, ADR-002 D6, `phase-0-review.md`, `IMPLEMENTATION_STATUS.md` |
+| Conditional API provenance (A13) | `api-conventions.md` §4 + §11, `provenance-contract.md` §6 | `system-architecture.md` §6, `domain-model.md` §4 invariant |
+| `FieldSnapshot` + hash coverage (A14) | `provenance-contract.md` §4 | `domain-model.md` §5, `data-flow.md` §4, ADR-001 follow-up 6, ADR-002 D6 |
+| Single UUIDv7 id space (A15) | `api-conventions.md` §1 | `system-architecture.md` §8 (policy cast + `withTenant`), `provenance-contract.md` §3 (id comments), `domain-model.md` §7 |
+| Row-returning raw SQL (A16) | `system-architecture.md` §8 | ADR-002 D8 |
+| `beyond_horizon` exclusivity (A17) | `background-processing.md` §8 | already held in `data-flow.md` §3 and `system-architecture.md` §7; no contradiction left |
+| Worker role split (A18) | `system-architecture.md` §8 | `background-processing.md` §7, ADR-002 D8 |
+| Owner-grouped fan-out (A19) | `background-processing.md` §7 | `system-architecture.md` §8 |
+| `ingestionVersion` vs `attempt` (A20) | `provenance-contract.md` §3 | `domain-model.md` §4 invariant 5, `IMPLEMENTATION_STATUS.md` |
+| No simplification (A21) | ADR-002 D3 item 3 | `domain-model.md` §2 (resolution policy) unchanged |
+| Partition invariant (A22) | `provenance-contract.md` §2 | `domain-model.md` §5 invariant 3 |
+| `SegmentProvenance` (F13 side effect) | `provenance-contract.md` §2 | `domain-model.md` §5, `phase-1` §2 D-A2 (superseded banner) |
+
+### Phase 2 readiness
+
+**Ready: yes.** The five P0 corrections change types, not architecture — no accepted decision was overturned, and the stack is unchanged.
+
+Three things Phase 2 must get right on the first commit, because they are structural rather than cosmetic:
+
+1. `withTenant` uses the row-returning raw API, and the isolation test asserts a query outside it returns zero rows.
+2. `packages/contracts` emits a real `oneOf` on `dataClass`, with a *negative* test: a climatology fixture carrying `initializedAt` must fail validation.
+3. `ingest` and `recompute.windows` use different DB roles from day one; the split cannot be retrofitted after the first tenant data exists.
+
+Not blocking Phase 2: Open-Meteo paid-vs-self-host, BMKG written permission, ECMWF Set VII licence enquiry.

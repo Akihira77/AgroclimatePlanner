@@ -39,8 +39,8 @@ Concurrency is deliberately low. Open-Meteo's free tier is 10 000 calls/day and 
 ## 3. Scheduling and run identity
 
 - `forecastRunId` = `{provider}:{model}:{product}:{initializedAt ISO}`, unique on that tuple. It is an identity of the **model output**, not of our attempt to fetch it.
-- `ingestionRunId` = a new row per attempt/version: `{forecastRunId, adapterVersion, normalizerVersion, targetSelectorHash, attempt}`. Re-normalizing stored payloads bumps `normalizerVersion` and creates a new `IngestionRun` under the **same** `ForecastRun` — a normalization fix must never surface to users as a new forecast.
-- Every derived artifact stores `inputRunRefs[]` (role → forecastRunId + ingestionRunId), `inputSnapshotHash`, `derivationVersion`, `computedAt`.
+- `ingestionRunId` → one row per **logical** ingest: unique on `(forecastRunId, ingestionVersion)` where `ingestionVersion = sha256(adapterVersion, normalizerVersion, targetSelectorHash)`. `attempt` is a physical retry counter on that row, not part of identity. Re-normalizing stored payloads bumps `normalizerVersion`, which changes `ingestionVersion` and creates a new `IngestionRun` under the **same** `ForecastRun` — a normalization fix must never surface to users as a new forecast. A BullMQ retry increments `attempt` in place and creates nothing.
+- Every derived artifact stores `inputRefs[]` (discriminated: forecast run, baseline, observation set, dataset), `fieldSnapshot` where applicable, `inputSnapshotHash`, `derivationVersion`, `computedAt`.
 - SEAS5: run at day 5, 12:00 UTC. Ingest starts +30 min, jittered per cell to spread load.
 - EC46: daily, after ~20:30 UTC.
 - Climatology: computed once per baseline version, not per request.
@@ -93,17 +93,19 @@ A failed recompute leaves the previous artifact `active` with `reason = "recompu
 A new SEAS5 run can invalidate thousands of fields. The fan-out is:
 
 1. Collect affected cells (only cells with at least one active field).
-2. Compute deduplicated field set per cell.
-3. Chunk into batches of 100 fields; each batch is one job.
-4. Write results in a transaction per batch so a mid-run failure does not leave half-updated windows.
+2. Resolve `(fieldId, ownerId)` pairs — this is the only step that needs the system role, and it emits ids only.
+3. **Group by `ownerId`**, then chunk each owner's fields into batches of ≤ 100. One job = one owner.
+4. Each job runs inside `withTenant(ownerId, …)` and writes in a transaction per batch, so a mid-run failure does not leave half-updated windows.
 
-Priority: fields with an active planting record or a near-term window are computed first; the rest follow.
+Batching "100 fields" across owners was the earlier design and is incompatible with transaction-scoped RLS: a batch spanning two tenants cannot be written under one `app.user_id`. Grouping by owner costs nothing — a farm has a handful of plots, so most owners produce exactly one job — and it keeps the recompute path identical to the request path.
+
+Priority: fields with an active planting record or a near-term window are computed first; the rest follow. `ownerId` is part of the job payload; a payload without it fails the job rather than falling back to a bypass role.
 
 ## 8. Failure semantics that must not be softened
 
 - A job that cannot ingest must never write a placeholder row. Missing data is missing.
 - A recompute that fails must leave the previous windows intact and flagged stale, not delete them.
-- The worker never "repairs" a class boundary: if SEAS5 is unavailable for a cell, months fall to climatology because the class rule says so, and the record shows it.
+- The worker never "repairs" a class boundary. Months 2–7 falling to climatology happens **only** when the seasonal horizon genuinely ends there (`beyond_horizon`). A `pending`, `ingest_failed`, or `provider_unavailable` seasonal month is reported as exactly that — never backfilled with climatology, and never marked `beyond_horizon` because the job failed. Deciding "the horizon ends here" from "we have nothing" is the single most attractive wrong shortcut in this system.
 
 ## 9. Observability
 

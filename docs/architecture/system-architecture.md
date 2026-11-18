@@ -171,30 +171,53 @@ v1 is single-owner-per-account. Ownership is a column (`user_id`) on `farms`, en
 RLS is only a defence if the setting cannot outlive the request. Prisma pools connections, so `SET app.user_id` on a pooled connection leaks that identity into the next request. The rule is therefore **transaction-scoped**:
 
 ```sql
--- policy shape
+-- policy shape; app.user_id is a uuid, matching the ULID-free single id space
 CREATE POLICY farm_owner ON farms
   USING (user_id = current_setting('app.user_id', true)::uuid);
--- no user_id set -> current_setting returns NULL -> policy matches nothing (fail closed)
+-- no app.user_id set -> current_setting returns NULL -> policy matches no rows (fail closed)
 ```
 
 ```ts
 // packages/database/src/tenant.ts — the only way tenants are scoped
 export function withTenant<T>(user: AuthUser, fn: (tx: Tx) => Promise<T>): Promise<T> {
   return prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT set_config('app.user_id', ${user.id}, true)`; // true = local to txn
+    // set_config returns one row, so this MUST use the row-returning API.
+    // $executeRaw is for statements that return a count; using it here is the bug
+    // this comment exists to prevent.
+    await tx.$queryRaw`SELECT set_config('app.user_id', ${user.id}, true)`; // true = local to txn
     return fn(tx);
   });
 }
 ```
+
+Prisma API note (checked against the current docs, not assumed): the rule is **rows → `$queryRaw`, writes → `$executeRaw`**. Prisma ORM 7 renames these to `db.query(stmt)` and `db.execute(stmt)`, where a row-returning raw statement is built with `.returnsRow(spec).build()` and the spec declares each column's type — e.g. `db.raw.sql\`SELECT set_config('app.user_id', ${userId}, true)\`.returnsRow({ set_config: "pg/text@1" }).build()`. Whichever major version Phase 2 pins, `SELECT set_config(...)` is a row-returning statement and must take the row-returning path; a write-only API discards the result and turns a silently-failing context set into a cross-tenant read.
+
+Two ORM-7 constraints worth recording now, because they shape the repository layer: `db.transaction(cb)` accepts only the callback (no `isolationLevel`/`timeout`), and `tx` has no nested `transaction()` — so a helper that needs a transaction must accept `tx` as a parameter rather than opening its own.
 
 Binding rules:
 
 1. `set_config(..., is_local => true)` only. `SET` (session-scoped) is forbidden anywhere in the codebase; a lint/grep check in CI rejects it.
 2. Every request path enters the database through `withTenant(user, fn)`. A repository function never receives a raw `PrismaClient`.
 3. A connection returned to the pool has no `app.user_id` (the transaction reset it), so a missing context fails closed — the policy matches zero rows rather than all of them. This is the property that makes the second line worth having.
-4. Worker jobs have no user. They run as a dedicated role with `BYPASSRLS` granted only to that role, or through an explicitly-scoped service function — never by faking a user id.
+4. **Worker roles are split by what the job touches.** "The worker has no user" was too coarse: ingestion touches no tenant data, but window recompute writes tenant-owned rows.
 5. Integration test requirement: two concurrent requests for different users inside one pooled client must not see each other's rows, and a query outside `withTenant` must return zero rows.
 6. Ownership is *also* checked at the controller boundary. RLS is a backstop against a forgotten `WHERE`, not the primary authorization mechanism — the two are independent by design.
+
+### Worker privilege boundary
+
+| Job | Touches | DB role | Tenant scoping |
+|---|---|---|---|
+| `ingest.forecast`, `ingest.climate` | `ForecastRun`, `IngestionRun`, `WeatherRecord` — no `user_id` column | `app_system` (`BYPASSRLS`) | not applicable; these tables carry no tenant policy at all |
+| `aggregate` | `MonthlyOutlook` keyed by cell, not by user | `app_system` | not applicable |
+| `verify` | weather history + archive | `app_system` | not applicable |
+| `maintenance` | cross-tenant sweep: staleness, orphans, dead letters | `app_system` | read-only over ids; must not write tenant-owned rows |
+| **`recompute.windows`** | `SuitabilityRun`, `PlantingWindow`, briefings — **tenant-owned** | **`app_api`, not `app_system`** | **required**: `withTenant(ownerId, …)` |
+
+Consequence for `recompute.windows`: the job must never write through the `BYPASSRLS` role. The owner is resolved **before** the job is enqueued — `aggregate` (system role) emits `(fieldId, ownerId)` pairs, and the job payload carries `ownerId`. The job then enters `withTenant(ownerId)`, exactly like a request would. If the payload is missing `ownerId`, the job **fails**; it does not fall back to a bypass role.
+
+Two invariants: `BYPASSRLS` is granted to no role that writes `farms`, `fields`, `suitability_runs`, `planting_windows`, or `ai_briefings`; and no job reconstructs an owner id by querying inside a bypass transaction and then continuing to write in that same transaction.
+
+Tenant-owned derived tables therefore carry a denormalised `user_id` column. The alternative — a policy that joins through `fields` — turns every write into a join against an RLS-protected table, which is both slower and a second place for the ownership rule to be wrong.
 
 ## 9. Observability
 

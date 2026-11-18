@@ -85,7 +85,7 @@ sequenceDiagram
   ENG->>DB: load monthly outlook (with dataClass + dataAvailability per month)
   ENG->>A: evaluate(field, profile, outlook, options)
   A-->>ENG: windows[] with evidenceSegments, dimensionCoverage, missingInputs
-  ENG->>DB: persist SuitabilityRun + windows (engineVersion, derivationVersion, inputRunRefs, inputSnapshotHash)
+  ENG->>DB: persist SuitabilityRun + windows (engineVersion, derivationVersion, inputRefs, fieldSnapshot, inputSnapshotHash)
 ```
 
 The agronomy package is a **pure function**. Given the same inputs it must return byte-identical results — that is what makes `docs/data-model` versioning meaningful and Phase 9 backtesting possible.
@@ -135,7 +135,7 @@ On a new run (SEAS5 on the 5th, EC46 daily, forecast hourly):
 3. `recompute.windows` runs for fields whose cells changed.
 4. Briefings become stale; they are regenerated on next request, not pushed.
 
-Every derived row stores `inputRunRefs[]` (every source consumed, with role) plus `inputSnapshotHash`, so a change is explainable after the fact: "this recommendation moved because the October SEAS5 run arrived" — and the exact inputs are replayable. There is no single `outlookRunId`; a 12-month artifact consumes EC46, SEAS5, and a baseline at once.
+Every derived row stores `inputRefs[]` (every input consumed, discriminated by kind) plus `fieldSnapshot` and `inputSnapshotHash`, so a change is explainable after the fact: "this recommendation moved because the October SEAS5 run arrived" — and the exact inputs are replayable. There is no single `outlookRunId`; a 12-month artifact consumes EC46, SEAS5, and a baseline at once.
 
 ## 8. Failure and partial data
 

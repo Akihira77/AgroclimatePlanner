@@ -6,8 +6,8 @@ Status: Phase 1. Binding on Phase 3–8. OpenAPI is generated from Zod schemas i
 
 - Base path `/v1`. Breaking change ⇒ `/v2`, never a silent shape change.
 - `Content-Type: application/json; charset=utf-8`. All timestamps ISO-8601 UTC (`Z`); user-facing dates computed in `Asia/Jakarta`.
-- IDs: opaque ULID strings, never sequential integers in the URL.
-- Money: not applicable. Units must be explicit on every numeric field (`value`, `unit`), never implied by the key name alone.
+- IDs: opaque **UUIDv7** strings, never sequential integers in the URL. One id space — the value in the URL is the primary key in Postgres (`uuid`, 16 bytes, native Prisma support, time-ordered for index locality). Deliberately **not** ULID: a 26-char text key doubles the PK index size, needs a CHECK constraint to be safe, and buys nothing UUIDv7 lacks (ULID's sortability is the only advantage, and v7 has it). It is also deliberately not "UUID internally, ULID publicly" — that mapping would have to be applied in every RLS policy, every join, and every URL parse, which is a whole class of bug for zero benefit. `app.user_id` is therefore a `uuid`, and policies cast `::uuid`.
+- Money: not applicable. Units must be explicit on every numeric field (`amount`, `unit`), never implied by the key name alone.
 
 ## 2. Resource shape
 
@@ -52,46 +52,90 @@ Staleness is stated in the body on **every** response that carries weather-deriv
 
 ## 4. Weather and climate responses carry provenance, always
 
-Every object containing a weather-derived value includes:
+Provenance is **conditional on the data class**, because the classes do not have the same provenance to offer. A climatology value has no initialization time; a field observation has no provider run. Making every property optional to fit one flat shape would mean the contract guarantees nothing — so the value is a discriminated union on `dataClass`.
 
 ```ts
-{
-  value: 247.6,
-  unit: "mm",
-  dataClass: "seasonal_forecast",              // one of the 9 classes, ADR-001 D9
-  evaluationBasis: "monthly",                  // daily | weekly | monthly | climatology | mixed
-  dataAvailability: "available",               // available | stale | pending | unavailable | not_applicable
+type WeatherValue<TUnit extends string> =
+  | ForecastValue<TUnit> | BaselineValue<TUnit>
+  | DatasetValue<TUnit>  | ObservationValue<TUnit>;
+
+interface ValueBase<TUnit> {
+  dataClass: WeatherDataClass;                 // discriminant
+  evaluationBasis: "daily" | "weekly" | "monthly" | "climatology" | "mixed";
+  dataAvailability: "available" | "stale" | "pending" | "unavailable" | "not_applicable";
+  amount?: number;                             // absent when not available — never 0
+  unit: TUnit;
+  spatialResolutionKm: number;
+  servedValueIsInterpolated: boolean;
+  freshness: SourceFreshness;
+  attribution: string;
+}
+
+// weather_forecast | subseasonal_forecast | seasonal_forecast | annual_outlook
+interface ForecastValue<TUnit> extends ValueBase<TUnit> {
+  dataClass: "weather_forecast" | "subseasonal_forecast" | "seasonal_forecast" | "annual_outlook";
   source: {
-    provider: "open-meteo", model: "ecmwf_seas5", modelVersion: "5",
-    forecastRunId: "f_run_…", ingestionRunId: "i_run_…",
-    initializedAt: "2026-11-05T12:00:00Z"
-  },
-  spatialResolutionKm: 36,
-  servedValueIsInterpolated: true,
-  freshness: { kind: "source", ageSeconds: 86400, ttlSeconds: 3024000 },
-  attribution: "ECMWF / Open-Meteo"
+    provider: string; model: string; modelVersion?: string;
+    forecastRunId: string; ingestionRunId: string;
+    initializedAt: string;                     // REQUIRED here
+  };
+}
+
+// climatology
+interface BaselineValue<TUnit> extends ValueBase<TUnit> {
+  dataClass: "climatology";
+  baseline: { baselineVersion: string; periodFrom: string; periodTo: string };
+  source?: never; initializedAt?: never;       // forbidden, not merely absent
+}
+
+// reanalysis | satellite_estimate
+interface DatasetValue<TUnit> extends ValueBase<TUnit> {
+  dataClass: "reanalysis" | "satellite_estimate";
+  dataset: { provider: string; name: string; datasetVersion: string; validAt: string };
+  initializedAt?: never;
+}
+
+// field_observation — the only class that may say "observed"
+interface ObservationValue<TUnit> extends ValueBase<TUnit> {
+  dataClass: "field_observation";
+  observation: { observationId: string; observedAt: string; method: string };
+  source?: never; initializedAt?: never;
 }
 ```
 
-For a month beyond the seasonal horizon, both axes are explicit:
+`source?: never` and `initializedAt?: never` are deliberate: they turn "climatology carrying an `initializedAt`" into a compile error instead of a runtime lint. A shape that merely omits the field invites an adapter to fill it.
 
-```ts
+For a month beyond the seasonal horizon, both axes are explicit and the value carries its true class:
+
+```json
 {
-  date: "2027-03-01",
-  forecast:    { dataAvailability: "not_applicable", reason: "beyond_horizon" },
-  climatology: { dataAvailability: "available", baselineVersion: "ERA5:1991-2020:v1" },
-  value: 244.2, unit: "mm",
-  displayedClass: "climatology",
-  evaluationBasis: "climatology"
+  "date": "2027-03-01",
+  "forecast":    { "dataAvailability": "not_applicable", "reason": "beyond_horizon" },
+  "climatology": { "dataAvailability": "available", "baselineVersion": "ERA5:1991-2020:v1" },
+  "value": {
+    "dataClass": "climatology",
+    "evaluationBasis": "climatology",
+    "dataAvailability": "available",
+    "amount": 244.2,
+    "unit": "mm",
+    "baseline": { "baselineVersion": "ERA5:1991-2020:v1",
+                  "periodFrom": "1991-01-01", "periodTo": "2020-12-31" },
+    "spatialResolutionKm": 28,
+    "servedValueIsInterpolated": true,
+    "freshness": { "kind": "source", "dataAvailability": "available" },
+    "attribution": "Copernicus / ECMWF"
+  }
 }
 ```
 
 Rules:
-1. `evaluationBasis`, `dataClass`, and `dataAvailability` are **required** on any weather-derived value. A client may not infer any of them from the date.
-2. A response may contain several classes (a 12-month outlook). It may never emit a single aggregate that spans classes; containers carry `evidenceSegments`.
-3. `anomaly` objects carry `anomalyKind` (`model_relative` | `baseline_difference`), `baselineVersion`, and, for the latter, `modelClimateOffsetMm`.
-4. When a source failed and a previous value is still shown, the value lives under `lastKnown` with `dataAvailability = "stale"` and `reason = "provider_unavailable"`. It is never promoted to the current field.
-5. A window responses include `evidenceSegments[]`, `missingRanges[]`, `primaryBasis`, `mixedEvidence`, and `weakestEvidenceClass`.
+1. `evaluationBasis`, `dataClass`, and `dataAvailability` are **required on every variant**. A client may not infer any of them from the date.
+2. Per-variant provenance is enforced by the type: `forecastRunId`/`ingestionRunId`/`initializedAt` are required where they exist and forbidden where they do not. There is no `displayedClass` or equivalent escape hatch — `dataClass` is the only place the class is stated.
+3. A value whose `dataAvailability` is `pending`, `unavailable`, or `not_applicable` has **no `amount`**. Sending `0` there would be a fabricated measurement.
+4. A response may contain several classes (a 12-month outlook). It may never emit a single aggregate that spans classes; containers carry `evidenceSegments`.
+5. `anomaly` objects carry `anomalyKind` (`model_relative` | `baseline_difference`), `baselineVersion`, and, for the latter, `modelClimateOffsetMm`.
+6. When a source failed and a previous value is still shown, the value lives under `lastKnown` with `dataAvailability = "stale"` and `reason = "provider_unavailable"`. It is never promoted to the current field.
+7. Window responses include `evidenceSegments[]`, `missingRanges[]`, `primaryBasis`, `mixedEvidence`, and `weakestEvidenceClass`.
 
 ## 5. Pagination, filtering, sorting
 
@@ -162,10 +206,10 @@ GET    /health  |  /health/ready
 
 ## 10. Versioning of semantics, not just routes
 
-The API exposes `engineVersion`, `profileVersionId`, `derivationVersion`, `inputRunRefs`, and `inputSnapshotHash` on derived resources — plus `primaryForecastRunId` as a convenience when one run dominates. Two responses with the same URL can legitimately differ because the underlying run changed; the client must be able to tell why without diffing values. There is no single `outlookRunId`; a derived artifact consumes several runs.
+The API exposes `engineVersion`, `profileVersionId`, `derivationVersion`, `inputRefs`, `fieldSnapshot.fieldSnapshotHash`, and `inputSnapshotHash` on derived resources — plus `primaryForecastRunId` as a convenience when one run dominates. Two responses with the same URL can legitimately differ because the underlying run changed; the client must be able to tell why without diffing values. There is no single `outlookRunId`; a derived artifact consumes several runs and a baseline.
 
 ## 11. OpenAPI requirements
 
 - Every endpoint documented, including error variants.
-- `dataClass`, `evaluationBasis`, `dataAvailability`, `forecastRunId`/`ingestionRunId`, and `freshness` are required properties in the generated schema — not optional, so an implementation cannot forget them.
-- Contract tests (Phase 9) assert that responses validate against the schema for both fresh and stale fixtures.
+- `dataClass`, `evaluationBasis`, `dataAvailability`, and `freshness` are required on **every** `WeatherValue` variant, and the OpenAPI model is generated as a `oneOf` discriminated on `dataClass` — not a single object with all-optional provenance fields. Per-variant required properties (`forecastRunId`/`ingestionRunId`/`initializedAt` on forecasts, `baseline` on climatology, `observation` on field measurements) are required **within their variant**.
+- Contract tests (Phase 9) assert that responses validate against the schema for fresh, stale, pending, and climatology fixtures — a climatology fixture that includes an `initializedAt` must fail validation, not pass silently.
