@@ -414,3 +414,12 @@ Again: static. No code, no database, no failing `UPDATE` has actually been obser
 ### Phase 2 readiness
 
 **Ready, and now the first three Phase 2 tasks are unambiguous**: contracts (`oneOf` + descriptor union), database (grants + roles), tenant isolation (withTenant + isolation test). No further architecture pass is warranted; the remaining uncertainty is implementation, which documents cannot resolve.
+
+### Addendum after 1.4 (no new phase)
+
+Two gaps were found in review of the 1.4 text. Neither warranted a pass of its own; both were contract omissions that would otherwise be rediscovered as a failing test in Phase 2.
+
+1. **Array ordering was undefined.** Sorted object keys do not normalise array order, and `resolvedCells` arrives in provider order — so two ingests of the same run could hash the same data differently. `provenance-contract.md` now carries an ordering/dedup table for every set-like array, declared as part of `canonicalJson` rather than left to callers, with a permutation golden vector required.
+2. **Grant checks stopped at grants.** PostgreSQL privileges are inherited and ownership bypasses grants. `background-processing.md` §10 now requires connecting as `app_system` and asserting non-ownership, non-membership of `app_api`, no table-level DML, no `PUBLIC` privilege, no `ALTER DEFAULT PRIVILEGES` residue, and an exact column-set match.
+
+Both are Phase 2 acceptance criteria. Architecture review stays closed.

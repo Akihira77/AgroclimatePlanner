@@ -353,6 +353,26 @@ Each `inputRefs` entry contributes only its identity fields — `kind`, `role`, 
 
 Canonical form: sorted keys, fixed number formatting (no `-0`, no re-printed floats), UTF-8, no whitespace, and **no timestamps of the computation itself** — `computedAt` is deliberately outside the descriptor, otherwise no two computations could ever match.
 
+### Array ordering is part of canonicalisation
+
+Sorted object keys do **not** normalise array order. Two payloads with identical content in a different array order would produce different hashes, so every array that is semantically a **set** must be sorted before hashing — and the rule belongs to `canonicalJson` itself, not to each caller, otherwise the second caller will forget.
+
+| Array | Canonical order | Dedup |
+|---|---|---|
+| `FieldSnapshot.resolvedCells` | `(provider, model, cellKey)` | yes, by that tuple |
+| `FieldSnapshot.observationsUsed` | `observationId` | yes |
+| `DerivationProvenance.inputRefs` | `(kind, role, purpose, first id)` | no — two refs of the same role for different cells are both real |
+| `DerivationDescriptor.sourceArtifactHashes` | lexicographic | yes |
+| `SegmentProvenance.forecastRunIds` / `ingestionRunIds` | lexicographic | yes |
+| `MissingReason` ranges | `(startDate, endDate)` | no |
+
+Two rules that follow, and are not negotiable:
+
+1. Ordering is applied by the canonicaliser, not by whoever builds the object. A helper that hashes an already-ordered array is fine; a helper that expects callers to order it is the bug.
+2. **Golden vectors must include a permutation case**: same content, shuffled arrays, identical hash. Without that vector the rule is a comment.
+
+`resolvedCells` is the case that matters most in practice — it is populated from a provider response in whatever order the provider returned, so two ingest runs of the same run could otherwise yield different field hashes for identical data.
+
 **The invariant, restated precisely:** identical `inputSnapshotHash` ⇔ identical complete computation inputs. Two readings matter:
 
 - Same hash, different output ⇒ **critical defect**: something that affects the result is missing from the descriptor.

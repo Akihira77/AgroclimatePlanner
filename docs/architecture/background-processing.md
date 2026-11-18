@@ -152,4 +152,22 @@ Rules:
 2. A new tenant-owned table ships without any `app_system` grant. Absence is the default; access is added when a sweep provably needs it.
 3. `UPDATE`/`DELETE` on tenant tables is granted to `app_api` only. If a sweep ever appears to need one, the answer is to enqueue a tenant-scoped job, not to widen the grant.
 4. The enqueue path uses `(ownerId, fieldId)` pairs already resolved from the permitted columns — never a second query inside a bypass transaction.
-5. **Verify the grants, do not trust them.** The Phase 2 test suite must run as `app_system` and assert that `SELECT geom FROM fields`, `SELECT body FROM ai_briefings`, and `UPDATE ai_briefings SET body = …` each fail with `insufficient_privilege`. A document claiming a restriction is not a restriction; a failing `UPDATE` is.
+5. **Verify the grants, do not trust them — and verify membership, not just grants.** Direct grants are only half the story: PostgreSQL privileges are also inherited, and ownership bypasses grants entirely. The Phase 2 suite must connect **as `app_system`** (a real role connection, not an application-level simulation) and assert all of the following:
+
+   **Negative — these must fail with `insufficient_privilege`:**
+   - `SELECT geom FROM fields`
+   - `SELECT body FROM ai_briefings`
+   - `SELECT soil_ph FROM fields`
+   - `UPDATE ai_briefings SET body = '…'`
+   - `DELETE FROM planting_windows`
+   - `INSERT INTO suitability_runs …`
+
+   **Structural — these must be false/empty:**
+   - `app_system` is not the owner of any table (`pg_tables.tableowner`).
+   - `app_system` is not a member of `app_api` or any role holding tenant write privileges (`pg_auth_members`, transitively).
+   - `information_schema.role_table_grants` for `app_system` contains no table-level `INSERT`, `UPDATE`, or `DELETE` on tenant tables — only the explicit column grants.
+   - No privilege arrives via `PUBLIC` (`information_schema.role_table_grants` where `grantee = 'PUBLIC'`).
+   - `ALTER DEFAULT PRIVILEGES` is empty for the schema, or grants nothing to `app_system`.
+   - The granted column set per table equals the documented list — a test that reads the list from one place and the database from another, so an extra grant fails.
+
+   A document claiming a restriction is not a restriction; a failing `UPDATE` is. A failing `UPDATE` under a role that happens to be an `app_api` member proves nothing about the deployment.
