@@ -32,6 +32,21 @@ renamed or created to accommodate the citation; the review cites the real file.
 `ADR-002-monorepo-and-backend-architecture.md`,
 `ADR-003-trusted-tenant-context.md`.
 
+### Corrections applied in round 2 (external review)
+
+Four defects were reported against the round-2 text and all four were reproduced
+before being fixed. All four were introduced by that text, not by the design:
+
+| # | Defect | Fix |
+|---|---|---|
+| 1 | `CHECK (absolute_expires_at > expires_at)` is violated by a sliding extension near the absolute deadline (day 70 of 90 → day 100) | extension clamped with `LEAST(now() + 30 d, absolute_expires_at)`; CHECK relaxed to `>=`, because for the last stretch of a session's life the sliding deadline *is* the absolute deadline |
+| 2 | `RETURNS integer` with `DELETE … RETURNING 1` yields one row per deleted row; a scalar-returning SQL function allows at most one, so it errors as soon as two sessions expire together | `WITH deleted AS (DELETE … RETURNING 1) SELECT count(*)::integer FROM deleted` — the return value is now the count, which is also the only signal the maintenance job has |
+| 3 | The `sessions` ownership class was described as new in §6.1/§9/§14 and as a widened `identity` in §4.3/§18 | one answer everywhere: **widen `identity`**, do not add a sixth class whose only member is this table |
+| 4 | The `OPEN-01` sheet listed `app.sessions` privileges, so an owner who approves `AG-1` and then chooses Redis would have approved a grant to a table that does not exist | `AG-1` covers `app.users` and the role only; every session privilege moved to `AG-2` (§17), and each is marked conditional on that gate |
+
+The fourth is the one with consequences beyond wording: the two gates must be
+approvable in either order, and they are now.
+
 ### Provenance legend
 
 Every material claim is tagged.
@@ -203,6 +218,11 @@ What a holder of the `app_auth` DSN can and cannot do. "Permitted" means Postgre
 would allow it given the proposed grants and policies; "rejected" names the mechanism
 that stops it. Nothing here is implemented.
 
+The session rows assume `AG-2` selects the Postgres table (§17). Choosing Redis does
+not remove them: it relocates session authority from a `GRANT` to a Redis credential,
+which is why §6.1 treats Redis as an authority question rather than a performance
+one.
+
 #### Permitted
 
 | Operation | Mechanism | Impact |
@@ -308,7 +328,10 @@ is not available here. `[V]` (PostgreSQL 18.6 core feature set) + `[R]`
 
 ### 4.3 Session table privileges and RLS — per role, per operation
 
-Proposed table, **not created**:
+Session privileges below exist **only if `AG-2` selects the table** (§17). If Redis
+wins, `app_auth` holds no `sessions` privilege because there is no table to hold it
+— and the impersonation risk does not disappear, it moves to whoever can write the
+store. Proposed table, **not created**:
 
 ```sql
 -- PROPOSED — NOT APPLIED
@@ -321,8 +344,10 @@ CREATE TABLE app.sessions (
   revoked_at          timestamptz,
   last_seen_at        timestamptz NOT NULL DEFAULT now(),
   created_at          timestamptz NOT NULL DEFAULT now(),
+  -- `>=`, not `>`: a sliding extension is clamped to the absolute deadline, so
+  -- the two timestamps legitimately coincide at the end of a session's life.
   CONSTRAINT sessions_expiry_order_check
-    CHECK (absolute_expires_at > expires_at AND expires_at > created_at)
+    CHECK (absolute_expires_at >= expires_at AND expires_at > created_at)
 );
 
 ALTER TABLE app.sessions ENABLE ROW LEVEL SECURITY;
@@ -352,6 +377,25 @@ GRANT UPDATE (expires_at, last_seen_at, revoked_at) ON app.sessions TO app_auth;
 | Delete expired rows (GC) | yes | **not granted** | no | **`EXECUTE` only** on one function | `SECURITY DEFINER` function, owned by `migration_owner`, `EXECUTE` to `app_system` alone |
 | `SELECT` any row without a tenant context | yes | **yes** — by design | no | no | `USING (true)` |
 
+**Sliding extension must be clamped.** Extending `expires_at` to
+`now() + 30 d` on its own breaks the constraint once a session nears its absolute
+deadline — at day 70 of a 90-day session, the extension would land at day 100. The
+extension is therefore:
+
+```sql
+-- PROPOSED — NOT APPLIED. Run by the application, once per 5 min per session.
+UPDATE app.sessions
+   SET expires_at   = LEAST(now() + interval '30 days', absolute_expires_at),
+       last_seen_at = now()
+ WHERE id = $1 AND revoked_at IS NULL;
+```
+
+`LEAST` is what keeps the invariant true without a trigger, and it is why the
+constraint is `>=`: for the last stretch of a session's life, the sliding deadline
+*is* the absolute deadline, and validation must reject on either. A trigger-based
+extension would move this rule into the database at the cost of an invisible write
+path; the application-side form is visible in one statement. `[R]`
+
 Column-level `UPDATE` is the mechanism that satisfies requirement 6: an expiry
 extension cannot touch `user_id`, `token_hash`, or `created_at`, because those
 columns are not in the `UPDATE` grant. It does **not** distinguish "set `revoked_at`"
@@ -370,12 +414,24 @@ CREATE FUNCTION app.purge_expired_sessions() RETURNS integer
   SECURITY DEFINER
   SET search_path = pg_catalog, app
 AS $$
-  DELETE FROM app.sessions WHERE absolute_expires_at < now() RETURNING 1
+  WITH deleted AS (
+    DELETE FROM app.sessions
+     WHERE absolute_expires_at < now()
+    RETURNING 1
+  )
+  SELECT count(*)::integer FROM deleted
 $$;
 -- then: REVOKE ALL ON FUNCTION app.purge_expired_sessions() FROM PUBLIC;
 --       GRANT EXECUTE ON FUNCTION app.purge_expired_sessions() TO app_system;
 
 ```
+
+The return value is the **number of rows deleted**, not a success flag — the
+`WITH deleted … count(*)` form is what makes that true. The naive
+`DELETE … RETURNING 1` returns one row per deleted row, and a scalar-returning SQL
+function permits at most one result row — so it errors as soon as two sessions
+expire in the same run, which is the normal case. The count is also the only signal the maintenance
+job has: `0` for weeks means the sweep or the clock is wrong.
 
 This is the **only** place a `SECURITY DEFINER` object is proposed, and it touches
 no credentials and no tenant row. `ADR-003` A1 rejected a definer-based tenant
@@ -408,7 +464,7 @@ credential read?** The four shapes below are genuinely distinct.
 |---|---|---|---|---|
 | **Shape** | `app_auth` reads `users` directly under column grants and its own policies | `app.lookup_credentials(email)` owned by `migration_owner`, `EXECUTE` to `app_api` | same function, owned by `migration_owner`, `EXECUTE` to `app_auth` only | a second GUC or signed attestation that a downstream role trusts |
 | **Credential exposure** | bulk: every email and hash in one query | one row per call, but **the tenant credential holds the capability** | one row per call; capability stays outside `app_api` | changes nothing — it attests *identity*, it does not read a credential |
-| **Session authority** | `app_auth` issues/revokes (§4.3) | unchanged; `app_api` still cannot touch sessions | unchanged | not addressed |
+| **Session authority** | `app_auth` issues/revokes — only if `AG-2` selects the table (§4.3); with Redis it holds no DB session privilege | unchanged; `app_api` still cannot touch sessions | unchanged | not addressed |
 | **DB privilege complexity** | 2 column grants + 2 policies on `users`; the shape `db:verify` already models | 1 function + 1 `REVOKE` + 1 `GRANT`, no policies on `users` | same as B1 plus the fourth role | plus a second trust level for one variable |
 | **RLS implications** | `USING (true)` on `users`, `FORCE` retained | policies untouched; the function bypasses RLS **as owner** | same | the whole point is to avoid RLS deciding identity — `ADR-003` D1/D3 territory |
 | **Function ownership** | n/a | `migration_owner` — non-login, `NOBYPASSRLS`, owns the schema; a definer function executes with **its** privileges | same | n/a |
@@ -491,8 +547,9 @@ Reasons, in order of weight:
    exists. `[R]`
 
 Costs that must be stated, not hidden: one more table (a 23rd entity, requiring
-`entity-catalog.md` to grow a **new ownership class** — a session row is read
-before its owner is known, and none of the five existing classes describes it);
+`entity-catalog.md` to widen its **`identity` class** — a session row is read before
+its owner is known, so it cannot be a `tenant` row, and widening one class is
+cheaper than adding a sixth whose only member would be this table, §4.3);
 one database round-trip per authenticated request; a GC job in the `maintenance`
 queue (`background-processing.md:19`), which does not exist yet. `[V]`
 
@@ -614,7 +671,10 @@ does not. This review must not be read as claiming otherwise.
    `expires_at <= now()`, `absolute_expires_at <= now()`, or `revoked_at IS NOT
    NULL` → `401`, identical body.
 3. Sliding expiry: extend at most once per 5 minutes per session (`[R]` — a write on
-   every request is write amplification for no security gain).
+   every request is write amplification for no security gain), clamped to the
+   absolute deadline: `expires_at = LEAST(now() + 30 d, absolute_expires_at)`.
+   Without the clamp the extension violates `sessions_expiry_order_check` near the
+   end of a session's life.
 4. Load the subject and return the profile — no tenant transaction needed for the
    profile itself. Any request that touches tenant data then enters `withTenant`.
 
@@ -723,7 +783,7 @@ implemented on the strength of a design document.
 | # | Threat | Required privilege | Attack impact | Existing mitigation | Residual risk | Status |
 |---|---|---|---|---|---|---|
 | R1 | `app_auth` DSN leaks — bulk credential read | `SELECT (email, password_hash)` + `USING (true)` | every email and hash; offline cracking bounded only by Argon2id cost | separate credential, column grants, fourth secret | bulk read is inherent to the lookup (§4.2) | proposed |
-| R2 | `app_auth` mints a session for an arbitrary `user_id` | `INSERT` on `sessions` | **direct impersonation of any account** | none beyond the credential being separate from `app_api` | highest-severity permitted operation; a stolen auth DSN is account takeover without reading the credential table | proposed |
+| R2 | `app_auth` mints a session for an arbitrary `user_id` (Postgres sessions only; with Redis the equivalent is write access to the store) | `INSERT` on `sessions` | **direct impersonation of any account** | none beyond the credential being separate from `app_api` | highest-severity permitted operation; a stolen auth DSN is account takeover without reading the credential table | proposed |
 | R3 | `app_auth` creates accounts bypassing the flow | `INSERT (email, password_hash)` | valid account, no rate limit, no verification, no audit | column grant excludes `role` so no admin can be minted | flow-level controls live in `apps/api` and are bypassed entirely | proposed |
 | R4 | `app_auth` revokes, un-revokes, or extends any session | `UPDATE (revoked_at, expires_at, last_seen_at)` | targeted denial of service; keeping a session alive | grant is column-scoped | direction is not expressible in a grant — un-revocation stays possible | proposed |
 | R5 | `app_auth` sets `app.user_id` and reads tenant tables | `set_config` (any role) | none — no tenant grant exists | grant boundary; `FORCE` RLS | none today; the property must be re-verified whenever a grant is added | proposed — trivially true today because the role does not exist; must be measured after S3, not assumed |
@@ -779,6 +839,8 @@ would be the exact failure mode §11 R15 names.
 | Expired (`expires_at`, `absolute_expires_at`), revoked, and missing sessions all return `401` | BLOCKED | needs the guard |
 | Replayed cookie after logout returns `401`; logout is idempotent for an already-dead session | BLOCKED | — |
 | Sliding-expiry update changes `expires_at`/`last_seen_at` only — assert every other column is byte-identical | BLOCKED | proves the column `UPDATE` grant does what §4.3 claims |
+| Sliding extension is clamped: a session at day 70 of 90 extends to `absolute_expires_at`, not to day 100, and the row still satisfies `sessions_expiry_order_check` | BLOCKED | the constraint would otherwise reject the write exactly when a long-lived session is most used |
+| A session whose `expires_at` has been clamped to `absolute_expires_at` is rejected once that instant passes — clamping must not create a session that outlives its absolute deadline | BLOCKED | — |
 | `app_auth` **cannot** update `user_id`, `token_hash`, or `created_at` (`42501`, column grant) | BLOCKED | — |
 | `app_auth` **can** un-revoke a session — recorded as a known residual, asserted so the gap cannot be discovered later as a surprise | BLOCKED | negative-by-design |
 | GC deletes only `absolute_expires_at < now()`; a live row survives | BLOCKED | — |
@@ -866,7 +928,8 @@ Opaque 32-byte CSPRNG token, base64url; only `sha256(token)` stored; `token_hash
 unique; sliding 30 d and absolute 90 d; explicit `revoked_at`; hourly GC in the
 `maintenance` queue; grants and policies held by `app_auth` only, never `app_api`.
 
-**Consequences.** A 23rd entity and a new ownership class (read before identity);
+**Consequences.** A 23rd entity, with the `identity` class widened rather than a
+sixth class added (read before identity);
 a GC job that does not exist; one DB round-trip per authenticated request; the
 pre-identity read repeats on `sessions` (accepted — the alternative is moving the
 authority to Redis).
@@ -929,11 +992,11 @@ decided by whoever writes the first `package.json` line.
 | Field | Content |
 |---|---|
 | **Recommended** | Option A: a fourth role `app_auth`, `NOLOGIN` at SQL level, `NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT`, zero memberships in either direction |
-| **Exact boundary** | `USAGE` on schema `app`; `SELECT (id, email, password_hash, role, locale, timezone)` and `INSERT (email, password_hash)` on `app.users`; `SELECT`/`INSERT`/column-`UPDATE` on `app.sessions` per §4.3; `EXECUTE` on no function. Nothing else, on any object |
+| **Exact boundary** | `USAGE` on schema `app`; `SELECT (id, email, password_hash, role, locale, timezone)` and `INSERT (email, password_hash)` on `app.users`; `EXECUTE` on no function. Nothing else, on any object — **`app.sessions` is deliberately absent.** Session privileges belong to `AG-2` (§17): an approval of this sheet must remain valid if the owner then chooses Redis, and it cannot do that while naming a table that may never exist |
 | **RLS implications** | `users_auth_lookup FOR SELECT TO app_auth USING (true)` and `users_auth_register FOR INSERT TO app_auth WITH CHECK (true)`. `users_self_only` unchanged; `app_api` unmentioned in both. `FORCE` retained — it is what makes a future mistaken grant return zero rows |
-| **Compromise blast radius** | bulk emails + hashes; account creation that bypasses the registration flow; session issuance for any `user_id`; revocation/un-revocation; **no** tenant table, **no** catalog, **no** weather plane, **no** DDL, **no** `SET ROLE` (§3.4) |
+| **Compromise blast radius** | bulk emails + hashes; account creation that bypasses the registration flow; and, **only if `AG-2` selects the table**, session issuance for any `user_id` plus revocation/un-revocation. With Redis that power does not vanish — it becomes "whoever holds the store credential can mint any session", which is the §6.1 authority argument. In every variant: **no** tenant table, **no** catalog, **no** weather plane, **no** DDL, **no** `SET ROLE` (§3.4) |
 | **Alternatives** | B1 definer callable by `app_api` — rejected, it hands the tenant credential the capability permanently. B2 definer callable only by `app_auth` — the tightening path, not v1. C separate identity context — not a credential-read mechanism; belongs to `OPEN-28` |
-| **Residual risks** | enumeration is inherent (the lookup *is* the enumeration); bulk hash extraction; un-revocation cannot be prevented by a grant; Argon2id is not in core Postgres, so the hash leaves the DB |
+| **Residual risks** | enumeration is inherent (the lookup *is* the enumeration); bulk hash extraction; Argon2id is not in core Postgres, so the hash leaves the DB; and, under `AG-2` = table, un-revocation cannot be prevented by a grant |
 | **Migration changes** | one new migration, additive: 2 `GRANT` + 2 `CREATE POLICY`. No `ALTER TABLE`, no column, no rewrite. Plus a bootstrap change outside the ledger: `roles.sql:12` array member, an `ALTER ROLE` line, `bootstrap.mjs` secret map, `connections.mjs` role map |
 | **Verification evidence required** | `db:verify` with `app_auth` rows: allow and deny per SQLSTATE (`42501` for grant denial, `23503` where a FK is the mechanism); `has_column_privilege` for the column grants; the new `auth-boundary` suite green; 39 tenant-isolation tests unchanged; migration applied to a fresh isolated volume |
 | **Marked `RESOLVED` only when** | ADR-004 is **accepted by the owner**, the migration is **applied**, and `db:verify` passes. A recommendation in a review document is not a resolution — this review does not change the disposition in `open-decisions.md` |
@@ -951,8 +1014,8 @@ Approved by: ____________________  Date: __________
 | **Relationship with `ADR-002` D5** | D5 already decided "server-side sessions in Postgres, not JWT", with JWT + refresh rotation in its rejected list. This recommendation **preserves** D5. Nothing needs amending. Choosing Redis instead would reverse D5 and requires amending it in the same change — it is **not** existing infrastructure (`F8`) |
 | **Lifecycle** | issue on successful login → validate on each request → extend sliding expiry at most once per 5 min → revoke on logout → purge when `absolute_expires_at` passes |
 | **Token format** | 32 CSPRNG bytes, base64url (43 chars), opaque; only `sha256(token)` stored; `token_hash` unique; SHA-256 is correct here because the input is high-entropy — this is **not** the password path and must not be reused as one |
-| **Expiry / revocation** | sliding 30 d (`expires_at`), absolute 90 d (`absolute_expires_at`), `revoked_at` for immediate revocation; all three checked on every validation |
-| **Database access boundary** | `ENABLE` + `FORCE` RLS; `sessions_auth_all FOR ALL TO app_auth USING (true) WITH CHECK (true)`; owner policy for `migration_owner`; column `SELECT`/`INSERT`/`UPDATE` per §4.3; **no `DELETE` grant**; `app_api` and `app_system` hold no table privilege |
+| **Expiry / revocation** | sliding 30 d (`expires_at`), absolute 90 d (`absolute_expires_at`), `revoked_at` for immediate revocation; all three checked on every validation. Sliding extension is clamped with `LEAST(now() + 30 d, absolute_expires_at)`, and the table's CHECK is `absolute_expires_at >= expires_at` so the clamped value is legal |
+| **Database access boundary** | applies **only if this gate selects the table**. `ENABLE` + `FORCE` RLS; `sessions_auth_all FOR ALL TO app_auth USING (true) WITH CHECK (true)`; owner policy for `migration_owner`; column `SELECT`/`INSERT`/`UPDATE` per §4.3; **no `DELETE` grant**; `app_api` and `app_system` hold no table privilege. Under Redis, `app_auth` holds no `sessions` privilege at all, and the store credential replaces the grant as the authority |
 | **Garbage collection** | `app.purge_expired_sessions()`, `SECURITY DEFINER`, owned by `migration_owner`, `EXECUTE` granted to `app_system` only, hourly in the `maintenance` queue (`background-processing.md:19`). `app_system` gains no table grant — requirement 7 |
 | **Outage behaviour** | fail closed per §6.3: `503` on `/me`, login, and logout; never anonymous, never a second authority as "fallback" |
 | **Alternatives** | Redis: cheaper TTL/revocation and it avoids the second pre-identity read, but it reverses D5, adds a service absent from `docker-compose.yml`, and makes an unauthenticated network service the authentication authority |
