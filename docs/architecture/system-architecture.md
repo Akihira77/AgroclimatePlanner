@@ -222,6 +222,8 @@ Consequence for `recompute.windows`: the job must never write through the `BYPAS
 
 Two invariants: `BYPASSRLS` is granted to no role that writes `farms`, `fields`, `suitability_runs`, `planting_windows`, or `ai_briefings`; and no job reconstructs an owner id by querying inside a bypass transaction and then continuing to write in that same transaction.
 
+RLS does not bind a `BYPASSRLS` role, so read restriction is enforced by **column-level grants**, not by this paragraph — see `background-processing.md` §10 for the grant strategy and the Phase 2 test that asserts the forbidden reads and writes actually fail.
+
 Tenant-owned derived tables therefore carry a denormalised `user_id` column. The alternative — a policy that joins through `fields` — turns every write into a join against an RLS-protected table, which is both slower and a second place for the ownership rule to be wrong.
 
 ## 9. Observability

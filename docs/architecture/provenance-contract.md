@@ -293,30 +293,59 @@ interface FieldSnapshot {
                          servedLat: number; servedLon: number; distanceKm: number }>;
   observationsUsed: Array<{ observationId: string; kind: string;
                             value: number; unit: string; observedAt: string }>;
-  fieldSnapshotHash: string;     // sha256 over every field above
+  fieldSnapshotHash: string;     // sha256 over FieldSnapshotPayload — see below
 }
+
+// The hash input. `fieldSnapshotHash` is the OUTPUT of the hash, so it must not
+// be inside its own preimage.
+type FieldSnapshotPayload = Omit<FieldSnapshot, "fieldSnapshotHash">;
+
+fieldSnapshotHash = sha256(canonicalJson(fieldSnapshotPayload as FieldSnapshotPayload));
 ```
 
 `null` is preserved as `null`, never normalised to a default — the agronomy engine distinguishes "unknown" from "known to be neutral", and that distinction is what produces `insufficient_data` instead of a fabricated score.
 
+The `Omit` is not cosmetic: writing "sha256 over every field above" made the definition self-referential — the hash would have to be computed from an object already containing it. The preimage is `FieldSnapshotPayload`, and the stored row is `FieldSnapshot`.
+
 ### Snapshot hash definition
 
-`inputSnapshotHash` = SHA-256 of the canonical JSON of **one** of these two descriptors, depending on the artifact. `inputRefs` is the field name at both levels — the earlier `dataInputRefs` alias is gone.
+`inputSnapshotHash` = SHA-256 of the canonical JSON of **exactly one** variant of `DerivationDescriptor`. `inputRefs` is the field name at every level — the earlier `dataInputRefs` alias is gone.
 
-```jsonc
-// MonthlyOutlook
-{ "artifact": "monthly_outlook",
-  "inputRefs": [ … sorted by (kind, role, first id) … ],
-  "derivationVersion": "1" }
-
-// SuitabilityRun | PlantingWindow | AiBriefing
-{ "artifact": "planting_window",
-  "inputRefs": [ … sorted by (kind, role, first id) … ],
-  "fieldSnapshotHash": "…",
-  "profileVersionId": "…",
-  "engineVersion": "…",
-  "derivationVersion": "1" }
+```ts
+type DerivationDescriptor =
+  | { artifact: "monthly_outlook";
+      inputRefs: DataInputRef[];
+      derivationVersion: string }
+  | { artifact: "suitability_run";
+      inputRefs: DataInputRef[];
+      fieldSnapshotHash: string;
+      profileVersionId: string;
+      engineVersion: string;
+      derivationVersion: string }
+  | { artifact: "planting_window";
+      inputRefs: DataInputRef[];
+      fieldSnapshotHash: string;
+      profileVersionId: string;
+      engineVersion: string;
+      derivationVersion: string }
+  | { artifact: "ai_briefing";
+      inputRefs: DataInputRef[];
+      fieldSnapshotHash: string;
+      sourceArtifactHashes: string[];   // sorted inputSnapshotHashes of the artifacts summarised
+      promptVersion: string;
+      modelId: string;
+      derivationVersion: string };
 ```
+
+`artifact` is part of the hash, so it must never be a shared literal. The previous example gave one descriptor for three artifact types with `"artifact": "planting_window"`, which would have made a `SuitabilityRun` and an `AiBriefing` hash identically to a window whenever their inputs matched — and, worse, would have collided silently, because nothing compares `artifact` outside the hash.
+
+Per-variant field rationale:
+
+| Variant | Why these fields |
+|---|---|
+| `monthly_outlook` | cell-based, no field state, no crop profile. `baselineVersion` already travels inside `inputRefs` (`kind:"baseline"`), so repeating it would be the same redundancy removed in 1.3. |
+| `suitability_run` / `planting_window` | both consume field state and a crop profile. `suitability_run` is the aggregate over windows; `planting_window` is the per-window artifact. Distinct discriminators because they are distinct outputs of the same engine version, and a run must not hash-collide with a window. |
+| `ai_briefing` | output also depends on the prompt and the model, which are not inputs to the engines. `promptVersion` + `modelId` are in the descriptor because changing either changes the narration for identical structured data. `sourceArtifactHashes` carries the hashes of the outlook/windows it summarised — without it, a change in `engineVersion` would produce different windows from identical forecast inputs and the briefing hash would not move, which the invariant forbids. There is deliberately **no separate `contextHash`**: the briefing's context *is* this input set, and a second hash over the same material would be a second thing to keep in sync. |
 
 Each `inputRefs` entry contributes only its identity fields — `kind`, `role`, `purpose`, `forecastRunIds`/`ingestionRunIds`, `baselineVersion`/`datasetVersion`, `recordSetHash`/`baselineHash` — never the values themselves.
 

@@ -105,7 +105,7 @@ Priority: fields with an active planting record or a near-term window are comput
 ## 8. Failure semantics that must not be softened
 
 - A job that cannot ingest must never write a placeholder row. Missing data is missing.
-- A recompute that fails must leave the previous windows intact and flagged stale, not delete them.
+- A recompute that fails leaves the previous window active and intact. The read path reports `dataAvailability = "stale"` with `reason = "recompute_failed"`, derived from the stored failed-recompute state. **No `is_stale` column is written** — derived freshness is computed (`provenance-contract.md` §5), and a materialised flag would be a second source of truth that can disagree with its inputs.
 - The worker never "repairs" a class boundary. Months 2–7 falling to climatology happens **only** when the seasonal horizon genuinely ends there (`beyond_horizon`). A `pending`, `ingest_failed`, or `provider_unavailable` seasonal month is reported as exactly that — never backfilled with climatology, and never marked `beyond_horizon` because the job failed. Deciding "the horizon ends here" from "we have nothing" is the single most attractive wrong shortcut in this system.
 
 ## 9. Observability
@@ -130,3 +130,26 @@ Briefing invalidation therefore has exactly one executor: the `recompute.windows
 Note that "mark stale" is not an operation at all, because derived freshness is computed at read time from stored provenance (`provenance-contract.md` §5). The sweep exists to *enqueue recomputation*, not to relabel state — which is why it never needs tenant write access.
 
 Why this is a hard rule rather than a preference: a bug in a `BYPASSRLS` write path to `ai_briefings` would rewrite what a farmer was told with no user context in the audit trail, and no RLS policy would have stopped it. The role boundary is the only thing standing between a maintenance sweep and every user's derived data.
+
+### The boundary is grants, not prose
+
+RLS does not apply to a `BYPASSRLS` role, so the sentence "maintenance may only read metadata" enforces nothing by itself. The restriction has to exist in PostgreSQL:
+
+```sql
+-- app_system gets column-level SELECT on the minimum needed to detect staleness,
+-- and no INSERT/UPDATE/DELETE on any tenant-owned table.
+GRANT SELECT (id, user_id, field_id, input_refs, status) ON planting_windows TO app_system;
+GRANT SELECT (id, user_id, field_id, input_refs, status) ON suitability_runs  TO app_system;
+GRANT SELECT (id, user_id, field_id, input_refs, status) ON ai_briefings     TO app_system;
+GRANT SELECT (id, user_id)                              ON fields           TO app_system;
+-- deliberately absent: soil_ph, soil_type, drainage_class, geom, notes, briefing body
+-- deliberately absent: any UPDATE or DELETE grant on these tables
+```
+
+Rules:
+
+1. **No `GRANT ALL`, no `GRANT ... ON ALL TABLES`, no table-wide `SELECT *` role for tenant tables.** Column lists are explicit and are reviewed when a column is added.
+2. A new tenant-owned table ships without any `app_system` grant. Absence is the default; access is added when a sweep provably needs it.
+3. `UPDATE`/`DELETE` on tenant tables is granted to `app_api` only. If a sweep ever appears to need one, the answer is to enqueue a tenant-scoped job, not to widen the grant.
+4. The enqueue path uses `(ownerId, fieldId)` pairs already resolved from the permitted columns — never a second query inside a bypass transaction.
+5. **Verify the grants, do not trust them.** The Phase 2 test suite must run as `app_system` and assert that `SELECT geom FROM fields`, `SELECT body FROM ai_briefings`, and `UPDATE ai_briefings SET body = …` each fail with `insufficient_privilege`. A document claiming a restriction is not a restriction; a failing `UPDATE` is.

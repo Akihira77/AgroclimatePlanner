@@ -356,3 +356,61 @@ Six findings, all resolved in the contract text. No accepted decision was reopen
 3. Role split from commit one: `app_system` never writes `ai_briefings`, `suitability_runs`, `planting_windows`, `farms`, or `fields`; assert it with a test that attempts the write and expects it to fail.
 
 External blockers unchanged: Open-Meteo licensing, BMKG written permission, ECMWF Set VII access.
+
+---
+
+## 12. Phase 1.4 — hash contract closable
+
+Four findings from an external read of the Phase 1.3 documents, each verified against the file before changing it. Two would have blocked implementation of the hash contract outright.
+
+| # | Finding | Resolution |
+|---|---|---|
+| **F29** (P0) | `fieldSnapshotHash` was defined as "sha256 over every field above", inside an interface whose last field is `fieldSnapshotHash`. The preimage would have contained its own digest — not implementable, and the kind of definition that gets "fixed" differently by every developer who touches it. | Preimage is now an explicit type: `FieldSnapshotPayload = Omit<FieldSnapshot, "fieldSnapshotHash">`. The stored row is `FieldSnapshot`; the hash input is the payload. Stated in the doc rather than left to intuition. |
+| **F30** (P1) | The descriptor example used `"artifact": "planting_window"` for `SuitabilityRun` and `AiBriefing` as well. Since `artifact` is inside the hash, a suitability run and an AI briefing could collide with a window whenever their inputs matched — and nothing outside the hash compares artifact type, so the collision would be silent. | `DerivationDescriptor` is a four-variant union with a per-variant `artifact` literal and per-variant fields. `monthly_outlook` has no field state; the two agronomy artifacts carry snapshot/profile/engine; `ai_briefing` carries snapshot, `sourceArtifactHashes`, `promptVersion`, `modelId`. |
+| **F30b** (found while fixing F30) | `ai_briefing` had no way to change its hash when `engineVersion` changed, because it consumes windows rather than forecasts. Identical weather plus a new engine version yields different windows and an identical briefing hash — a direct violation of the invariant. | Added `sourceArtifactHashes: string[]` — the sorted `inputSnapshotHash` values of the artifacts summarised. Engine version and profile version are then captured transitively, without duplicating them. |
+| **F31** (P1) | "maintenance may only read metadata" was prose. RLS does not bind a `BYPASSRLS` role, so the sentence enforced nothing at runtime. | `background-processing.md` §10 now specifies column-level `GRANT SELECT` lists, the absence of `UPDATE`/`DELETE` on tenant tables, a default-deny rule for new tables, and a Phase 2 test that runs as `app_system` and asserts the forbidden `SELECT geom`, `SELECT body FROM ai_briefings`, and `UPDATE ai_briefings` each fail with `insufficient_privilege`. `system-architecture.md` points at it. |
+| **F32** (P2) | `background-processing.md` §8 said a failed recompute leaves windows "intact and flagged stale", while the freshness contract says nothing materialises `is_stale`. An implementer reading only §8 would add the column. | Rewritten: the previous window stays active and intact; the read path reports `dataAvailability = "stale"` with `reason = "recompute_failed"` from the stored failed state; **no `is_stale` column is written**. |
+
+### Decisions accepted
+
+**A29.** Hash preimages are named types (`FieldSnapshotPayload`), not prose descriptions of "everything above".
+
+**A30.** `artifact` is a per-variant literal in `DerivationDescriptor`. A shared literal is a silent hash collision, not a formatting shortcut.
+
+**A31.** A derived artifact that consumes other derived artifacts records their hashes (`sourceArtifactHashes`), not their versions. Versions can stay equal while output changes; hashes cannot.
+
+**A32.** Read restriction for a `BYPASSRLS` role is expressed as PostgreSQL grants plus a failing-operation test. Prose is not a control.
+
+### Decisions rejected
+
+**R14. Do not add a separate `contextHash` for briefings.** The context is the input set; a second hash over the same material is a second value that must agree and can drift. `sourceArtifactHashes` covers the one thing the shared descriptor could not.
+
+**R15. Do not keep one descriptor shape with optional per-artifact fields.** Optional `engineVersion`/`promptVersion` would let a window hash match a briefing, which is exactly the collision F30 identified.
+
+**R16. Do not put `is_stale` on the artifact "just for query convenience".** It would reintroduce the tenant write that F23 removed, and create a status that can disagree with the inputs it claims to summarise.
+
+### Risks
+
+| Risk | Validation needed |
+|---|---|
+| Column-level grants rot when a column is added | Phase 2: a test enumerating granted columns per table, or a migration check that fails on unlisted tenant columns |
+| `sourceArtifactHashes` requires a canonical order and dedup rule | Phase 2: sorted, deduplicated, asserted in the golden-vector test |
+| `FieldSnapshotPayload` must be hashed by exactly one implementation | Phase 2: single exported `canonicalJson` + `hashFieldSnapshot`, with a golden vector checked into the repo |
+| Widening a grant is a one-line migration with no review signal | Phase 3: grants reviewed in the same PR as schema changes, and a CI diff over `app_system` privileges |
+
+### Consistency verification (static)
+
+| Check | Result |
+|---|---|
+| No hash preimage contains its own output | pass — `fieldSnapshotHash` excluded via `Omit`; `inputSnapshotHash` and `computedAt` never appear inside `DerivationDescriptor` |
+| `artifact` discriminator is unique per artifact | pass — four literals, four variants |
+| Every artifact type has exactly one descriptor | pass |
+| `app_system` read surface is granted, not described | pass — explicit column lists; defaults deny |
+| No materialised `is_stale` anywhere | pass — the string appears only in the sentence forbidding it |
+| `contextHash` absent | pass — replaced by `inputSnapshotHash` + `sourceArtifactHashes` |
+
+Again: static. No code, no database, no failing `UPDATE` has actually been observed. F31's test is still to be written.
+
+### Phase 2 readiness
+
+**Ready, and now the first three Phase 2 tasks are unambiguous**: contracts (`oneOf` + descriptor union), database (grants + roles), tenant isolation (withTenant + isolation test). No further architecture pass is warranted; the remaining uncertainty is implementation, which documents cannot resolve.

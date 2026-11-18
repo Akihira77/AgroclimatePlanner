@@ -121,10 +121,13 @@ briefing request
   → single completion, temperature low, JSON-schema constrained
   → validate against ClimateBriefing schema
   → reject/repair if it invents a number not present in the context
-  → persist briefing + context hash + model id + prompt version
+  → persist briefing + inputSnapshotHash (over the briefing descriptor, `provenance-contract.md` §4)
+    + sourceArtifactHashes + model id + prompt version
 ```
 
 The AI never receives credentials, other users' data, or un-normalized provider payloads.
+
+There is no separate "context hash". The briefing's context is exactly its input set, already captured by `inputSnapshotHash`; keeping a second hash over the same material would mean two values that must agree and can drift.
 
 ## 7. Recomputation trigger
 
