@@ -4,9 +4,13 @@ import {
   envelopeSchema,
   errorCodeSchema,
   errorResponseSchema,
+  MAX_VALIDATION_ISSUES,
+  MAX_VALIDATION_PATH_LENGTH,
   notFoundErrorCodeSchema,
   requestIdSchema,
   singletonErrorCodeSchema,
+  validationDetailsSchema,
+  validationIssueSchema,
 } from "./response.js";
 
 const validRequestId = "018f5b7e-6f3a-7c2b-9d1e-4a5b6c7d8e9f";
@@ -176,5 +180,47 @@ describe("requestIdSchema", () => {
   it("rejects an empty or free-form string", () => {
     expect(requestIdSchema.safeParse("").success).toBe(false);
     expect(requestIdSchema.safeParse("req-1").success).toBe(false);
+  });
+});
+
+describe("validationDetailsSchema", () => {
+  it("accepts the shape the pipe produces", () => {
+    expect(
+      validationDetailsSchema.parse([{ path: "items[1].id", issue: "invalid_format" }]),
+    ).toEqual([{ path: "items[1].id", issue: "invalid_format" }]);
+  });
+
+  it("rejects a value smuggled alongside the diagnosis", () => {
+    // A strict object is the point: `input` is where the submitted value would go.
+    expect(
+      validationIssueSchema.safeParse({ path: "email", issue: "invalid_format", input: "a@b.c" })
+        .success,
+    ).toBe(false);
+  });
+
+  it("rejects an unbounded path or issue", () => {
+    expect(
+      validationIssueSchema.safeParse({
+        path: "x".repeat(MAX_VALIDATION_PATH_LENGTH + 1),
+        issue: "invalid_type",
+      }).success,
+    ).toBe(false);
+    expect(validationIssueSchema.safeParse({ path: "a", issue: "x".repeat(200) }).success).toBe(
+      false,
+    );
+  });
+
+  it("rejects an issue code that is free text", () => {
+    expect(
+      validationIssueSchema.safeParse({ path: "a", issue: "bad thing: hunter2" }).success,
+    ).toBe(false);
+  });
+
+  it("rejects more entries than the cap", () => {
+    const tooMany = Array.from({ length: MAX_VALIDATION_ISSUES + 1 }, () => ({
+      path: "a",
+      issue: "invalid_type",
+    }));
+    expect(validationDetailsSchema.safeParse(tooMany).success).toBe(false);
   });
 });

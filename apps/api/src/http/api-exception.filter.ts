@@ -2,17 +2,19 @@ import { randomUUID } from "node:crypto";
 
 import type { ArgumentsHost, ExceptionFilter } from "@nestjs/common";
 import { Catch, HttpException, Logger } from "@nestjs/common";
-import type { ErrorCode, ErrorResponse } from "@agroclimate/contracts";
+import type { ErrorCode, ErrorResponse, ValidationIssue } from "@agroclimate/contracts";
 import {
   errorCodeSchema,
   errorResponseSchema,
   notFoundErrorCodeSchema,
+  validationDetailsSchema,
 } from "@agroclimate/contracts";
 import type { Response } from "express";
 
 import type { RuntimeConfig } from "../config/runtime-config.js";
 import type { ApiRequest } from "./request-id.middleware.js";
 import { REQUEST_ID_HEADER } from "./request-id.middleware.js";
+import { ValidationFailedException } from "./validation-failed.exception.js";
 
 /**
  * Fixed copy per code. Taking the message from the exception would mean an
@@ -91,7 +93,7 @@ interface MinimalLogger {
 interface Resolved {
   readonly status: number;
   readonly code: ErrorCode;
-  readonly details?: unknown;
+  readonly details?: readonly ValidationIssue[];
 }
 
 /**
@@ -138,14 +140,16 @@ export class ApiExceptionFilter implements ExceptionFilter {
   }
 
   /**
-   * Logs four fields and nothing else: correlation, status, contract code, and the
-   * exception's class name. `exception.message` is not in that list because it is
-   * unbounded text a library wrote — a Prisma error carries the failing SQL, and a
-   * driver error carries the DSN. `stack` is not either: frames name internal
-   * paths and inline values. The sanitised response and this line must not
-   * disagree about what may leave the process, so production and development log
-   * the same fields; debugging uses the request id to correlate with the client's
-   * report, not a leaked stack.
+   * Logs four fields and nothing else: correlation, status, contract code, and a
+   * coarse exception category. `exception.message` is not in that list because it
+   * is unbounded text a library wrote — a Prisma error carries the failing SQL,
+   * and a driver error carries the DSN. `stack` is not either: frames name
+   * internal paths and inline values. `exception.name` is not either, even though
+   * it is only a name: it is a mutable property, so `error.name = "x\nstatus=200"`
+   * is a log-injection primitive and `error.name = token` is a disclosure one.
+   * The sanitised response and this line must not disagree about what may leave
+   * the process, so production and development log the same fields; debugging
+   * uses the request id to correlate with the client's report, not a leaked stack.
    */
   private logFailure(
     requestId: string,
@@ -157,7 +161,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
       requestId,
       status,
       code: resolved.code,
-      exception: exception instanceof Error ? exception.name : typeof exception,
+      exception: category(exception),
       env: this.config.nodeEnv,
     };
 
@@ -235,19 +239,43 @@ export class ApiExceptionFilter implements ExceptionFilter {
     return parsed.success ? parsed.data : undefined;
   }
 
-  /** Details are only forwarded for a `400`, and only if the handler supplied an object. */
-  private details(exception: HttpException, status: number): { details?: unknown } {
-    if (status !== 400) return {};
+  /**
+   * Details are forwarded for a `400`, and only from `ValidationFailedException`.
+   *
+   * A `BadRequestException` is public API: a future controller, guard, or
+   * interceptor can throw one carrying a password, a SQL fragment, or a raw
+   * provider response, and the envelope's `details: z.unknown()` would happily
+   * transmit it. The marker type proves where the payload came from, and it is
+   * parsed against `validationDetailsSchema` before it leaves — so a malformed
+   * payload costs its details, not the status.
+   *
+   * Code-owned payloads for other statuses (`missingInputs[]` on `422`,
+   * `retryAfter` on either `503`) arrive with the endpoints that own them; until
+   * then this filter has no shape to validate them against and forwards nothing.
+   */
+  private details(exception: HttpException, status: number): { details?: ValidationIssue[] } {
+    if (status !== 400 || !(exception instanceof ValidationFailedException)) return {};
 
-    const payload: unknown = exception.getResponse();
-    if (typeof payload !== "object" || payload === null || !("details" in payload)) return {};
-
-    const details = payload.details;
-    return details === undefined ? {} : { details };
+    const parsed = validationDetailsSchema.safeParse(exception.issues);
+    return parsed.success ? { details: parsed.data } : {};
   }
 }
 
 function impliedStatus(code: ErrorCode): number | undefined {
   if (typeof code === "string" && code.endsWith("_NOT_FOUND")) return 404;
   return SINGLETON_STATUS[code];
+}
+
+/**
+ * Three labels and no fourth. The class name is not consulted because it is not
+ * data — it is a string the throwing code can set — and because the useful part of
+ * it is already in `status` and `code`: `exception=HttpException status=503
+ * code=DEPENDENCY_UNAVAILABLE` separates a classified refusal from
+ * `exception=Error status=500 code=INTERNAL_ERROR`, which is the distinction an
+ * operator acts on.
+ */
+function category(exception: unknown): string {
+  if (exception instanceof HttpException) return "HttpException";
+  if (exception instanceof Error) return "Error";
+  return "Unknown";
 }

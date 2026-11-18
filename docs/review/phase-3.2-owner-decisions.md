@@ -7,18 +7,29 @@
 | Authoritative source | `docs/review/phase-3.2-design-review.md` (verdict: `READY FOR OWNER DECISIONS`) |
 | Decisions requested | 4 — `AG-1`, `AG-2`, `IG-5`, `IG-11` |
 | Owner decisions made so far | **4 of 4**, plus `IG-5-A1` (amendment) and `IG-12` (new gate) |
-| Implementation started | **No** — a decision is not a line of code, a migration, or an ADR |
+| Decision approval status | **Complete** — every gate this file asked for is answered |
+| Implementation status | **`S1` and `S2` implemented, `S3` onward not started** — contracts at `c44cf5b`/`0bb9792`, plumbing at `ad6235b`, S2 remediation at `6d36741` |
+| Verification status | **Green at `6d36741`** — build, typecheck, test, lint, prettier, `git diff --check` all exit `0`; test counts in `docs/IMPLEMENTATION_STATUS.md` |
+| Remaining blockers before `S3` | `ADR-004`/`ADR-005` and `IG-1`–`IG-4`, `IG-6`–`IG-10`; `OPEN-01`/`OPEN-13` stay unresolved until an accepted ADR **and** an applied migration **and** green verification exist |
 | `OPEN-nn` dispositions changed | **No** — `OPEN-01` and `OPEN-13` remain unresolved |
 
 This record exists so the owner can decide without reading 1,100 lines of review. It
 restates the review's recommendations; it does not add to them. Where a detail is
 shortened, §16 and §17 of the review remain the authority.
 
-**Approval is not implementation.** The four decisions below are recorded; no code,
-migration, role, grant, policy, or ADR exists because of them. `OPEN-01` and `OPEN-13`
-stay below `RESOLVED`: per the review's Definition of Done, resolution requires an
-accepted ADR **and** an applied migration **and** green verification evidence — not an
-approval. Until then the register's dispositions are unchanged.
+**Approval is not implementation.** When this record was written, the four decisions
+below were recorded and no code, migration, role, grant, policy, or ADR existed because
+of them. That was accurate on 2026-11-18 before S1. `OPEN-01` and `OPEN-13` stay below
+`RESOLVED`: per the review's Definition of Done, resolution requires an accepted ADR
+**and** an applied migration **and** green verification evidence — not an approval.
+Until then the register's dispositions are unchanged.
+
+**Update, 2026-11-18 (post-S2).** Two of the tracks this record unblocked now have
+work behind them: `S1` (contracts) at `c44cf5b` and `0bb9792`, `S2` (API plumbing) at
+`ad6235b` with its remediation at `6d36741`. That changes implementation status only.
+The approvals, their dates, and the register's dispositions above are untouched; `S3`
+and everything after it still has no code, and `OPEN-01`/`OPEN-13` still need the ADR
+and migration they always needed.
 
 ## Recorded decisions
 
@@ -56,12 +67,15 @@ engine is not part of the error contract, so it is not an `IG-5` footnote. See
 | `AG-2` | Session storage | `OPEN-13` (P1) | before the sessions migration exists | S5, S8, S6 (session rows) |
 | `IG-5` | Authentication API error contract | implementation gate | before the exception filter | S1, S2, S7 |
 | `IG-11` | API test runner | implementation gate | before the first API test | S2, every API-level test |
+| `IG-12` | Request-validation engine | implementation gate | before the first validated parameter | S2, every endpoint that takes input |
 
 `AG-1`/`AG-2` are architecture decisions. `IG-5`/`IG-11` are convention decisions
 that would otherwise be made by whoever writes the first file. Both kinds are
 recorded here because both are owed by the owner before the corresponding track can
 start, and the four together are what §20 of the design review names as the
-precondition for implementation.
+precondition for implementation. `IG-12` was raised during S2 and is listed for the
+same reason: without it, the first endpoint that takes input picks its own validation
+engine by default.
 
 ---
 
@@ -725,6 +739,11 @@ Conditions attached to it:
 2. It exposes no internal detail — no stack, no SQL, no DSN, no exception message,
    no submitted value — in the response body **or** in the log. The log line carries
    `requestId`, `status`, `code`, exception class name, and environment only.
+
+   *Amended 2026-11-18, in the same phase:* the class name was replaced by a fixed
+   category — `HttpException`, `Error`, or `Unknown` — because `Error.name` is a
+   mutable string and therefore not a safe field. This tightens the condition; the
+   list of what may be logged is unchanged and shorter.
 3. It never displaces a more specific code a handler can justify. A handler that knows
    what failed maps to the 4xx or 503 that says so; `INTERNAL_ERROR` is the residue.
 4. `PROVIDER_UNAVAILABLE` and `DEPENDENCY_UNAVAILABLE` keep the meanings approved in
@@ -977,11 +996,12 @@ Two different relations, kept apart so a split gate does not become a chain.
 | `AG-2` | **None** | Session implementation uses the credential boundary selected by `AG-1` (`S3` before `S5`) |
 | `IG-5` | **None** | Required before exception-filter implementation (`S1`, `S2`) |
 | `IG-11` | **None** | Required before API test infrastructure and API test work (`S2`) |
+| `IG-12` | **None** | Required before the first validated parameter (`S2`, then every endpoint that takes input) |
 
 | Relation | Meaning | Consequence |
 |---|---|---|
-| **Approval dependency** | one decision's *answer* presupposes another's | none exists among these four. Each can be approved or rejected on its own, in any order |
-| **Implementation dependency** | one piece of code can only be written once another exists | `AG-2` → the credential `AG-1` selects; `S1`/`S2` → `IG-5` and `IG-11`. This constrains the order of work, not the order of decisions |
+| **Approval dependency** | one decision's *answer* presupposes another's | none exists among these. Each can be approved or rejected on its own, in any order |
+| **Implementation dependency** | one piece of code can only be written once another exists | `AG-2` → the credential `AG-1` selects; `S1`/`S2` → `IG-5` and `IG-11`; a validated parameter → `IG-12`. This constrains the order of work, not the order of decisions |
 
 Specifically:
 
@@ -1010,6 +1030,15 @@ satisfied — not that the step is complete.
 | S8 | Session guard, `/me`, logout, sliding expiry, purge wiring | S5, S6, `IG-8/9` | **not** unblocked by these four alone |
 | S9 | Docs reconciliation: `ADR-004`/`ADR-005` accepted, `entity-catalog` `sessions` in widened `identity`, `api-conventions` amendments, `auth-deferred.md` pointer, `IMPLEMENTATION_STATUS` | everything above | — |
 
+**Implementation status of this sequence (verified 2026-11-18).** Two steps are built;
+the rest are not.
+
+| Step | Status | Evidence |
+|---|---|---|
+| S1 | **implemented** | `c44cf5b` — response and error envelopes, error-code set, `requestId`; `0bb9792` — branded `NotFoundErrorCode` |
+| S2 | **implemented and remediated** | `ad6235b` — prefix, filter, request id, cookies, helmet, trust proxy, CORS, database client, health probes; `6d36741` — credential boundary, log sanitisation, 405/406/415 documentation, `statement_timeout` readiness, `IG-5-A1`, `IG-12` |
+| S3–S9 | **not started** | no `app_auth` role, no migration, no auth endpoint, no ADR-004/ADR-005 |
+
 So the honest statement of what these four decisions buy: **Track 1 can start**
 (contracts and plumbing), and **Track 2 can start** (the database boundary and
 sessions). Track 3 cannot — `S7` and `S8` additionally require `IG-1` through `IG-4`,
@@ -1017,8 +1046,10 @@ sessions). Track 3 cannot — `S7` and `S8` additionally require `IG-1` through 
 boundary.
 
 **As of 2026-11-18 the gates for S1, S2, S3, S4, and S5 are satisfied by approval.**
-They are not satisfied by work: no contract schema, no exception filter, no `app_auth`
-role, no migration, and no verification row exists yet.
+As of `6d36741`, S1 and S2 are also satisfied by work: the contract schemas, the
+exception filter, and the validation pipe exist and their checks exit `0`. S3, S4, and
+S5 remain approval-only — no `app_auth` role, no migration, and no verification row
+exists for them.
 
 # What these decisions do not settle
 
@@ -1042,8 +1073,10 @@ No `OPEN` disposition has changed in `docs/data-model/open-decisions.md`, no ADR
 been created or modified, and no implementation exists for any of the above.
 
 `IG-1` through `IG-4` and `IG-6` through `IG-10` are **not** approved by this record and
-were not part of it. Only `AG-1`, `AG-2`, `IG-5`, and `IG-11` were put to the owner, and
-only those four carry an approval date.
+were not part of it. Only `AG-1`, `AG-2`, `IG-5`, and `IG-11` were put to the owner in
+the original round, and only those four carry an approval date from that round;
+`IG-5-A1` and `IG-12` were approved later on the same day and are recorded above with
+their own dates.
 
 `OPEN-01` and `OPEN-13` remain **unresolved** despite their decisions being approved.
 The review's rule stands: a disposition moves to `RESOLVED` when the ADR is accepted,

@@ -5,7 +5,17 @@ import { errorResponseSchema } from "@agroclimate/contracts";
 
 import { startApp } from "./helpers.mjs";
 
-const READINESS_TIMEOUT_MS = 2000;
+const READINESS_BUDGET_MS = 2000;
+const ACQUISITION_BUDGET_MS = 1000;
+const EXECUTION_BUDGET_MS = 1000;
+
+/** The single `SET LOCAL` value the probe issued. */
+function issuedStatementTimeout(statements) {
+  assert.equal(statements.length, 1);
+  const match = /^SET LOCAL statement_timeout = (\d+)$/.exec(statements[0]);
+  assert.ok(match, `unexpected statement: ${statements[0]}`);
+  return Number(match[1]);
+}
 
 describe("routing, prefix, and readiness", () => {
   let app;
@@ -55,12 +65,36 @@ describe("routing, prefix, and readiness", () => {
     // `Promise.race` would have bounded only the HTTP response. This asserts the
     // mechanism is wired, not that PostgreSQL honoured it — that was checked
     // against the development server separately.
-    assert.deepEqual(database.state.statements, [
-      `SET LOCAL statement_timeout = ${READINESS_TIMEOUT_MS}`,
-    ]);
+    const statementTimeout = issuedStatementTimeout(database.state.statements);
+    assert.ok(statementTimeout > 0 && statementTimeout <= EXECUTION_BUDGET_MS);
+
+    // The two client-side shares are disjoint, so their sum is the overall bound.
     assert.deepEqual(database.state.transactionOptions, [
-      { timeout: READINESS_TIMEOUT_MS, maxWait: READINESS_TIMEOUT_MS },
+      { timeout: EXECUTION_BUDGET_MS, maxWait: ACQUISITION_BUDGET_MS },
     ]);
+    assert.ok(EXECUTION_BUDGET_MS + ACQUISITION_BUDGET_MS <= READINESS_BUDGET_MS);
+  });
+
+  it("spends only what the budget has left once a connection is in hand", async () => {
+    // Acquisition is not free. A probe that took ~1 s to get a connection must not
+    // then grant the statement a further fixed 1 s, or the two shares add up to
+    // more than the budget the caller was promised.
+    database.state.delayMs = ACQUISITION_BUDGET_MS + 50;
+    database.state.statements.length = 0;
+
+    try {
+      const response = await fetch(`${base}/health/ready`);
+      assert.equal(response.status, 200);
+
+      const statementTimeout = issuedStatementTimeout(database.state.statements);
+      assert.ok(
+        statementTimeout < EXECUTION_BUDGET_MS,
+        `expected the remaining budget, got ${statementTimeout}`,
+      );
+      assert.ok(statementTimeout > 0);
+    } finally {
+      database.state.delayMs = 0;
+    }
   });
 
   it("returns a contract-valid envelope for an unknown route", async () => {

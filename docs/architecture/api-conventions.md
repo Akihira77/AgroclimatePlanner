@@ -70,9 +70,16 @@ client may route around. `DEPENDENCY_UNAVAILABLE` is a statement about us. Widen
 `PROVIDER_UNAVAILABLE` to cover both would give one code two meanings and force a
 client to guess which outage it is reacting to.
 
-`details` is deliberately unconstrained: each code owns its payload (`{ path, issue }[]`
-for validation, `missingInputs[]` for insufficient input, `retryAfter` for the `503`s),
-and one shared shape would either drop fields or describe them wrongly.
+`details` is deliberately unconstrained by the envelope's *shape*: each code owns its
+payload (`{ path, issue }[]` for validation, `missingInputs[]` for insufficient input,
+`retryAfter` for the `503`s), and one shared shape would either drop fields or describe
+them wrongly. The field is only as safe as its producer, so the server forwards details
+from one origin and no other: `ValidationFailedException`, which the Zod pipe throws
+after encoding the issues through `validationDetailsSchema`. A `400` thrown with a
+hand-built `details` payload — a password, a SQL fragment, a provider response — is
+answered without details rather than with them. Domain payloads for `422` and `503`
+arrive with the endpoints that own them, and will be forwarded only against their own
+schema.
 
 `RESOURCE_NOT_FOUND` is the family's generic member, used when a path names no
 resource at all. It is not an endpoint's code; a handler that knows which noun is
@@ -280,16 +287,26 @@ contract above; it fixes how a request becomes a response.
     `[n]` for array indices and `(root)` for the whole value. Zod's message and
     `issue.input` are both dropped — a custom message can embed a submitted value, and
     `input` is the value.
-  - Entries are sorted by path then code, so the same input produces the same list
-    regardless of key order.
+  - A property name is reflected only if it is a plain identifier: Unicode letters,
+    digits, and `_`, up to 64 characters. Anything else — a dot, a bracket, a quote, a
+    control or bidi character, or an over-long name — becomes `[…n]`, the n-th unnamed
+    segment of that object, because a rejected key is caller-supplied text and echoing
+    it turns the response into a channel for whatever the caller put there. The whole
+    path is capped at 200 characters and the list at 100 entries; all three bounds are
+    in `packages/contracts` (`MAX_VALIDATION_PATH_LENGTH`, `MAX_VALIDATION_ISSUES`).
+  - Entries are sorted by path then code using code-unit comparison, never a
+    locale-aware collator, so the same input produces the same list on every host.
 - **Errors.** One global exception filter. It is the only place an HTTP status is
   chosen, it validates what it is about to send against `errorResponseSchema`, and it
   falls back to `500 INTERNAL_ERROR` if that validation fails. Unrecognised
   exceptions never contribute their message. A `5xx` writes exactly one log line —
-  `requestId`, `status`, `code`, the exception's class name, and the environment — and
-  never the message, the stack, a SQL statement, a DSN, or a submitted value.
-  Production and development log the same fields, because the response is sanitised
-  and the log must not become the path that was closed.
+  `requestId`, `status`, `code`, the exception's category (`HttpException`, `Error`,
+  or `Unknown`), and the environment — and never the message, the stack, the class
+  name, a SQL statement, a DSN, or a submitted value. The class name is excluded
+  because `Error.name` is a mutable string: an injected newline forges a second log
+  field, and a name set to a token is a disclosure. Production and development log the
+  same fields, because the response is sanitised and the log must not become the path
+  that was closed.
 - **CORS.** Explicit allowlist from `CORS_ORIGINS` (comma-separated). Credentials are
   not enabled — no cookie is issued by this phase. In production the variable is
   required; in development it defaults to `http://localhost:5173`. An invalid entry
@@ -310,12 +327,18 @@ contract above; it fixes how a request becomes a response.
   paper over. `MIGRATION_DATABASE_URL` is never read by the API — it carries
   schema-owner privileges the runtime must not hold. Missing configuration fails
   startup rather than falling back to another role.
-- **Readiness.** `/health/ready` runs `SELECT 1` inside a transaction whose
-  `statement_timeout` is the readiness bound, so PostgreSQL cancels the statement
-  itself; Prisma's `maxWait` bounds the wait for a connection and its `timeout`
-  bounds and rolls back the transaction. Waiting for a connection is bounded on the
-  client side only — the pool's own connect attempt is not aborted. Redis is not
-  checked because it is not provisioned.
+- **Readiness.** `/health/ready` has a **2 s budget split into two disjoint shares**:
+  1 s for `maxWait` (connection acquisition) and 1 s for the transaction `timeout`.
+  Because the shares are sequential, the response is bounded by their sum rather than
+  by each one separately — setting both to the whole budget would have bounded a probe
+  at twice the budget. Inside the transaction, `SET LOCAL statement_timeout` is set to
+  the budget still remaining on a monotonic clock (capped at the execution share), so
+  PostgreSQL cancels the statement itself; an exhausted budget fails the probe instead
+  of issuing `statement_timeout = 0`, which PostgreSQL reads as unlimited. Waiting for
+  a connection is bounded on the client side only — the pool's own connect attempt is
+  not aborted, so a host that blackholes SYNs can leave one pending attempt until the
+  TCP timeout. The HTTP response is bounded; the socket is not. Redis is not checked
+  because it is not provisioned.
 - **Tests.** `pnpm --filter @agroclimate/api test` builds and runs `node --test`. HTTP
   plumbing tests do not need a live PostgreSQL; the database token is replaced with a
   controlled double. A double proves lifecycle wiring, not connectivity or privilege.

@@ -1,7 +1,10 @@
 import type { ArgumentMetadata, PipeTransform } from "@nestjs/common";
-import { BadRequestException } from "@nestjs/common";
+import type { ValidationIssue } from "@agroclimate/contracts";
+import { MAX_VALIDATION_ISSUES, MAX_VALIDATION_PATH_LENGTH } from "@agroclimate/contracts";
 import type { ZodIssue, ZodType } from "zod";
 import { z } from "zod";
+
+import { ValidationFailedException } from "./validation-failed.exception.js";
 
 /**
  * Request validation for a single parameter boundary, bound to one Zod schema.
@@ -27,10 +30,10 @@ export class ZodValidationPipe<T extends ZodType> implements PipeTransform<unkno
     const result = this.schema.safeParse(value);
     if (result.success) return result.data;
 
-    // `details` is the only place the failure reason goes. The filter forwards it
-    // for a 400 and drops it everywhere else, so this cannot become a second way
-    // to describe an error.
-    throw new BadRequestException({ details: toIssues(result.error.issues) });
+    // `details` is the only place the failure reason goes, and the exception type
+    // is what tells the filter those details are ours rather than a payload some
+    // other thrower attached to a 400.
+    throw new ValidationFailedException(toIssues(result.error.issues));
   }
 }
 
@@ -42,50 +45,107 @@ export class ZodValidationPipe<T extends ZodType> implements PipeTransform<unkno
  * with the submitted value. `issue.input` is excluded for the same reason, and
  * because it is the value itself.
  */
-export interface ValidationIssue {
-  readonly path: string;
-  readonly issue: string;
-}
+export type { ValidationIssue };
 
 const ROOT_PATH = "(root)";
 
+/**
+ * A segment is reflected verbatim only if it cannot be confused with the path
+ * syntax: no dot, no bracket, no quote, no control or bidi character, and a
+ * bounded length. Everything else becomes a positional marker — see
+ * `formatPath`.
+ *
+ * Unicode letters and digits are allowed because a field name is not the place to
+ * force ASCII; the ranges above still exclude every character that could make the
+ * path ambiguous or unprintable.
+ */
+const IDENTIFIER_SEGMENT = /^[\p{L}_][\p{L}\p{N}_]{0,63}$/u;
+
+/**
+ * Builds the `details` list: bounded, ordered, and free of submitted values *and*
+ * submitted names.
+ *
+ * A strict object reports every unknown key at once, and those keys are the
+ * caller's text — a payload can name a key `password=hunter2`, add a newline, or
+ * put a dot where the path syntax puts a separator. Reflecting such a name turns
+ * the response into a channel for whatever the caller put in it, so a key that is
+ * not a plain identifier is replaced by `[…n]`: the n-th unnamed key of that
+ * object, which the caller can still map back to their own payload.
+ */
 export function toIssues(issues: readonly ZodIssue[]): ValidationIssue[] {
   const mapped: ValidationIssue[] = [];
 
   for (const issue of issues) {
-    const path = formatPath(issue.path);
-
-    // One strict-object violation reports every unknown key at once; splitting it
-    // keeps one entry per offending path, which is what a client needs to fix it.
     if (issue.code === "unrecognized_keys") {
-      for (const key of issue.keys) {
-        mapped.push({ path: path === ROOT_PATH ? key : `${path}.${key}`, issue: issue.code });
-      }
+      // Sorted so the ordinals depend on the set of keys, not on the order they
+      // happened to arrive in.
+      const keys = [...issue.keys].sort(compareCodeUnits);
+
+      keys.forEach((key, index) => {
+        mapped.push(
+          IDENTIFIER_SEGMENT.test(key)
+            ? { path: appendSegment(issue.path, key), issue: issue.code }
+            : { path: appendMarker(issue.path, index + 1), issue: issue.code },
+        );
+      });
       continue;
     }
 
-    mapped.push({ path, issue: issue.code });
+    mapped.push({ path: bound(formatPath(issue.path)), issue: issue.code });
   }
 
   // Zod's order follows object key order; sorting makes the response stable
-  // regardless of how the schema was assembled.
-  return mapped.sort((left, right) =>
-    left.path === right.path
-      ? left.issue.localeCompare(right.issue)
-      : left.path.localeCompare(right.path),
+  // regardless of how the schema was assembled. Equal paths fall back to the issue
+  // code, and the comparator is code-unit rather than locale-aware.
+  mapped.sort(
+    (left, right) =>
+      compareCodeUnits(left.path, right.path) || compareCodeUnits(left.issue, right.issue),
   );
+
+  return mapped.slice(0, MAX_VALIDATION_ISSUES);
+}
+
+/** Locale-independent: `<` on strings compares UTF-16 code units. */
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function formatPath(path: readonly PropertyKey[]): string {
   let formatted = "";
+  let unnamed = 0;
 
   for (const segment of path) {
     if (typeof segment === "number") {
       formatted += `[${segment}]`;
       continue;
     }
-    formatted = formatted === "" ? String(segment) : `${formatted}.${String(segment)}`;
+
+    const key = String(segment);
+    if (IDENTIFIER_SEGMENT.test(key)) {
+      formatted = formatted === "" ? key : `${formatted}.${key}`;
+      continue;
+    }
+
+    unnamed += 1;
+    formatted += `[…${unnamed}]`;
   }
 
   return formatted === "" ? ROOT_PATH : formatted;
+}
+
+function appendSegment(path: readonly PropertyKey[], key: string): string {
+  const parent = formatPath(path);
+  return bound(parent === ROOT_PATH ? key : `${parent}.${key}`);
+}
+
+function appendMarker(path: readonly PropertyKey[], ordinal: number): string {
+  const parent = formatPath(path);
+  return bound(parent === ROOT_PATH ? `[…${ordinal}]` : `${parent}[…${ordinal}]`);
+}
+
+/** Truncation is the last resort, after encoding has removed the dangerous part. */
+function bound(path: string): string {
+  return path.length <= MAX_VALIDATION_PATH_LENGTH
+    ? path
+    : `${path.slice(0, MAX_VALIDATION_PATH_LENGTH - 1)}…`;
 }

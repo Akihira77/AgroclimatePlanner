@@ -107,15 +107,51 @@ export function envelopeSchema<T extends z.ZodType, M extends z.ZodType = z.ZodN
 export type Envelope<T, M = undefined> = M extends undefined ? { data: T } : { data: T; meta: M };
 
 /**
+ * One validation failure. Both fields are bounded by this contract, not by the
+ * producer: an unbounded `path` is how a rejected payload's own text gets
+ * reflected back, and an unbounded `issue` is free text by another name.
+ *
+ * The object is strict, so a producer cannot attach the submitted value next to
+ * the diagnosis. `path` is the encoded form `api-conventions.md` §12 defines;
+ * ordinary field names appear unchanged, anything that is not an identifier is
+ * replaced by an ordinal marker rather than echoed.
+ */
+export const MAX_VALIDATION_PATH_LENGTH = 200;
+export const MAX_VALIDATION_ISSUE_LENGTH = 64;
+
+export const validationIssueSchema = z.strictObject({
+  path: z.string().min(1).max(MAX_VALIDATION_PATH_LENGTH),
+  issue: z
+    .string()
+    .min(1)
+    .max(MAX_VALIDATION_ISSUE_LENGTH)
+    .regex(/^[a-z0-9_]+$/, "expected a lower_snake_case issue code"),
+});
+export type ValidationIssue = z.infer<typeof validationIssueSchema>;
+
+/**
+ * A bounded list, in a fixed order. The cap is part of the contract so one
+ * oversized payload cannot turn a `400` into a multi-megabyte response.
+ */
+export const MAX_VALIDATION_ISSUES = 100;
+
+export const validationDetailsSchema = z.array(validationIssueSchema).max(MAX_VALIDATION_ISSUES);
+export type ValidationDetails = z.infer<typeof validationDetailsSchema>;
+
+/**
  * Error envelope. `code` is the machine-readable contract; `message` is
  * user-facing copy and may change wording without a version bump, so clients
  * must key on `code`.
  *
  * `details` is intentionally unconstrained by the envelope: the payload differs
- * per code (`{ path, issue }[]` for validation, `missingInputs[]` for
+ * per code (`validationDetailsSchema` for validation, `missingInputs[]` for
  * insufficient input, `retryAfter` for the two `503`s), and inventing one shape
  * for all of them would either drop fields or lie about them. Each code owns its
  * `details` shape; the envelope only guarantees the field is JSON.
+ *
+ * The envelope cannot tell a code-owned payload from an arbitrary one, so the
+ * server's exception filter is what decides which producer may attach details at
+ * all — see `api-conventions.md` §3.
  */
 export const errorResponseSchema = z.strictObject({
   error: z.strictObject({

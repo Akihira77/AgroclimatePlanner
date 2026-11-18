@@ -442,3 +442,44 @@ One deliberate omission in the other direction: no new model carries `@updatedAt
 `updated_at` is a plain column with a `now()` default and no trigger maintains it
 (`OPEN-19`), so marking it `@updatedAt` would have Prisma write a value the
 database never enforces and a migration never creates.
+
+## Phase 3.2 — Authentication & tenant identity
+
+Design and decision inputs: `docs/review/phase-3.2-design-review.md` (verdict
+`READY FOR OWNER DECISIONS`) and `docs/review/phase-3.2-owner-decisions.md` (four
+approvals, one amendment `IG-5-A1`, one later gate `IG-12`).
+
+| Step | Status | Commit | What exists |
+|---|---|---|---|
+| S1 — contracts | **implemented** | `c44cf5b`, `0bb9792` | response and error envelopes, `errorCodeSchema` with the branded `NotFoundErrorCode`, `requestIdSchema`, and the bounded `validationDetailsSchema` |
+| S2 — API plumbing | **implemented and remediated** | `ad6235b`, `6d36741` | `/v1` prefix, request-id middleware, exception filter, `ZodValidationPipe` bound per parameter, `cookie-parser`, helmet, explicit CORS allowlist, explicit trust proxy, database client + lifecycle, `/health` and `/health/ready` |
+| S3 — `app_auth` bootstrap | not started | — | — |
+| S4 — `auth_boundary` migration | not started | — | — |
+| S5 — `sessions` migration | not started | — | — |
+| S6 — privilege verification | not started | — | — |
+| S7 — register + login | blocked | — | needs `IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10` |
+| S8 — session guard, `/me`, logout | blocked | — | needs `IG-8`, `IG-9` |
+| S9 — docs reconciliation | not started | — | `ADR-004`/`ADR-005` not written |
+
+Gates this phase answered: `AG-1`, `AG-2`, `IG-5`, `IG-11`, plus `IG-5-A1` and
+`IG-12`. Gates it did not answer: `IG-1`–`IG-4`, `IG-6`–`IG-10`.
+
+What S2 deliberately does not contain: an auth endpoint, session issuance, an
+`app_auth` role, a grant, a policy, or a migration. `OPEN-01` and `OPEN-13` remain
+unresolved — an approval and an implementation are not a migration, and the ADRs
+that would move them are not written.
+
+Verification at `6d36741`, run rather than assumed:
+
+| Check | Result |
+|---|---|
+| `pnpm install --frozen-lockfile` | exit 0 |
+| `pnpm build` / `typecheck` / `lint` | 0 / 0 / 0 |
+| `pnpm test` | 0 — api 69, database 9, contracts 179, 0 failing |
+| `pnpm exec prettier --check .` | 0 |
+| `git diff --check` | 0 |
+
+Two limitations stated rather than implied: the readiness budget bounds the HTTP
+response and lets PostgreSQL cancel its own statement, but a pending pool connect
+attempt is not aborted; and no endpoint takes input yet, so `ZodValidationPipe` is
+exercised by unit and filter-level tests rather than by a live route.

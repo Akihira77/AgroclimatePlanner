@@ -6,7 +6,8 @@ import { errorResponseSchema } from "@agroclimate/contracts";
 import { z } from "zod";
 
 import { ApiExceptionFilter } from "../dist/http/api-exception.filter.js";
-import { ZodValidationPipe } from "../dist/http/zod-validation.pipe.js";
+import { ValidationFailedException } from "../dist/http/validation-failed.exception.js";
+import { toIssues, ZodValidationPipe } from "../dist/http/zod-validation.pipe.js";
 import { testConfig } from "./helpers.mjs";
 
 const metadata = { type: "query" };
@@ -153,7 +154,7 @@ describe("Zod request validation", () => {
       },
     };
 
-    const exception = new BadRequestException({ details });
+    const exception = new ValidationFailedException(details);
     new ApiExceptionFilter(testConfig(), { error: () => {} }).catch(exception, {
       switchToHttp: () => ({
         getRequest: () => ({ requestId: "0b1f5e2a-9d3c-4a5b-8c7d-6e5f4a3b2c1d" }),
@@ -165,5 +166,108 @@ describe("Zod request validation", () => {
     assert.equal(errorResponseSchema.safeParse(response.body).success, true);
     assert.equal(response.body.error.code, "VALIDATION_FAILED");
     assert.deepEqual(response.body.error.details, details);
+  });
+});
+
+describe("validation path safety", () => {
+  it("does not reflect a property name that is not a plain identifier", () => {
+    const schema = z.strictObject({ name: z.string() });
+    const details = issuesFrom(schema, { name: "x", "password=super-secret-value": 1 });
+    const serialised = JSON.stringify(details);
+
+    // Neither the secret-looking value nor the field name it was smuggled under
+    // appears: the name is the caller's text, and echoing it is the disclosure.
+    assert.equal(serialised.includes("super-secret-value"), false);
+    assert.equal(serialised.includes("password"), false);
+    assert.deepEqual(details, [{ path: "[…1]", issue: "unrecognized_keys" }]);
+  });
+
+  it("keeps the path unambiguous when a name carries dots or brackets", () => {
+    const schema = z.strictObject({ filters: z.strictObject({ crop: z.string() }) });
+    const details = issuesFrom(schema, {
+      filters: { crop: "padi", "a.b[0]": 1, "c]d": 2 },
+    });
+
+    // `filters.a.b[0]` would be indistinguishable from real nesting.
+    assert.deepEqual(details, [
+      { path: "filters[…1]", issue: "unrecognized_keys" },
+      { path: "filters[…2]", issue: "unrecognized_keys" },
+    ]);
+  });
+
+  it("strips newlines and control characters from a reflected name", () => {
+    const schema = z.strictObject({ name: z.string() });
+    const details = issuesFrom(schema, { name: "x", "a\nb\u0000c": 1 });
+    const serialised = JSON.stringify(details);
+
+    assert.equal(serialised.includes("\\n"), false);
+    assert.equal(serialised.includes("0000"), false);
+    assert.deepEqual(details, [{ path: "[…1]", issue: "unrecognized_keys" }]);
+  });
+
+  it("bounds the length of a name and of the whole path", () => {
+    const schema = z.strictObject({ name: z.string() });
+    const longName = "x".repeat(500);
+
+    const [unknown] = issuesFrom(schema, { name: "x", [longName]: 1 });
+    assert.equal(unknown.path, "[…1]");
+
+    // A legitimately nested path is truncated rather than allowed to grow.
+    const nested = toIssues([
+      { code: "invalid_type", path: Array.from({ length: 40 }, () => "abcdefghij"), message: "m" },
+    ]);
+    assert.equal(nested[0].path.length, 200);
+    assert.equal(nested[0].path.endsWith("…"), true);
+  });
+
+  it("reflects ordinary identifiers, including unicode letters, verbatim", () => {
+    const schema = z.strictObject({
+      nama_petak: z.string(),
+      luas: z.string(),
+    });
+    const parsed = new ZodValidationPipe(schema).transform(
+      { nama_petak: "x", luas: "1" },
+      metadata,
+    );
+    assert.deepEqual(parsed, { nama_petak: "x", luas: "1" });
+
+    const unicode = issuesFrom(z.strictObject({ kebun: z.strictObject({ luas: z.number() }) }), {
+      kebun: { luas: "3" },
+    });
+    assert.deepEqual(unicode, [{ path: "kebun.luas", issue: "invalid_type" }]);
+
+    // `é` is a letter, so that name stays readable instead of being replaced.
+    assert.deepEqual(issuesFrom(z.strictObject({ é: z.number() }), { é: "3" }), [
+      { path: "é", issue: "invalid_type" },
+    ]);
+  });
+
+  it("orders issues by code unit, not by locale, and is repeatable", () => {
+    const schema = z.strictObject({ name: z.string() });
+    const value = { name: "x", a: 1, B: 2 };
+
+    // Code-unit order puts `B` before `a`; a locale collator puts `a` first.
+    assert.deepEqual(issuesFrom(schema, value), [
+      { path: "B", issue: "unrecognized_keys" },
+      { path: "a", issue: "unrecognized_keys" },
+    ]);
+
+    for (let run = 0; run < 5; run += 1) {
+      assert.deepEqual(issuesFrom(schema, value), issuesFrom(schema, value));
+    }
+  });
+
+  it("breaks a tie on the same path with the issue code", () => {
+    const mapped = toIssues([
+      { code: "custom", path: ["b"], message: "m" },
+      { code: "invalid_type", path: ["b"], message: "m" },
+      { code: "invalid_type", path: ["a"], message: "m" },
+    ]);
+
+    assert.deepEqual(mapped, [
+      { path: "a", issue: "invalid_type" },
+      { path: "b", issue: "custom" },
+      { path: "b", issue: "invalid_type" },
+    ]);
   });
 });

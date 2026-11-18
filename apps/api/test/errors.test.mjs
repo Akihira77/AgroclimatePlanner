@@ -12,6 +12,7 @@ import {
 import { errorResponseSchema } from "@agroclimate/contracts";
 
 import { ApiExceptionFilter } from "../dist/http/api-exception.filter.js";
+import { ValidationFailedException } from "../dist/http/validation-failed.exception.js";
 import { testConfig } from "./helpers.mjs";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -138,13 +139,42 @@ describe("exception filter", () => {
     assert.equal(JSON.stringify(response.body).includes("teapot"), false);
   });
 
-  it("passes structured validation details through, and only for 400", () => {
-    const details = [{ path: "isAdmin", issue: "whitelistValidation" }];
-    const validation = run(new BadRequestException({ details }));
-    assert.deepEqual(validation.body.error.details, details);
+  it("forwards details only when they came from the validation pipe", () => {
+    const details = [{ path: "items[1].id", issue: "invalid_format" }];
+    const trusted = run(new ValidationFailedException(details));
+    assert.deepEqual(trusted.body.error.details, details);
+
+    // `BadRequestException` is public API: any thrower can attach any payload, so
+    // its `details` is not validation metadata and must not be forwarded.
+    const untrusted = run(
+      new BadRequestException({ details: [{ path: "password", issue: "hunter2" }] }),
+    );
+    assert.equal(untrusted.statusCode, 400);
+    assert.equal(untrusted.body.error.code, "VALIDATION_FAILED");
+    assert.equal("details" in untrusted.body.error, false);
+    assert.equal(JSON.stringify(untrusted.body).includes("hunter2"), false);
 
     const outage = run(new ServiceUnavailableException({ details: [{ internal: true }] }));
     assert.equal("details" in outage.body.error, false);
+  });
+
+  it("drops malformed validation metadata instead of forwarding it", () => {
+    const cases = [
+      // An extra field is how a submitted value would ride along with a diagnosis.
+      [{ path: "a", issue: "invalid_type", input: "hunter2" }],
+      // The contract bounds path length; the producer is not trusted to respect it.
+      [{ path: "x".repeat(500), issue: "invalid_type" }],
+      // Not a list at all.
+      { path: "a", issue: "invalid_type" },
+    ];
+
+    for (const details of cases) {
+      const response = run(new ValidationFailedException(details));
+      assert.equal(response.statusCode, 400);
+      assert.equal(response.body.error.code, "VALIDATION_FAILED");
+      assert.equal("details" in response.body.error, false);
+      assert.equal(JSON.stringify(response.body).includes("hunter2"), false);
+    }
   });
 
   it("mints a request id when the middleware did not set one, and pins the header", () => {
@@ -193,6 +223,38 @@ describe("exception filter logging", () => {
     assert.equal(line.includes("status=500"), true);
     assert.equal(line.includes("code=INTERNAL_ERROR"), true);
     assert.equal(line.includes("exception=Error"), true);
+  });
+
+  it("does not trust the exception name, which is mutable", () => {
+    const error = new Error("boom");
+    error.name = "SECRET_TOKEN\nstatus=200 exception=Error";
+
+    const { lines, logger } = recordLog();
+    run(error, DEFAULT_REQUEST_ID, logger);
+
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0].includes("SECRET_TOKEN"), false);
+    assert.equal(lines[0].includes("\n"), false);
+    assert.equal(lines[0].includes("status=200"), false);
+    assert.equal(lines[0].includes("exception=Error"), true);
+  });
+
+  it("labels a classified refusal by category, not by class name", () => {
+    const { lines, logger } = recordLog();
+    run(new ServiceUnavailableException(), DEFAULT_REQUEST_ID, logger);
+
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0].includes("exception=HttpException"), true);
+    assert.equal(lines[0].includes("ServiceUnavailableException"), false);
+  });
+
+  it("labels a non-Error throw without serialising it", () => {
+    const { lines, logger } = recordLog();
+    run("a thrown string with hunter2 in it", DEFAULT_REQUEST_ID, logger);
+
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0].includes("exception=Unknown"), true);
+    assert.equal(lines[0].includes("hunter2"), false);
   });
 
   it("stays silent for a client error", () => {

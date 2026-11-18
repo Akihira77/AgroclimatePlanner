@@ -24,6 +24,8 @@ export function testDatabase() {
     failTransaction: false,
     /** Rejects the statement inside the transaction: a timeout or a cancelled query. */
     failQuery: false,
+    /** Milliseconds spent "acquiring" a connection before the transaction body runs. */
+    delayMs: 0,
     /** Every `$transaction` options object, in call order. */
     transactionOptions: [],
     /** Every statement issued through `$executeRawUnsafe`. */
@@ -38,6 +40,7 @@ export function testDatabase() {
         if (state.failTransaction) {
           throw new Error("connect ECONNREFUSED 127.0.0.1:5442 password=hunter2");
         }
+        if (state.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, state.delayMs));
 
         const tx = {
           async $executeRawUnsafe(sql) {
