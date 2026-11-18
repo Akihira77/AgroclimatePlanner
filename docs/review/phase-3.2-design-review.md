@@ -40,28 +40,12 @@ before being fixed. All four were introduced by that text, not by the design:
 | # | Defect | Fix |
 |---|---|---|
 | 1 | `CHECK (absolute_expires_at > expires_at)` is violated by a sliding extension near the absolute deadline (day 70 of 90 → day 100) | extension clamped with `LEAST(now() + 30 d, absolute_expires_at)`; CHECK relaxed to `>=`, because for the last stretch of a session's life the sliding deadline *is* the absolute deadline |
-| 2 | `RETURNS integer` with `DELETE … RETURNING 1` yields one row per deleted row; a scalar-returning SQL function allows at most one, so it errors as soon as two sessions expire together | `WITH deleted AS (DELETE … RETURNING 1) SELECT count(*)::integer FROM deleted` — the return value is now the count, which is also the only signal the maintenance job has |
+| 2 | `RETURNS integer` with `DELETE … RETURNING 1` yields one row per deleted row; a scalar-returning SQL function allows at most one, so it errors as soon as two sessions expire together | `WITH deleted AS (DELETE … RETURNING 1) SELECT count(*)::integer FROM deleted` — the return value is now the count of rows removed by that run |
 | 3 | The `sessions` ownership class was described as new in §6.1/§9/§14 and as a widened `identity` in §4.3/§18 | one answer everywhere: **widen `identity`**, do not add a sixth class whose only member is this table |
 | 4 | The `OPEN-01` sheet listed `app.sessions` privileges, so an owner who approves `AG-1` and then chooses Redis would have approved a grant to a table that does not exist | `AG-1` covers `app.users` and the role only; every session privilege moved to `AG-2` (§17), and each is marked conditional on that gate |
 
 The fourth is the one with consequences beyond wording: the two gates must be
 approvable in either order, and they are now.
-
-### Provenance legend
-
-Every material claim is tagged.
-
-| Tag | Means |
-|---|---|
-| `[V]` | verified in this repository by reading the cited file, or by executing the cited command in an earlier phase |
-| `[R]` | recommendation made by this review |
-| `[A]` | assumption, unmeasured — must not be treated as a completed control |
-
-Nothing in this document is `[V]` for runtime behaviour of code that does not
-exist. No `db:*` command, no `psql`, and no Redis connection was run in producing
-this review.
-
----
 
 ### Provenance legend
 
@@ -426,12 +410,24 @@ $$;
 
 ```
 
-The return value is the **number of rows deleted**, not a success flag — the
-`WITH deleted … count(*)` form is what makes that true. The naive
+The return value is the **number of rows deleted by this run**, not a success
+flag — the `WITH deleted … count(*)` form is what makes that true. The naive
 `DELETE … RETURNING 1` returns one row per deleted row, and a scalar-returning SQL
 function permits at most one result row — so it errors as soon as two sessions
-expire in the same run, which is the normal case. The count is also the only signal the maintenance
-job has: `0` for weeks means the sweep or the clock is wrong.
+expire in the same run, which is the normal case.
+
+Three different questions, and the count answers only the first:
+
+| Question | Answered by | What a value means |
+|---|---|---|
+| **Deletion count** — how many expired sessions did this run remove? | the function's return value | `0` is a legitimate outcome: no session reached its absolute deadline since the last run. It is **not** evidence of a broken sweep, and a run that deletes nothing is indistinguishable from a run that never happened *on this signal alone* |
+| **Job execution health** — did the maintenance job run and complete? | the queue's job record (`background-processing.md:19`), not this function | a missing or failed job is visible there; the SQL function cannot report its own absence |
+| **Operational health** — is the sweep keeping up? | last successful execution time, status, duration, error count, and a trend of the count over many runs | a count that stays `0` while `last_seen_at` keeps advancing is normal; a count that stays `0` while no job has succeeded is the alarm. The two facts must be read together |
+
+No monitoring implementation is proposed: the existing `maintenance` queue already
+records execution. The point is only that `0` deleted rows and `0` successful runs
+are different observations, and treating the first as the second produces false
+alarms on a young deployment.
 
 This is the **only** place a `SECURITY DEFINER` object is proposed, and it touches
 no credentials and no tenant row. `ADR-003` A1 rejected a definer-based tenant
@@ -960,7 +956,21 @@ the session architecture is implemented. Neither is decided by this review.
 | ID | Description | Owner | Recommended | Dependencies | Latest point | If deferred |
 |---|---|---|---|---|---|---|
 | `AG-1` = `OPEN-01` | Which credential reads `app.users` before a tenant context exists | repository owner (security) | Option A — dedicated `app_auth` with column grants and two policies (§16) | none | before migration `auth_boundary` is written | registration and login cannot be written; nothing else in 3.2 can start except contracts and plumbing |
-| `AG-2` = `OPEN-13` | Where a session lives: Postgres table or Redis | repository owner | Postgres table, consistent with `ADR-002` D5 (§17) | `AG-1` (the store is accessed by the same credential) | before migration `sessions` is written | login cannot issue a session; `/me` and `/logout` cannot be written |
+| `AG-2` = `OPEN-13` | Where a session lives: Postgres table or Redis | repository owner | Postgres table, consistent with `ADR-002` D5 (§17) | **implementation only** — the store is accessed by whichever credential `AG-1` selects; approval is independent (see below) | before migration `sessions` is written | login cannot issue a session; `/me` and `/logout` cannot be written |
+
+Two different things are called a dependency here, and conflating them is how a
+split gate becomes a chain:
+
+| | Meaning | Consequence |
+|---|---|---|
+| **Approval dependency** | one gate's *decision* presupposes another's | **none exists between `AG-1` and `AG-2`.** Each can be approved or rejected on its own, in either order. An owner may approve the credential boundary and separately choose Redis, or approve PostgreSQL sessions and separately refuse the fourth role |
+| **Implementation dependency** | one piece of code can only be written after another piece exists | `AG-2` carries one: session code runs under whichever credential `AG-1` approved. This constrains the *order of work*, not the order of decisions; it is discharged by S3 before S5 in §18 |
+
+Approving `AG-1` does **not** approve PostgreSQL sessions, does **not** authorise
+any grant on `app.sessions`, and does **not** pre-empt `AG-2`. Conversely, approving
+`AG-2` as a Postgres table does not approve `app_auth`; the session table's grants
+are specified against whichever credential `AG-1` settles, and §17 marks them
+conditional on this gate for that reason.
 
 ### 15.2 Implementation gates
 
