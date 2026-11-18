@@ -113,3 +113,28 @@ Four findings (F29–F32), all from an external read verified against the files.
 Rejected: a separate `contextHash` for briefings (R14), one descriptor shape with optional fields (R15), an `is_stale` column for query convenience (R16).
 
 Phase 2 readiness: **yes, and no further architecture pass is warranted**. Remaining uncertainty is implementation, which documents cannot resolve.
+
+## Phase 2 — Implementation (in progress)
+
+| Sub-phase | Outcome | Evidence |
+|---|---|---|
+| 2.0 monorepo + shared contracts | done | 3 deployables, 1 package, 42 files, commit `d4b4b89` |
+| 2.0.x contract corrections | done | calendar-valid dates, UTC-only instants, canonical `firstRefId`, commit `9c21576` |
+| 2.1 canonical JSON + SHA-256 | done, runtime-verified | `packages/contracts/src/canonical.ts`, `hash.ts`, golden vectors |
+
+### Phase 2.1 outcome
+
+Canonical JSON is one implementation with declared rules, and every artifact hash is `sha256Hex(canonicalJson(...))` — there is no per-artifact serialiser to drift.
+
+| Decision | Effect |
+|---|---|
+| Arrays are canonicalised depth-first, then the parent sorts | `inputRefs` order is computed from canonical values, never from provider emission order |
+| An array with no declared rule throws | a new array on a hashed type must be classified as set or sequence before it can be hashed |
+| `undefined`, `NaN`, `±Infinity`, cycles throw | nothing is silently dropped or written as `null` |
+| Numbers use `Number::toString`; `-0` → `0` | deterministic without reformatting or rounding |
+| Timestamps are representation-preserving | `…:00Z` and `…:00.000Z` are distinct preimages, by decision rather than omission |
+| Known-answer digests come from coreutils | the hash test does not validate itself against itself |
+
+Verification is **runtime for the contract layer** (125 tests including permutation, change-detection, dedupe-conflict, and known-answer vectors) and **absent for everything else** — no database, no queue, no provider adapter exists to verify.
+
+Next: PostgreSQL + PostGIS + role separation, or provider adapters. Nothing is persisted yet, so `inputSnapshotHash` currently has no consumer.

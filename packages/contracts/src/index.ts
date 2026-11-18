@@ -1,5 +1,6 @@
 export * from "./enums.js";
 export * from "./weather.js";
 export * from "./provenance.js";
-export * from "./canonical.js";
+export { CanonicalizationError, canonicalJson } from "./canonical.js";
+export { sha256Hex, hashFieldSnapshot, hashDerivationDescriptor } from "./hash.js";
 export * from "./version.js";

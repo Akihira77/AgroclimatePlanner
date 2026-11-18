@@ -1,177 +1,113 @@
 /**
- * Canonicalisation contract — the single designated home for array ordering,
- * deduplication, and (from Phase 2.6) JSON serialisation + hashing.
+ * Canonicalisation — the single implementation for canonical JSON and, via
+ * hash.ts, for every artifact hash.
  *
- * docs/architecture/provenance-contract.md §4 is normative. Two rules from it
- * drive everything here:
+ * docs/architecture/provenance-contract.md §4 is normative. The invariant is:
  *
- *   1. Ordering is applied by the canonicaliser, never by the caller. A caller
- *      that has to remember to sort an array is the bug this module exists to
- *      prevent.
- *   2. Deduplication must never silently discard a conflicting record. Equal
- *      identity + different content throws instead of picking a winner.
+ *   identical computation inputs  ⇒  identical bytes  ⇒  identical SHA-256
  *
- * What is NOT here yet: SHA-256, number formatting, and the golden vectors.
- * Those land with the hash implementation; shipping a hash now would lock in
- * serialisation before the permutation fixture exists to prove it.
+ * regardless of object key insertion order or the order a producer emitted a
+ * set-like array in.
+ *
+ * Three decisions are enforced here rather than left to callers:
+ *
+ *   1. Array ordering is applied by the canonicaliser. A caller that has to
+ *      pre-sort is a caller that can forget.
+ *   2. An array with no declared rule throws. Preserving unknown order silently
+ *      is how a set becomes order-dependent.
+ *   3. Unsupported values throw. `undefined`, `NaN`, `Infinity`, and functions
+ *      are not quietly turned into null or dropped.
  */
 
-export class CanonicalOrderError extends Error {
+export class CanonicalizationError extends Error {
   constructor(
-    readonly arrayName: string,
+    readonly path: string,
     message: string,
   ) {
-    super(`canonical order violation in "${arrayName}": ${message}`);
-    this.name = "CanonicalOrderError";
+    super(`canonicalisation failed at ${path}: ${message}`);
+    this.name = "CanonicalizationError";
   }
 }
 
-export type ObjectArrayName = "resolvedCells" | "observationsUsed" | "inputRefs" | "missingRanges";
+interface SetRule {
+  readonly kind: "set";
+  /** Property names that form the identity tuple, in order. Absent for string sets. */
+  readonly orderBy?: readonly string[];
+  /** Append the ref's canonical first id as the last key (inputRefs only). */
+  readonly firstId?: boolean;
+  readonly dedupe: boolean;
+}
 
-export type StringArrayName =
-  "sourceArtifactHashes" | "forecastRunIds" | "ingestionRunIds" | "cellKeys" | "observationIds";
+interface SequenceRule {
+  readonly kind: "sequence";
+}
 
 /**
- * `dedupe: false` is a decision, not an omission:
- *  - `inputRefs`: two refs of the same role for different cells are both real.
- *  - `missingRanges`: adjacent ranges are not duplicates.
+ * Keyed by **field name**, applied at any depth. Every array reachable from
+ * `FieldSnapshotPayload` or `DerivationDescriptor` must appear here; anything
+ * else throws, so adding an array to a hashed type is a deliberate act.
  */
-export const objectArrayRules: Record<
-  ObjectArrayName,
-  { readonly orderBy: readonly string[]; readonly dedupe: boolean }
-> = {
-  resolvedCells: { orderBy: ["provider", "model", "cellKey"], dedupe: true },
-  observationsUsed: { orderBy: ["observationId"], dedupe: true },
-  inputRefs: { orderBy: ["kind", "role", "purpose"], dedupe: false },
-  missingRanges: { orderBy: ["startDate", "endDate"], dedupe: false },
+export const canonicalArrayRules: Readonly<Record<string, SetRule | SequenceRule>> = {
+  // FieldSnapshotPayload
+  resolvedCells: { kind: "set", orderBy: ["provider", "model", "cellKey"], dedupe: true },
+  observationsUsed: { kind: "set", orderBy: ["observationId"], dedupe: true },
+
+  // DerivationDescriptor / DerivationProvenance
+  inputRefs: { kind: "set", orderBy: ["kind", "role", "purpose"], firstId: true, dedupe: false },
+  sourceArtifactHashes: { kind: "set", dedupe: true },
+  missingRanges: { kind: "set", orderBy: ["startDate", "endDate"], dedupe: false },
+
+  // Nested id arrays. Sorted before their parent is sorted, so `firstRefId`
+  // never reads a producer's emission order.
+  forecastRunIds: { kind: "set", dedupe: true },
+  ingestionRunIds: { kind: "set", dedupe: true },
+  cellKeys: { kind: "set", dedupe: true },
+  observationIds: { kind: "set", dedupe: true },
+
+  // Ordered, not set-like: the partition invariant makes position meaningful
+  // (segments are contiguous and chronological). Never sorted, never deduped.
+  evidenceSegments: { kind: "sequence" },
 };
 
-/**
- * `inputRefs` needs a fourth key the table cannot express as a plain property:
- * the doc orders by "(kind, role, purpose, first id)", and the first id depends
- * on which variant the ref is.
- */
-const extraIdentityKeys: Partial<
-  Record<ObjectArrayName, (item: Record<string, unknown>) => string>
-> = { inputRefs: firstRefId };
-
-export const stringArrayRules: Record<StringArrayName, { readonly dedupe: boolean }> = {
-  sourceArtifactHashes: { dedupe: true },
-  forecastRunIds: { dedupe: true },
-  ingestionRunIds: { dedupe: true },
-  cellKeys: { dedupe: true },
-  observationIds: { dedupe: true },
-};
-
-/**
- * Stable JSON for equality comparison only — not the hash preimage format.
- * Keys sorted recursively so two structurally equal values serialise the same
- * regardless of insertion order.
- */
-function stableJson(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, v]) => v !== undefined)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(",")}}`;
+function compareStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
-function compareTuples(a: readonly unknown[], b: readonly unknown[]): number {
-  for (let i = 0; i < a.length; i += 1) {
-    const left = String(a[i] ?? "");
-    const right = String(b[i] ?? "");
-    if (left < right) return -1;
-    if (left > right) return 1;
+/**
+ * ECMAScript `Number::toString` — shortest round-trip form — with `-0` folded
+ * to `0`. Non-finite values are rejected rather than serialised as `null`,
+ * which is what `JSON.stringify` would do.
+ */
+function formatNumber(value: number): string {
+  if (!Number.isFinite(value)) {
+    throw new CanonicalizationError("$", `non-finite number ${String(value)} is not serialisable`);
   }
-  return 0;
+  return Object.is(value, -0) ? "0" : String(value);
 }
 
-function identityOf(
-  arrayName: ObjectArrayName,
-  item: Record<string, unknown>,
-  orderBy: readonly string[],
-): string[] {
-  const keys = orderBy.map((key) => {
-    const value = item[key];
-    if (value === undefined || value === null) {
-      throw new CanonicalOrderError(
-        arrayName,
-        `missing identity key "${key}" — ordering cannot be total`,
-      );
-    }
-    return String(value);
-  });
-  const extra = extraIdentityKeys[arrayName];
-  if (extra) keys.push(extra(item));
-  return keys;
-}
-
-/**
- * Sort (and optionally deduplicate) a set-like array of objects.
- *
- * Ties beyond the documented key tuple are broken by the full stable JSON of
- * the entry. Without a total order, two runs could produce different orders for
- * the same content and therefore different hashes.
- */
-export function orderObjectArray<T extends Record<string, unknown>>(
-  arrayName: ObjectArrayName,
-  values: readonly T[],
-): T[] {
-  const rule = objectArrayRules[arrayName];
-  const keyed = values.map((value) => ({
-    value,
-    identity: identityOf(arrayName, value, rule.orderBy),
-    ser: stableJson(value),
-  }));
-
-  keyed.sort((a, b) => {
-    const byKey = compareTuples(a.identity, b.identity);
-    if (byKey !== 0) return byKey;
-    return a.ser < b.ser ? -1 : a.ser > b.ser ? 1 : 0;
-  });
-
-  if (!rule.dedupe) return keyed.map((entry) => entry.value);
-
-  const out: T[] = [];
-  for (const entry of keyed) {
-    const previous = out.at(-1);
-    if (previous === undefined) {
-      out.push(entry.value);
-      continue;
-    }
-    const previousIdentity = identityOf(arrayName, previous, rule.orderBy);
-    if (compareTuples(previousIdentity, entry.identity) !== 0) {
-      out.push(entry.value);
-      continue;
-    }
-    if (stableJson(previous) !== entry.ser) {
-      throw new CanonicalOrderError(
-        arrayName,
-        `duplicate identity [${entry.identity.join(", ")}] with conflicting content`,
-      );
-    }
+function emit(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (typeof value === "number") return formatNumber(value);
+  if (typeof value === "string") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(emit).join(",")}]`;
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>).map(
+      ([key, entry]) => `${JSON.stringify(key)}:${emit(entry)}`,
+    );
+    return `{${entries.join(",")}}`;
   }
-  return out;
-}
-
-/** Sort (and optionally deduplicate) a set-like array of strings. */
-export function orderStringArray(arrayName: StringArrayName, values: readonly string[]): string[] {
-  const sorted = [...values].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  if (!stringArrayRules[arrayName].dedupe) return sorted;
-  return sorted.filter((value, index) => index === 0 || value !== sorted[index - 1]);
+  throw new CanonicalizationError("$", `unsupported value of type ${typeof value}`);
 }
 
 /**
  * First identity id of a `DataInputRef`, used as the fourth sort key.
  *
- * "First" means first **after canonical ordering of the nested array**, i.e.
- * the lexicographic minimum — not `array[0]`. A ref carrying
- * `forecastRunIds: ["run-b", "run-a"]` must sort identically to one carrying
- * `["run-a", "run-b"]`, otherwise the parent order depends on the order the
- * producer happened to emit.
+ * "First" means first **after** the nested array is ordered, i.e. the
+ * lexicographic minimum. Reading element zero would make `inputRefs` order
+ * depend on the order the provider returned run ids in.
  */
-export function firstRefId(ref: Record<string, unknown>): string {
+function firstRefId(ref: Record<string, unknown>): string {
   for (const key of ["forecastRunIds", "observationIds", "cellKeys"] as const) {
     const value = ref[key];
     if (!Array.isArray(value)) continue;
@@ -187,5 +123,149 @@ export function firstRefId(ref: Record<string, unknown>): string {
     const value = ref[key];
     if (typeof value === "string") return value;
   }
-  throw new CanonicalOrderError("inputRefs", "ref carries no identity id");
+  throw new CanonicalizationError("$.inputRefs", "ref carries no identity id");
+}
+
+function identityOf(item: unknown, rule: SetRule, path: string): string[] {
+  if (!rule.orderBy) {
+    if (typeof item !== "string") {
+      throw new CanonicalizationError(path, "a string set holds non-string entries");
+    }
+    return [item];
+  }
+  if (item === null || typeof item !== "object" || Array.isArray(item)) {
+    throw new CanonicalizationError(path, "an object set holds a non-object entry");
+  }
+  const record = item as Record<string, unknown>;
+  const identity = rule.orderBy.map((key) => {
+    const value = record[key];
+    if (value === undefined || value === null) {
+      throw new CanonicalizationError(path, `entry has no identity key "${key}"`);
+    }
+    return String(value);
+  });
+  if (rule.firstId) identity.push(firstRefId(record));
+  return identity;
+}
+
+function canonicalizeArray(
+  values: readonly unknown[],
+  path: string,
+  fieldName: string,
+  stack: Set<object>,
+): unknown[] {
+  const rule = canonicalArrayRules[fieldName];
+  if (!rule) {
+    throw new CanonicalizationError(
+      path,
+      `array "${fieldName}" has no canonicalisation rule — declare whether it is a set or a sequence`,
+    );
+  }
+
+  const items = values.map((value, index) =>
+    canonicalizeValue(value, `${path}[${index}]`, undefined, stack),
+  );
+  if (rule.kind === "sequence") return items;
+
+  const scored = items.map((item) => ({
+    item,
+    serialized: emit(item),
+    identity: identityOf(item, rule, path),
+  }));
+
+  scored.sort((left, right) => {
+    const byIdentity = compareIdentities(left.identity, right.identity);
+    if (byIdentity !== 0) return byIdentity;
+    // Final deterministic tie-breaker: the stable canonical representation.
+    return compareStrings(left.serialized, right.serialized);
+  });
+
+  if (!rule.dedupe) return scored.map((entry) => entry.item);
+
+  const out: unknown[] = [];
+  let previous: (typeof scored)[number] | undefined;
+  for (const entry of scored) {
+    if (previous && compareIdentities(previous.identity, entry.identity) === 0) {
+      if (previous.serialized !== entry.serialized) {
+        throw new CanonicalizationError(
+          path,
+          `duplicate identity [${entry.identity.join(", ")}] with conflicting content`,
+        );
+      }
+      continue;
+    }
+    out.push(entry.item);
+    previous = entry;
+  }
+  return out;
+}
+
+function compareIdentities(left: readonly string[], right: readonly string[]): number {
+  for (let index = 0; index < left.length; index += 1) {
+    const compared = compareStrings(left[index] ?? "", right[index] ?? "");
+    if (compared !== 0) return compared;
+  }
+  return 0;
+}
+
+function canonicalizeValue(
+  value: unknown,
+  path: string,
+  fieldName: string | undefined,
+  stack: Set<object>,
+): unknown {
+  if (value === null) return null;
+  const type = typeof value;
+  if (type === "boolean" || type === "string") return value;
+  if (type === "number") {
+    if (!Number.isFinite(value)) {
+      throw new CanonicalizationError(path, `non-finite number ${String(value)}`);
+    }
+    return Object.is(value, -0) ? 0 : value;
+  }
+  if (type === "undefined") {
+    throw new CanonicalizationError(path, "undefined is not serialisable — omit the key instead");
+  }
+  if (type !== "object") {
+    throw new CanonicalizationError(path, `unsupported value of type ${type}`);
+  }
+
+  const object = value as object;
+  if (stack.has(object)) throw new CanonicalizationError(path, "circular reference");
+  stack.add(object);
+  try {
+    if (Array.isArray(value)) {
+      if (fieldName === undefined) {
+        throw new CanonicalizationError(
+          path,
+          "array found without a field name to look up its rule",
+        );
+      }
+      return canonicalizeArray(value, path, fieldName, stack);
+    }
+    const entries = Object.keys(value as Record<string, unknown>).sort(compareStrings);
+    const out: Record<string, unknown> = {};
+    for (const key of entries) {
+      out[key] = canonicalizeValue(
+        (value as Record<string, unknown>)[key],
+        `${path}.${key}`,
+        key,
+        stack,
+      );
+    }
+    return out;
+  } finally {
+    stack.delete(object);
+  }
+}
+
+/**
+ * Canonical JSON: sorted object keys (UTF-16 code-unit order, not locale),
+ * documented array ordering, compact output, no trailing whitespace.
+ *
+ * Strings retain their exact representation — no timestamps are normalised, so
+ * `…T00:00:00Z` and `…T00:00:00.000Z` hash differently by design.
+ */
+export function canonicalJson(value: unknown): string {
+  return emit(canonicalizeValue(value, "$", undefined, new Set<object>()));
 }

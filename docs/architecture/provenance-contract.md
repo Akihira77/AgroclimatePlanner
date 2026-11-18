@@ -351,7 +351,62 @@ Each `inputRefs` entry contributes only its identity fields — `kind`, `role`, 
 
 `fieldSnapshotHash` appears **instead of** the snapshot body. Including the full object would be equivalent only if canonicalisation were applied recursively and identically; hashing the snapshot once, under one documented rule, is the version that can actually be tested. Because `fieldSnapshotHash` covers every field of `FieldSnapshot` — including `extractionPolicy` and `resolvedCells` — repeating those two outside the hash was redundant and has been removed: it created a second place for them to drift from the snapshot they were supposed to describe.
 
-Canonical form: sorted keys, fixed number formatting (no `-0`, no re-printed floats), UTF-8, no whitespace, and **no timestamps of the computation itself** — `computedAt` is deliberately outside the descriptor, otherwise no two computations could ever match.
+### Canonical JSON
+
+`canonicalJson(value)` in `packages/contracts/src/canonical.ts` is the **only** serialiser in the system. `hashFieldSnapshot` and `hashDerivationDescriptor` are thin wrappers over `sha256Hex(canonicalJson(...))`; there is no second implementation per artifact type.
+
+| Aspect | Rule | Implemented |
+|---|---|---|
+| Object keys | sorted by UTF-16 code unit (not locale collation), recursively | yes |
+| Arrays | ordered by the table below, recursively; an array with no declared rule **throws** | yes |
+| Numbers | ECMAScript `Number::toString` — shortest round-trip; `-0` → `0` | yes |
+| `NaN`, `±Infinity` | rejected, never serialised as `null` | yes |
+| Strings | verbatim UTF-8, JSON-escaped, no ASCII folding, no Unicode normalisation | yes |
+| `null` | preserved | yes |
+| `undefined` | rejected — omit the key instead | yes |
+| Booleans | `true` / `false` | yes |
+| Whitespace | none | yes |
+| Circular references | rejected | yes |
+| Computation timestamps | never inside a preimage — `computedAt` is outside the descriptor | yes |
+
+Two consequences worth stating, because both were previously left implicit:
+
+- **Numbers are not reformatted.** `0.1` serialises as `0.1`, `1e21` as `1e+21`. Nothing rounds, truncates, or pads. A `-0` means the same input as `0`, so both serialise as `0`.
+- **Unknown arrays fail.** An array whose field name is not in the rule table throws rather than preserving its order. Preserving an unclassified order is how a set silently becomes order-dependent, and it would only surface as a hash mismatch months later.
+
+### Timestamp representation is preserved
+
+Time strings are serialised exactly as validated. The UTC-only schema (`z.iso.datetime()`, `Z` required, offsets rejected) means there is one zone, but not one spelling: `2026-11-18T00:00:00Z` and `2026-11-18T00:00:00.000Z` are the same instant and **different preimages**. Both are valid, both hash, and their hashes differ by design.
+
+This is the deliberate choice over normalising to a canonical precision. Normalisation would rewrite a value the provider published, and the provenance record exists precisely to say what we were given. If a caller wants two spellings to be one input, the normalisation belongs at the ingest boundary where the value is still attributable — not inside the hash.
+
+### Hashing
+
+| Property | Value |
+|---|---|
+| Algorithm | SHA-256 |
+| Input | UTF-8 bytes of the canonical JSON string |
+| Output | lowercase hexadecimal, 64 characters |
+| Implementation | Node `node:crypto`, no third-party dependency |
+| `fieldSnapshotHash` | `SHA256(canonicalJson(FieldSnapshotPayload))` — the payload excludes the hash |
+| `inputSnapshotHash` | `SHA256(canonicalJson(DerivationDescriptor))` — exactly one of the four variants |
+
+`hashFieldSnapshot` rejects a payload that carries `fieldSnapshotHash`. The type already excludes it; the runtime guard exists because a structural type cannot stop an untyped caller from passing the persisted row.
+
+### Golden vectors are required, and are executable
+
+`packages/contracts/src/hash.golden.test.ts` holds the vectors. The rules that must stay covered:
+
+1. **Object key permutation** — the same properties inserted in any order produce identical bytes.
+2. **Array permutation** — `resolvedCells`, `observationsUsed`, `inputRefs` in any order produce identical bytes.
+3. **Nested array permutation** — `forecastRunIds`, `ingestionRunIds`, `cellKeys`, `observationIds`, each tested independently.
+4. **Combined permutation** — every nested array shuffled at once, plus shuffled `inputRefs`.
+5. **Meaningful change** — geometry, area, elevation, soil type, soil pH, drainage, irrigation flag and source, extraction policy, field snapshot hash, profile version, engine version, derivation version, source artifact hashes, forecast run ids, dataset version, baseline version, `promptVersion`, `modelId`, and the `artifact` discriminator itself.
+6. **Deduplication** — identical duplicates collapse where permitted; conflicting duplicates throw; `dedupe: no` arrays retain everything.
+7. **Timestamp representation** — the two spellings of one instant stay distinct.
+8. **Known-answer** — at least one digest taken from an independent implementation (coreutils `sha256sum` / the NIST vector), never computed by the code under test.
+
+A vector that is not in this list is not proof; it is a comment.
 
 ### Array ordering is part of canonicalisation
 
@@ -370,6 +425,8 @@ Sorted object keys do **not** normalise array order. Two payloads with identical
 | `missingRanges` | `(startDate, endDate)` | no — adjacent ranges are not duplicates |
 
 The nested `DataInputRef` arrays were the gap in the first version of this table: they are sets of ids that are hashed as part of the descriptor, so leaving their order to the producer made the parent `inputRefs` order — and therefore `inputSnapshotHash` — depend on response order.
+
+Arrays are canonicalised **depth-first**: an element's nested arrays are ordered before that element is compared, so the parent's sort key is computed from canonical values rather than from whatever the producer emitted.
 
 #### `first id` is computed after the nested arrays are canonicalised
 
