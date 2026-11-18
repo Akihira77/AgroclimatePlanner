@@ -23,8 +23,43 @@ export const LEGACY_PROBE_NAMES = [
   "privilege_probe_function",
 ];
 
-/** Tenant-owned tables introduced in 2.2.3, in the order they are created. */
-export const TENANT_TABLES = ["users", "farms", "fields"];
+/**
+ * Tenant-owned tables (matrix rows 1-7, 20-22). `users` is identity rather than
+ * tenant, but it carries the same FORCE policy shape and is checked with them;
+ * its runtime grant is `none`, which `EXPECTED` states separately.
+ */
+export const TENANT_TABLES = [
+  "users",
+  "farms",
+  "fields",
+  "field_outlook_cells",
+  "field_observations",
+  "plantings",
+  "harvests",
+  "suitability_runs",
+  "planting_windows",
+  "ai_briefings",
+];
+
+/** Global content, no tenant dimension (matrix rows 8-13): read-only to app_api. */
+export const REFERENCE_TABLES = [
+  "crops",
+  "cultivars",
+  "crop_profile_versions",
+  "growth_stages",
+  "constraints",
+  "source_refs",
+];
+
+/** The weather plane (matrix rows 14-19): no RLS, app_system writes. */
+export const GLOBAL_TABLES = [
+  "outlook_cells",
+  "forecast_runs",
+  "ingestion_runs",
+  "weather_records",
+  "monthly_outlooks",
+  "climatology_normals",
+];
 
 /** Identifiers here are generated, never user input — but assert before quoting. */
 const SAFE_IDENTIFIER = /^[a-z][a-z0-9_]{0,50}$/;
@@ -489,15 +524,37 @@ export async function runPrivilegeVerification({
         !own.some((policy) => policy.roles === "{public}"),
         JSON.stringify(own.map((policy) => policy.roles)),
       );
+      // FORCE denies the owner too, so a missing owner policy locks fixture
+      // inserts and data migrations out of their own table.
+      check(
+        `${table} has a migration_owner policy`,
+        own.some((policy) => policy.roles === "{migration_owner}" && policy.cmd === "ALL"),
+        JSON.stringify(own.map((policy) => `${policy.policyname}:${policy.roles}`)),
+      );
     }
 
     // Effective privileges, per table per operation, from PostgreSQL's own
-    // answer rather than from the migration text.
-    const EXPECTED = {
-      users: { app_api: [], app_system: [] },
-      farms: { app_api: ["SELECT", "INSERT", "UPDATE", "DELETE"], app_system: [] },
-      fields: { app_api: ["SELECT", "INSERT", "UPDATE", "DELETE"], app_system: [] },
-    };
+    // answer rather than from the migration text. Built from the ownership
+    // classes so the matrix cannot drift from the table list.
+    const RW = ["SELECT", "INSERT", "UPDATE", "DELETE"];
+    const R = ["SELECT"];
+    const NONE = [];
+
+    const EXPECTED = Object.fromEntries([
+      // Row 1: identity. No grant at all — the login lookup is OPEN-01.
+      ["users", { app_api: NONE, app_system: NONE }],
+      ...TENANT_TABLES.filter((table) => table !== "users").map((table) => [
+        table,
+        { app_api: RW, app_system: NONE },
+      ]),
+      ...REFERENCE_TABLES.map((table) => [table, { app_api: R, app_system: NONE }]),
+      // Row 14: app_api reads and holds the column-level INSERT checked below.
+      ["outlook_cells", { app_api: R, app_system: RW }],
+      ...GLOBAL_TABLES.filter((table) => table !== "outlook_cells").map((table) => [
+        table,
+        { app_api: R, app_system: RW },
+      ]),
+    ]);
 
     for (const [table, expectations] of Object.entries(EXPECTED)) {
       for (const [role, allowed] of Object.entries(expectations)) {
@@ -531,6 +588,130 @@ export async function runPrivilegeVerification({
       );
       check(`app_system has no SELECT on ${table}.${column}`, rows[0].granted === false);
     }
+
+    // Matrix rule 2: app_system holds nothing on a tenant-owned table, column
+    // privileges included. A table-level grant makes has_column_privilege true
+    // for every column, so this catches both shapes.
+    for (const table of TENANT_TABLES) {
+      const { rows } = await owner.query(
+        `select (select array_agg(p.priv)
+                   from (values ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')) as p(priv)
+                  where has_table_privilege('app_system', c.oid, p.priv)) as table_privs,
+                -- PostgreSQL has no column-level DELETE: only the other three
+                -- verbs can be granted per column.
+                (select array_agg(p.priv || ':' || a.attname order by p.priv, a.attname)
+                   from pg_attribute a
+                   cross join (values ('SELECT'), ('INSERT'), ('UPDATE')) as p(priv)
+                  where a.attrelid = c.oid
+                    and a.attnum > 0
+                    and not a.attisdropped
+                    and has_column_privilege('app_system', c.oid, a.attnum, p.priv)) as column_privs
+           from pg_class c
+           join pg_namespace n on n.oid = c.relnamespace
+          where n.nspname = 'app' and c.relname = $1`,
+        [table],
+      );
+      const row = rows[0];
+      const held = [...(row?.table_privs ?? []), ...(row?.column_privs ?? [])];
+      check(
+        `app_system holds no privilege of any kind on ${table}`,
+        rows.length === 1 && held.length === 0,
+        rows.length === 0 ? "relation not found" : JSON.stringify(held),
+      );
+    }
+
+    // app_api's only write into the weather plane: the identity triple, because
+    // field creation resolves a cell before any ingest exists (D14).
+    for (const column of ["provider", "model", "cell_key"]) {
+      const { rows } = await owner.query(
+        "select has_column_privilege($1, $2, $3, 'INSERT') as granted",
+        ["app_api", "app.outlook_cells", column],
+      );
+      check(
+        `app_api holds INSERT on outlook_cells.${column}`,
+        rows[0].granted === true,
+        `expected true, got ${rows[0].granted}`,
+      );
+    }
+    // The served coordinate is a provider fact only app_system observes. A
+    // table-level INSERT would defeat the column grant silently — every one of
+    // these columns is asserted, not just the first.
+    for (const column of ["served_lat", "served_lon", "elevation_m", "spatial_resolution_km"]) {
+      const { rows } = await owner.query(
+        "select has_column_privilege($1, $2, $3, 'INSERT') as granted",
+        ["app_api", "app.outlook_cells", column],
+      );
+      check(
+        `app_api lacks INSERT on outlook_cells.${column}`,
+        rows[0].granted === false,
+        `expected false, got ${rows[0].granted}`,
+      );
+    }
+    await denied(
+      api,
+      "app_api cannot write a served coordinate on outlook_cells",
+      `insert into app.outlook_cells (provider, model, cell_key, served_lat)
+       values ('bmkg', 'privilege_probe', 'probe', 1)`,
+    );
+
+    // RLS on a table with no owner column would only lock migration_owner out of
+    // its own seed or ingest, so `none` in the matrix is load-bearing.
+    for (const table of [...REFERENCE_TABLES, ...GLOBAL_TABLES]) {
+      const { rows } = await owner.query(
+        `select c.relrowsecurity as rls
+           from pg_class c join pg_namespace n on n.oid = c.relnamespace
+          where n.nspname = 'app' and c.relname = $1`,
+        [table],
+      );
+      check(
+        `${table} has no row level security`,
+        rows.length === 1 && rows[0].rls === false,
+        rows.length === 0 ? "relation not found" : `relrowsecurity = ${rows[0].rls}`,
+      );
+    }
+
+    // Phase 3 decisions rather than privileges: the status vocabulary is
+    // undecided (OPEN-09/D26), so a default or a partial index on a status
+    // literal would encode a value nobody approved.
+    const { rows: plantingsStatus } = await owner.query(
+      `select column_default
+         from information_schema.columns
+        where table_schema = 'app' and table_name = 'plantings' and column_name = 'status'`,
+    );
+    check(
+      "plantings.status has no column default",
+      plantingsStatus.length === 1 && plantingsStatus[0].column_default === null,
+      plantingsStatus.length === 0
+        ? "column not found"
+        : `default ${plantingsStatus[0].column_default}`,
+    );
+
+    const { rows: plantingsActive } = await owner.query(
+      "select indexname from pg_indexes where schemaname = 'app' and indexname = 'plantings_active_idx'",
+    );
+    check(
+      "no plantings_active_idx exists",
+      plantingsActive.length === 0,
+      JSON.stringify(plantingsActive),
+    );
+
+    // Without NULLS NOT DISTINCT every re-ingest of a deterministic product
+    // appends a duplicate set: PostgreSQL treats NULL as distinct by default,
+    // so ensemble_member = NULL rows never collide.
+    const { rows: liveKey } = await owner.query(
+      `select i.indnullsnotdistinct as nulls_not_distinct
+         from pg_index i
+         join pg_class c on c.oid = i.indexrelid
+         join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'app' and c.relname = 'weather_records_live_key'`,
+    );
+    check(
+      "weather_records_live_key treats NULLS as NOT DISTINCT",
+      liveKey.length === 1 && liveKey[0].nulls_not_distinct === true,
+      liveKey.length === 0
+        ? "index not found"
+        : `indnullsnotdistinct = ${liveKey[0].nulls_not_distinct}`,
+    );
 
     // Composite ownership foreign key: (farm_id, user_id) -> farms(id, user_id).
     // Without it a tenant could attach its field to another tenant's farm.

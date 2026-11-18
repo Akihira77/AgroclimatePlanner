@@ -93,9 +93,641 @@ model Field {
   // Ownership travels with the reference: (farm_id, user_id) -> farms(id, user_id).
   farm Farm @relation(fields: [farmId, userId], references: [id, userId])
 
+  outlookCells    FieldOutlookCell[]
+  observations    FieldObservation[]
+  plantings       Planting[]
+  suitabilityRuns SuitabilityRun[]
+  plantingWindows PlantingWindow[]
+  aiBriefings     AiBriefing[]
+
   @@unique([id, userId], map: "fields_id_user_id_key")
   @@index([userId], map: "fields_user_id_idx")
   @@index([farmId], map: "fields_farm_id_idx")
   @@schema("app")
   @@map("fields")
+}
+
+// Phase 3 — the nineteen remaining domain tables. The SQL in
+// prisma/migrations/20261118030000_domain_tables is authoritative: this file is
+// kept in sync by hand.
+//
+// Two things are out of Prisma's reach and live in SQL only:
+//
+// 1. CHECK constraints. Every named CHECK in the migration stays a database
+//    rule: the database enforces them and Prisma does not, so a client-side
+//    validation gap is caught at INSERT/UPDATE, never here. Enum-like text
+//    columns are deliberately `String` for the same reason — a Prisma enum
+//    would claim a vocabulary the database enforces only through a CHECK.
+// 2. Partial and NULLS NOT DISTINCT indexes. Prisma has no syntax for either;
+//    each model names the index it cannot express in a trailing comment.
+//
+// FKs are transcribed with ON DELETE NO ACTION semantics (the SQL default):
+// tenant rows are soft-deleted or retained as history, never cascaded.
+//
+// No `@updatedAt` on any model below. `updated_at` is a plain column with a
+// `now()` default in both the SQL and here; no trigger maintains it (OPEN-19),
+// and `@updatedAt` would make the client write a value the migration never
+// promised.
+
+// Reference catalog — six global tables, no tenant dimension.
+// docs/data-model/tables-catalog.md §1-6 is the normative column list.
+
+model Crop {
+  id        String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  // Permanent: it appears in URLs, so renaming a crop breaks every inbound link.
+  slug      String
+  nameId    String   @map("name_id")
+  nameEn    String   @map("name_en")
+  // OPEN-10: no CHECK until the vocabulary settles; a list invented here would
+  // be a normative enum.
+  category  String
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  cultivars       Cultivar[]
+  plantingWindows PlantingWindow[]
+
+  @@unique([slug], map: "crops_slug_key")
+  @@schema("app")
+  @@map("crops")
+}
+
+model Cultivar {
+  id                     String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  cropId                 String   @map("crop_id") @db.Uuid
+  name                   String
+  durationDaysMin        Int      @map("duration_days_min")
+  durationDaysTypical    Int      @map("duration_days_typical")
+  durationDaysMax        Int      @map("duration_days_max")
+  cycleStart             String   @map("cycle_start")
+  // NULL for direct-sown varieties: not 0, which would claim a nursery stage
+  // that lasts no time.
+  nurseryDays            Int?     @map("nursery_days")
+  // OPEN-06: real property, unsettled representation, unconstrained.
+  photoperiodSensitivity String?  @map("photoperiod_sensitivity")
+  altitudeMinM           Int?     @map("altitude_min_m")
+  altitudeMaxM           Int?     @map("altitude_max_m")
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  crop            Crop                 @relation(fields: [cropId], references: [id])
+  profileVersions CropProfileVersion[]
+  plantings       Planting[]
+  plantingWindows PlantingWindow[]
+
+  @@unique([cropId, name], map: "cultivars_crop_name_key")
+  @@index([cropId], map: "cultivars_crop_idx")
+  @@schema("app")
+  @@map("cultivars")
+}
+
+model CropProfileVersion {
+  id           String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  cultivarId   String    @map("cultivar_id") @db.Uuid
+  ruleVersion  String    @map("rule_version")
+  status       String    @default("draft")
+  // Set exactly once, when status becomes published.
+  publishedAt  DateTime? @map("published_at") @db.Timestamptz(6)
+  // Supersession points backward; a correction produces a new row.
+  supersedesId String?   @map("supersedes_id") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  cultivar     Cultivar  @relation(fields: [cultivarId], references: [id])
+  supersedes   CropProfileVersion?  @relation("CropProfileVersionSupersedes", fields: [supersedesId], references: [id])
+  supersededBy CropProfileVersion[] @relation("CropProfileVersionSupersedes")
+  growthStages GrowthStage[]
+  constraints  Constraint[]
+  sourceRefs   SourceRef[]
+  suitabilityRuns SuitabilityRun[]
+  plantingWindows PlantingWindow[]
+
+  @@unique([cultivarId, ruleVersion], map: "crop_profile_versions_cultivar_rule_key")
+  @@index([cultivarId, createdAt(sort: Desc)], map: "crop_profile_versions_cultivar_idx")
+  // crop_profile_versions_one_published_key (UNIQUE, partial on status =
+  // 'published') has no Prisma equivalent; created in SQL only.
+  @@schema("app")
+  @@map("crop_profile_versions")
+}
+
+model GrowthStage {
+  id                 String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  profileVersionId   String   @map("profile_version_id") @db.Uuid
+  // Vocabulary is per profile, not global: no CHECK, no enum.
+  name               String
+  // Inclusive day offsets from the cycle start.
+  startDayOffset     Int      @map("start_day_offset")
+  endDayOffset       Int      @map("end_day_offset")
+  isCritical         Boolean  @default(false) @map("is_critical")
+  // OPEN-08: no type decided; unconstrained and unread until then.
+  requirementProfile String?  @map("requirement_profile")
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  profileVersion CropProfileVersion @relation(fields: [profileVersionId], references: [id])
+  constraints    Constraint[]
+
+  @@unique([profileVersionId, name], map: "growth_stages_profile_name_key")
+  @@index([profileVersionId, startDayOffset], map: "growth_stages_profile_idx")
+  // growth_stages_one_critical_key (UNIQUE, partial on is_critical) has no
+  // Prisma equivalent; created in SQL only.
+  @@schema("app")
+  @@map("growth_stages")
+}
+
+model Constraint {
+  id               String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  profileVersionId String   @map("profile_version_id") @db.Uuid
+  dimension        String
+  comparator       String
+  // Three typed columns instead of one `value` (D6): a range is not a number
+  // and a count is not a quantity.
+  thresholdLower   Decimal? @map("threshold_lower") @db.Decimal(10, 2)
+  thresholdUpper   Decimal? @map("threshold_upper") @db.Decimal(10, 2)
+  thresholdCount   Int?     @map("threshold_count")
+  unit             String?
+  // NULL = the rule applies to the whole cycle.
+  growthStageId    String?  @map("growth_stage_id") @db.Uuid
+  grade            String
+  severity         String
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  profileVersion CropProfileVersion @relation(fields: [profileVersionId], references: [id])
+  growthStage    GrowthStage?       @relation(fields: [growthStageId], references: [id])
+
+  @@index([profileVersionId, dimension], map: "constraints_profile_idx")
+  @@schema("app")
+  @@map("constraints")
+}
+
+model SourceRef {
+  id               String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  profileVersionId String   @map("profile_version_id") @db.Uuid
+  title            String
+  // NULL when the source is institutional (FAO, IRRI, BPS).
+  authors          String?
+  publicationYear  Int      @map("publication_year")
+  publisher        String
+  url              String
+  accessedAt       DateTime @map("accessed_at") @db.Date
+  grade            String
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  profileVersion CropProfileVersion @relation(fields: [profileVersionId], references: [id])
+
+  @@index([profileVersionId], map: "source_refs_profile_idx")
+  @@schema("app")
+  @@map("source_refs")
+}
+
+// Weather and climate data plane — six global tables, no tenant dimension.
+// A forecast for a grid cell is the same forecast for every tenant.
+
+model OutlookCell {
+  id                   String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  provider             String
+  // Provider's own model name, no local aliasing (ecmwf_ifs025, …).
+  model                String
+  // text, not an integer tuple: the rounding rule is per model and still OPEN.
+  cellKey              String    @map("cell_key")
+  // The last value observed for this cell, not the authoritative per-record
+  // coordinate: weather_records carries requested/served per value.
+  servedLat            Float?    @map("served_lat")
+  servedLon            Float?    @map("served_lon")
+  elevationM           Float?    @map("elevation_m")
+  spatialResolutionKm  Float?    @map("spatial_resolution_km")
+  createdAt            DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  servedUpdatedAt      DateTime? @map("served_updated_at") @db.Timestamptz(6)
+
+  monthlyOutlooks   MonthlyOutlook[]
+  climatologyNormals ClimatologyNormal[]
+  fieldOutlookCells FieldOutlookCell[]
+  weatherRecords    WeatherRecord[]
+
+  @@unique([provider, model, cellKey], map: "outlook_cells_grid_key")
+  @@schema("app")
+  @@map("outlook_cells")
+}
+
+model ForecastRun {
+  id            String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  provider      String
+  model         String
+  // Outside the natural key: no integrated provider changes it mid-run.
+  modelVersion  String?   @map("model_version")
+  product       String
+  initializedAt DateTime  @map("initialized_at") @db.Timestamptz(6)
+  horizonEnd    DateTime  @map("horizon_end") @db.Timestamptz(6)
+  receivedAt    DateTime  @map("received_at") @db.Timestamptz(6)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  ingestionRuns  IngestionRun[]
+  weatherRecords WeatherRecord[]
+
+  @@unique([provider, model, product, initializedAt], map: "forecast_runs_natural_key")
+  @@index([provider, model, initializedAt(sort: Desc)], map: "forecast_runs_recent_idx")
+  @@schema("app")
+  @@map("forecast_runs")
+}
+
+model IngestionRun {
+  id                  String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  forecastRunId       String    @map("forecast_run_id") @db.Uuid
+  adapterVersion      String    @map("adapter_version")
+  normalizerVersion   String    @map("normalizer_version")
+  targetSelectorHash  String    @map("target_selector_hash")
+  // sha256(adapter_version, normalizer_version, target_selector_hash).
+  ingestionVersion    String    @map("ingestion_version")
+  status              String    @default("queued")
+  attempt             Int       @default(1)
+  startedAt           DateTime  @default(now()) @map("started_at") @db.Timestamptz(6)
+  finishedAt          DateTime? @map("finished_at") @db.Timestamptz(6)
+  recordCount         Int       @default(0) @map("record_count")
+  coveragePercent     Float     @default(0) @map("coverage_percent")
+  // {code, message, payloadRef?}; shape-checked only.
+  error               Json?
+  rawPayloadRef       String?   @map("raw_payload_ref")
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  forecastRun    ForecastRun     @relation(fields: [forecastRunId], references: [id])
+  weatherRecords WeatherRecord[]
+
+  // A retry must not mint a row; the unique key deliberately excludes `attempt`.
+  @@unique([forecastRunId, ingestionVersion], map: "ingestion_runs_identity_key")
+  @@index([forecastRunId, startedAt(sort: Desc)], map: "ingestion_runs_run_idx")
+  // ingestion_runs_running_idx (partial on status IN ('queued', 'running')) has
+  // no Prisma equivalent; created in SQL only.
+  @@schema("app")
+  @@map("ingestion_runs")
+}
+
+model WeatherRecord {
+  id                         String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  forecastRunId              String    @map("forecast_run_id") @db.Uuid
+  ingestionRunId             String    @map("ingestion_run_id") @db.Uuid
+  outlookCellId              String    @map("outlook_cell_id") @db.Uuid
+  // Denormalised so the uniqueness key and the record are self-describing.
+  cellKey                    String    @map("cell_key")
+  provider                   String
+  model                      String
+  dataClass                  String    @map("data_class")
+  variable                   String
+  // NULL only when the provider published a null for this instant; never
+  // interpolated, filled forward, or defaulted to 0.
+  value                      Float?
+  unit                       String
+  // The instant the value describes, not when we fetched it.
+  validAt                    DateTime  @map("valid_at") @db.Timestamptz(6)
+  // Copied from the run for range scans; immutable upstream.
+  initializedAt              DateTime  @map("initialized_at") @db.Timestamptz(6)
+  ingestedAt                 DateTime  @default(now()) @map("ingested_at") @db.Timestamptz(6)
+  requestedLat               Float     @map("requested_lat")
+  requestedLon               Float     @map("requested_lon")
+  servedLat                  Float?    @map("served_lat")
+  servedLon                  Float?    @map("served_lon")
+  // Must be shown: a served point is not a cell centre.
+  servedValueIsInterpolated  Boolean   @map("served_value_is_interpolated")
+  spatialResolutionKm        Float?    @map("spatial_resolution_km")
+  // OPEN-14: hourly | three_hourly | daily | monthly, unsettled, no CHECK.
+  temporalResolution         String?   @map("temporal_resolution")
+  ensembleMember             Int?      @map("ensemble_member")
+  ensembleSize               Int?      @map("ensemble_size")
+  // v1 never corrects; true would be an unimplemented claim (D3).
+  biasCorrected              Boolean   @default(false) @map("bias_corrected")
+  // OPEN-14: instant | daily_sum | daily_mean | monthly_sum | monthly_mean.
+  aggregationLevel           String?   @map("aggregation_level")
+  sourceUrl                  String?   @map("source_url")
+  attribution                String?
+  normalizerVersion          String    @map("normalizer_version")
+  supersedesId               String?   @map("supersedes_id") @db.Uuid
+  supersededById             String?   @map("superseded_by_id") @db.Uuid
+  // NULL = live. Only these two markers are ever mutated on this table.
+  supersededAt               DateTime? @map("superseded_at") @db.Timestamptz(6)
+  createdAt                  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  forecastRun    ForecastRun    @relation(fields: [forecastRunId], references: [id])
+  ingestionRun   IngestionRun   @relation(fields: [ingestionRunId], references: [id])
+  outlookCell    OutlookCell    @relation(fields: [outlookCellId], references: [id])
+  supersedes     WeatherRecord? @relation("WeatherRecordSupersedes", fields: [supersedesId], references: [id])
+  supersedingRecords WeatherRecord[] @relation("WeatherRecordSupersedes")
+  supersededBy   WeatherRecord? @relation("WeatherRecordSupersededBy", fields: [supersededById], references: [id])
+  supersededRecords WeatherRecord[] @relation("WeatherRecordSupersededBy")
+
+  @@index([ingestionRunId], map: "weather_records_ingestion_idx")
+  // weather_records_live_key (UNIQUE, NULLS NOT DISTINCT, partial on
+  // superseded_at IS NULL), weather_records_series_idx (partial on
+  // superseded_at IS NULL) and weather_records_run_idx (partial on
+  // superseded_at IS NULL) have no Prisma equivalent; created in SQL only.
+  @@schema("app")
+  @@map("weather_records")
+}
+
+model MonthlyOutlook {
+  id                        String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  outlookCellId             String   @map("outlook_cell_id") @db.Uuid
+  variable                  String
+  // First day of the month, Asia/Jakarta calendar.
+  month                     DateTime @db.Date
+  // All nine WeatherDataClass values are legal here, including climatology.
+  dataClass                 String?  @map("data_class")
+  evaluationBasis           String   @map("evaluation_basis")
+  // NULL when nothing may be claimed; the state CHECKs live in SQL.
+  valueMm                   Float?   @map("value_mm")
+  // MissingReason: describes the forecast axis only.
+  missingReason             String?  @map("missing_reason")
+  anomalyKind               String?  @map("anomaly_kind")
+  anomalyMm                 Float?   @map("anomaly_mm")
+  anomalyPercent            Float?   @map("anomaly_percent")
+  baselineVersion           String?  @map("baseline_version")
+  // Disclosed offset, only for a baseline_difference (ADR-001 D3).
+  modelClimateOffsetMm      Float?   @map("model_climate_offset_mm")
+  dataCoveragePercent       Float?   @map("data_coverage_percent")
+  ensembleSpreadMm          Float?   @map("ensemble_spread_mm")
+  spreadUnavailableReason   String?  @map("spread_unavailable_reason")
+  derivationVersion         String   @map("derivation_version")
+  // DataInputRef[]; hashed contract document, hence JSONB.
+  inputRefs                 Json     @map("input_refs")
+  inputSnapshotHash         String   @map("input_snapshot_hash")
+  computedAt                DateTime @default(now()) @map("computed_at") @db.Timestamptz(6)
+  status                    String   @default("active")
+  supersededById            String?  @map("superseded_by_id") @db.Uuid
+  createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  outlookCell  OutlookCell      @relation(fields: [outlookCellId], references: [id])
+  supersededBy MonthlyOutlook?  @relation("MonthlyOutlookSupersedes", fields: [supersededById], references: [id])
+  supersedes   MonthlyOutlook[] @relation("MonthlyOutlookSupersedes")
+
+  @@index([outlookCellId, month], map: "monthly_outlooks_cell_month_idx")
+  // monthly_outlooks_active_key (UNIQUE, partial on status = 'active') and
+  // monthly_outlooks_superseded_idx (partial on superseded_by_id IS NOT NULL)
+  // have no Prisma equivalent; created in SQL only.
+  @@schema("app")
+  @@map("monthly_outlooks")
+}
+
+model ClimatologyNormal {
+  id              String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  // Free text embedding dataset and period by convention; not validated against
+  // baseline_dataset/period_* on purpose.
+  baselineVersion String   @map("baseline_version")
+  baselineDataset String   @map("baseline_dataset")
+  periodFrom      DateTime @map("period_from") @db.Date
+  periodTo        DateTime @map("period_to") @db.Date
+  outlookCellId   String   @map("outlook_cell_id") @db.Uuid
+  month           DateTime @db.Date
+  valueMm         Float    @map("value_mm")
+  // NULL when the builder did not record how many years contributed.
+  sampleYears     Int?     @map("sample_years")
+  computedAt      DateTime @default(now()) @map("computed_at") @db.Timestamptz(6)
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  outlookCell OutlookCell @relation(fields: [outlookCellId], references: [id])
+
+  // Two normals for one month leave an anomaly with no answer.
+  @@unique([baselineVersion, outlookCellId, month], map: "climatology_normals_key")
+  @@index([outlookCellId, month], map: "climatology_normals_cell_idx")
+  @@schema("app")
+  @@map("climatology_normals")
+}
+
+// Field operations — four tenant tables: resolution, observation, planting,
+// harvest.
+
+model FieldOutlookCell {
+  id                String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId            String    @map("user_id") @db.Uuid
+  fieldId           String    @map("field_id") @db.Uuid
+  outlookCellId     String    @map("outlook_cell_id") @db.Uuid
+  // Denormalised from the cell so live-uniqueness is an index on this table.
+  provider          String
+  model             String
+  extractionPolicy  String    @map("extraction_policy")
+  distanceKm        Float     @map("distance_km")
+  // NULL when either elevation is unknown; unknown is not zero.
+  elevationDeltaM   Float?    @map("elevation_delta_m")
+  // This row's creation instant; the column list names it resolved_at, and a
+  // second created_at holding the same value would be a second answer.
+  resolvedAt        DateTime  @default(now()) @map("resolved_at") @db.Timestamptz(6)
+  supersededAt      DateTime? @map("superseded_at") @db.Timestamptz(6)
+
+  field       Field       @relation(fields: [fieldId, userId], references: [id, userId])
+  outlookCell OutlookCell @relation(fields: [outlookCellId], references: [id])
+
+  @@index([outlookCellId], map: "field_outlook_cells_cell_idx")
+  @@index([fieldId], map: "field_outlook_cells_field_idx")
+  // field_outlook_cells_live_key (UNIQUE, partial on superseded_at IS NULL) has
+  // no Prisma equivalent; created in SQL only. No (id, user_id) unique key
+  // either: nothing references this table.
+  @@schema("app")
+  @@map("field_outlook_cells")
+}
+
+model FieldObservation {
+  id         String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  fieldId    String   @map("field_id") @db.Uuid
+  kind       String
+  // Both NULL for kind = 'note', both NOT NULL otherwise; SQL CHECK enforces it.
+  value      Float?
+  unit       String?
+  // When the measurement was taken, not when it was entered.
+  observedAt DateTime @map("observed_at") @db.Timestamptz(6)
+  method     String?
+  // The acting account. Equal to user_id in v1 (D7); no FK in SQL.
+  enteredBy  String   @map("entered_by") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  field Field @relation(fields: [fieldId, userId], references: [id, userId])
+
+  @@index([fieldId, observedAt(sort: Desc)], map: "field_observations_field_time_idx")
+  @@schema("app")
+  @@map("field_observations")
+}
+
+model Planting {
+  id              String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId          String   @map("user_id") @db.Uuid
+  fieldId         String   @map("field_id") @db.Uuid
+  // Global catalog row: plain single-column FK, no ownership to carry.
+  cultivarId      String   @map("cultivar_id") @db.Uuid
+  // Sowing or transplant date, whichever cycleStartUsed names. expectedHarvestAt
+  // is derived at read time, never stored.
+  plantedAt       DateTime @map("planted_at") @db.Date
+  cycleStartUsed  String   @map("cycle_start_used")
+  // May be smaller than fields.area_ha: a farmer may plant part of a plot.
+  areaPlantedHa   Float    @map("area_planted_ha")
+  // OPEN-09: no DEFAULT and no CHECK; the vocabulary is undecided.
+  status          String
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  field    Field    @relation(fields: [fieldId, userId], references: [id, userId])
+  cultivar Cultivar @relation(fields: [cultivarId], references: [id])
+  harvests Harvest[]
+
+  // Composite-FK target for harvests.
+  @@unique([id, userId], map: "plantings_id_user_id_key")
+  @@index([fieldId, plantedAt(sort: Desc)], map: "plantings_field_idx")
+  @@schema("app")
+  @@map("plantings")
+}
+
+model Harvest {
+  id          String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId      String   @map("user_id") @db.Uuid
+  plantingId  String   @map("planting_id") @db.Uuid
+  harvestedAt DateTime @map("harvested_at") @db.Date
+  // numeric, not double precision: summed and averaged for reporting, and no
+  // hash covers it. 0 is legal — a failed picking is data.
+  yieldKg     Decimal  @map("yield_kg") @db.Decimal(10, 2)
+  notes       String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  planting Planting @relation(fields: [plantingId, userId], references: [id, userId])
+
+  // Many rows per planting: cabai is picked repeatedly, so no UNIQUE.
+  @@index([plantingId, harvestedAt(sort: Desc)], map: "harvests_planting_idx")
+  @@index([userId, harvestedAt(sort: Desc)], map: "harvests_user_time_idx")
+  @@schema("app")
+  @@map("harvests")
+}
+
+// Derived agronomic and AI artifacts — three tenant tables, append-and-supersede.
+
+model SuitabilityRun {
+  id                    String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  // Denormalised from fields so the RLS policy compares a column, not a join.
+  userId                String   @map("user_id") @db.Uuid
+  fieldId               String   @map("field_id") @db.Uuid
+  profileVersionId      String   @map("profile_version_id") @db.Uuid
+  computedAt            DateTime @default(now()) @map("computed_at") @db.Timestamptz(6)
+  engineVersion         String   @map("engine_version")
+  derivationVersion     String   @map("derivation_version")
+  // [{dimension, state}]; a table would add a join to every field page.
+  dimensionCoverage     Json     @map("dimension_coverage")
+  // NULL, not 'D', when no dimension is `known`: 'D' would be a claim.
+  maxAchievableLevel    String?  @map("max_achievable_level")
+  inputRefs             Json     @map("input_refs")
+  // The body is stored whole, on this table only.
+  fieldSnapshot         Json     @map("field_snapshot")
+  fieldSnapshotHash     String   @map("field_snapshot_hash")
+  inputSnapshotHash     String   @map("input_snapshot_hash")
+  reproducible          Boolean  @default(true)
+  unreproducibleReason  String?  @map("unreproducible_reason")
+  status                String   @default("active")
+  supersedesId          String?  @map("supersedes_id") @db.Uuid
+  supersededById        String?  @map("superseded_by_id") @db.Uuid
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  field          Field               @relation(fields: [fieldId, userId], references: [id, userId])
+  profileVersion CropProfileVersion  @relation(fields: [profileVersionId], references: [id])
+  supersedes     SuitabilityRun?     @relation("SuitabilityRunSupersedes", fields: [supersedesId], references: [id])
+  supersedingRuns SuitabilityRun[]   @relation("SuitabilityRunSupersedes")
+  supersededBy   SuitabilityRun?     @relation("SuitabilityRunSupersededBy", fields: [supersededById], references: [id])
+  supersededRuns SuitabilityRun[]    @relation("SuitabilityRunSupersededBy")
+  plantingWindows PlantingWindow[]
+  aiBriefings    AiBriefing[]
+
+  // Composite-FK target for planting_windows and ai_briefings.
+  @@unique([id, userId], map: "suitability_runs_id_user_id_key")
+  @@index([fieldId, computedAt(sort: Desc)], map: "suitability_runs_field_idx")
+  @@index([fieldId, inputSnapshotHash], map: "suitability_runs_hash_idx")
+  // suitability_runs_live_key (UNIQUE, partial on status = 'active') has no
+  // Prisma equivalent; created in SQL only.
+  @@schema("app")
+  @@map("suitability_runs")
+}
+
+model PlantingWindow {
+  id                     String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId                 String   @map("user_id") @db.Uuid
+  suitabilityRunId       String   @map("suitability_run_id") @db.Uuid
+  fieldId                String   @map("field_id") @db.Uuid
+  // Duplicates cultivars.crop_id on purpose: every list query filters by crop.
+  cropId                 String   @map("crop_id") @db.Uuid
+  cultivarId             String   @map("cultivar_id") @db.Uuid
+  // Mandatory here as well as on the run, so a window read alone is
+  // self-describing (provenance-contract §4 rule 4).
+  profileVersionId       String   @map("profile_version_id") @db.Uuid
+  windowStart            DateTime @map("window_start") @db.Date
+  windowEnd              DateTime @map("window_end") @db.Date
+  evaluationBasis        String   @map("evaluation_basis")
+  primaryBasis           String   @map("primary_basis")
+  mixedEvidence          Boolean  @map("mixed_evidence")
+  weakestEvidenceClass   String   @map("weakest_evidence_class")
+  // Ordered array; position is semantic and the canonicaliser does not sort it.
+  evidenceSegments       Json     @map("evidence_segments")
+  // A set, not a sequence: the difference is why canonicalArrayRules is
+  // per-field.
+  missingRanges          Json     @map("missing_ranges")
+  suitability            String
+  score                  Decimal? @db.Decimal(5, 2)
+  risks                  Json     @default("[]")
+  explanations           Json     @default("[]")
+  constraintsEvaluated   Json     @default("[]") @map("constraints_evaluated")
+  missingInputs          Json     @default("[]") @map("missing_inputs")
+  inputRefs              Json     @map("input_refs")
+  fieldSnapshotHash      String   @map("field_snapshot_hash")
+  inputSnapshotHash      String   @map("input_snapshot_hash")
+  reproducible           Boolean  @default(true)
+  unreproducibleReason   String?  @map("unreproducible_reason")
+  computedAt             DateTime @default(now()) @map("computed_at") @db.Timestamptz(6)
+  status                 String   @default("active")
+  supersededById         String?  @map("superseded_by_id") @db.Uuid
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  suitabilityRun SuitabilityRun      @relation(fields: [suitabilityRunId, userId], references: [id, userId])
+  field          Field               @relation(fields: [fieldId, userId], references: [id, userId])
+  crop           Crop                @relation(fields: [cropId], references: [id])
+  cultivar       Cultivar            @relation(fields: [cultivarId], references: [id])
+  profileVersion CropProfileVersion  @relation(fields: [profileVersionId], references: [id])
+  supersededBy   PlantingWindow?     @relation("PlantingWindowSupersedes", fields: [supersededById], references: [id])
+  supersedes     PlantingWindow[]    @relation("PlantingWindowSupersedes")
+
+  @@index([suitabilityRunId], map: "planting_windows_run_idx")
+  // planting_windows_live_idx (partial on status = 'active'),
+  // planting_windows_window_range_idx (partial on status = 'active') and
+  // planting_windows_superseded_idx (partial on superseded_by_id IS NOT NULL)
+  // have no Prisma equivalent; created in SQL only.
+  @@schema("app")
+  @@map("planting_windows")
+}
+
+model AiBriefing {
+  id                     String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId                 String   @map("user_id") @db.Uuid
+  fieldId                String   @map("field_id") @db.Uuid
+  suitabilityRunId       String   @map("suitability_run_id") @db.Uuid
+  // User-facing generated content, regenerated rather than edited. No
+  // suitability field of its own: AI is not a decision source.
+  body                   Json
+  narrationStatus        String   @default("generated") @map("narration_status")
+  modelId                String   @map("model_id")
+  promptVersion          String   @map("prompt_version")
+  derivationVersion      String   @map("derivation_version")
+  inputRefs              Json     @map("input_refs")
+  // The snapshot body lives on the run this briefing explains.
+  fieldSnapshotHash      String   @map("field_snapshot_hash")
+  sourceArtifactHashes   String[] @map("source_artifact_hashes")
+  inputSnapshotHash      String   @map("input_snapshot_hash")
+  computedAt             DateTime @default(now()) @map("computed_at") @db.Timestamptz(6)
+  // A model call is not replayable by construction; true would be a false claim.
+  reproducible           Boolean  @default(false)
+  unreproducibleReason   String?  @map("unreproducible_reason")
+  status                 String   @default("active")
+  supersededById         String?  @map("superseded_by_id") @db.Uuid
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  field          Field          @relation(fields: [fieldId, userId], references: [id, userId])
+  suitabilityRun SuitabilityRun @relation(fields: [suitabilityRunId, userId], references: [id, userId])
+  supersededBy   AiBriefing?    @relation("AiBriefingSupersedes", fields: [supersededById], references: [id])
+  supersedes     AiBriefing[]   @relation("AiBriefingSupersedes")
+
+  @@index([fieldId, computedAt(sort: Desc)], map: "ai_briefings_field_idx")
+  @@index([suitabilityRunId], map: "ai_briefings_run_idx")
+  // ai_briefings_cache_key (UNIQUE, partial on status = 'active') has no Prisma
+  // equivalent; created in SQL only.
+  @@schema("app")
+  @@map("ai_briefings")
 }

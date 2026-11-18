@@ -23,7 +23,7 @@ seeded in Phase 3 with their `source_refs`.
 | Class | reference |
 | Purpose | the four v1 species: padi, jagung, kedelai, cabai |
 | Lifecycle | seeded; a `slug` is permanent (it appears in URLs) |
-| Exists | no (Phase 3) |
+| Exists | yes (Phase 3, `20261118030000_domain_tables`) |
 
 | Column | Type | Null | Default | Meaning |
 |---|---|---|---|---|
@@ -65,7 +65,7 @@ Notes:
 | Class | reference |
 | Purpose | the variety actually planted: cycle length, cycle basis, nursery, altitude band |
 | Lifecycle | seeded; a name is not renamed because `plantings` history refers to it |
-| Exists | no (Phase 3) |
+| Exists | yes (Phase 3, `20261118030000_domain_tables`) |
 
 | Column | Type | Null | Default | Meaning |
 |---|---|---|---|---|
@@ -118,7 +118,7 @@ Notes:
 | Class | reference |
 | Purpose | the immutable rulebook a recommendation was evaluated against |
 | Lifecycle | `draft` → `published` (once) → `retired`; a change produces a **new** row with `supersedes_id` set |
-| Exists | no (Phase 3) |
+| Exists | yes (Phase 3, `20261118030000_domain_tables`) |
 
 | Column | Type | Null | Default | Meaning |
 |---|---|---|---|---|
@@ -180,7 +180,7 @@ that references it. Retiring means "no new recommendation may choose this versio
 | Class | reference |
 | Purpose | the phenological phases a profile defines, with day offsets from cycle start |
 | Lifecycle | belongs to a profile version; immutable once that version is published (same trigger family) |
-| Exists | no (Phase 3) |
+| Exists | yes (Phase 3, `20261118030000_domain_tables`) |
 
 | Column | Type | Null | Default | Meaning |
 |---|---|---|---|---|
@@ -225,7 +225,7 @@ Notes:
 | Class | reference |
 | Purpose | one agronomic rule, evaluable against a field and an outlook |
 | Lifecycle | belongs to a profile version; immutable once published |
-| Exists | no (Phase 3) |
+| Exists | yes (Phase 3, `20261118030000_domain_tables`) |
 
 | Column | Type | Null | Default | Meaning |
 |---|---|---|---|---|
@@ -306,7 +306,7 @@ Notes:
 | Class | reference |
 | Purpose | the citation that justifies a profile version's thresholds |
 | Lifecycle | appended with a profile version; never edited after publication |
-| Exists | no (Phase 3) |
+| Exists | yes (Phase 3, `20261118030000_domain_tables`) |
 
 | Column | Type | Null | Default | Meaning |
 |---|---|---|---|---|

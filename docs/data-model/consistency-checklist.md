@@ -114,7 +114,7 @@ rather than the values re-listed. Re-listing is how the two drift.
 | 6.1 | `migrations/20261118020000_tenant_tables/migration.sql` (closing comment) | references `docs/architecture/auth-deferred.md`, which **does not exist** | the migration is immutable; `ownership-and-rls.md` §5 is the current home of that analysis, and Phase 3 should add the pointer file or amend the reference where it can still be amended |
 | 6.2 | `database-foundation.md` §"2.2.3 notes" | the same `auth-deferred` reference; the notes also justify materialising only three tables because "`docs/data-model/` does not exist" | that justification is now **satisfied** — this directory is the missing artefact. It should be annotated, not rewritten, so the Phase 2.2.3 record stays true of its own moment |
 | 6.3 | `ADR-002` D3 | geometry type narrower than the implementation | §2 above |
-| 6.4 | `docs/IMPLEMENTATION_STATUS.md` | stopped at Phase 2.2.3, and its 2.3 section reported "25 decisions taken, 25 questions left open" | updated in 2.3 (documentation row) and corrected in 2.3.x to the measured counts (25 `D-nn`, 29 `OPEN-nn`) |
+| 6.4 | `docs/IMPLEMENTATION_STATUS.md` | stopped at Phase 2.2.3, and its 2.3 section reported "25 decisions taken, 25 questions left open" | updated in 2.3, corrected in 2.3.x to the measured counts, and in 2.4 to 25+`D26` decisions and 29 `OPEN-nn` |
 | 6.5 | `provenance-contract.md` §4 (line ~283) | `geometryHash` preimage is written "sha256 of geometry in canonical EWKB" — the word "canonical" reads as *normalized*, which the design does not do | **not edited** (a normative architecture document is out of scope for a data-model pass). `spatial-model.md` §6 states the implemented rule, enumerates what is and is not equal, and this row is the pointer. If the wording is to change, it changes with a provenance-contract revision, not here |
 | 6.6 | `ADR-002` D3 | see §2 — the ADR's geometry type is narrower than the implementation | annotate, do not rewrite: an accepted decision record is not corrected by editing it to match the code |
 
@@ -199,7 +199,7 @@ and reported:
 | `OPEN-nn` cited outside `open-decisions.md` | **28 of 29** as measured; the remaining one is cited only within the same file. Before 2.3.x.1 the figure was 25 — it rose because §8 now names the ten ids it classifies. This row's own wording can move it, which is why it is a measurement note and not a finding |
 | `OPEN-nn` in the §1.1 matrix | 14 of 14 — no P1 item missing, no non-P1 item present, verified in both directions |
 | `OPEN-nn` referenced but undefined | 0 |
-| `D-nn` definitions | 25, no id defined twice |
+| `D-nn` definitions | 26 (`D1`–`D25` plus `D26` from Phase 2.4), no id defined twice |
 | `D-nn` referenced outside `open-decisions.md` | 12 |
 | `D-nn` referenced but undefined | 0 |
 | canonical severities in `open-decisions.md` | 4 in the §1.1 matrix, 14 stated in headings/rows, all agreeing |
@@ -222,3 +222,73 @@ Two limitations, stated because the alternative is a false assurance:
 Neither check verifies SQL, schema, or runtime behaviour. They verify that a set
 of Markdown files agree with each other about identifiers, severities, and
 phrasing.
+
+## §10 — Phase 2.4 gate
+
+Phase 2.4 asked one question: does anything unresolved make a Phase 3 table or
+security boundary unsafe to implement? The answer, after auditing all 29 `OPEN`
+ids and all 26 `D` decisions, is **no** — and the reasoning is recorded rather
+than asserted.
+
+| Gate item | Result | Evidence |
+|---|---|---|
+| every `OPEN` id has a disposition | yes — 0 `RESOLVED`, 20 `DEFERRED`, 9 `BLOCKED_EXTERNAL_INPUT`, 0 `NOT_APPLICABLE` | `open-decisions.md` §5 |
+| no decision invented | yes | §5 names an owner for every blocked item; no vocabulary, radius, mapping, or licence was chosen |
+| `OPEN-09` resolved or safely deferred | **deferred by omission** — `D26`: no `DEFAULT`, no `plantings_active_idx` | `tables-identity.md` §6, `indexes-and-query-patterns.md` §2 |
+| every table definition implementation-ready | yes — 19 tables in `tables-identity.md` §4-7, `tables-catalog.md` §1-6, `tables-climate.md` §1-6, `tables-derived.md` §1-3 | Phase 3 migration |
+| constraints specified | yes, per table, named | same |
+| indexes have a query | yes — `indexes-and-query-patterns.md` maps each to `Q1`-`Q25` | same |
+| ownership classification per table | yes — 22 rows in `ownership-and-rls.md` §2 | same |
+| tenant tables have RLS + grants | yes — `FORCE` + one `FOR ALL` policy + explicit per-operation grants | migration |
+| `app_system` default-deny on tenant data | yes — granted nothing on rows 1-7 and 20-22 | migration |
+| ADR-003 still accurate | yes — unchanged; RLS is containment of forgotten filters, not a boundary against a compromised `app_api` credential | ADR-003 |
+| spatial and provenance specs agree with contracts | yes, with two documented deviations (§6 items 6.5 and 6.7) | §6 |
+| identifiers consistent | yes — 29 `OPEN`, 26 `D`, 0 dangling | §9 |
+| tracker describes resolved vs deferred | yes | `docs/IMPLEMENTATION_STATUS.md` |
+
+Two things this gate deliberately does **not** claim:
+
+1. **That the deferred items are harmless.** `OPEN-01` and `OPEN-17` are hard
+   blockers for their slices, not paperwork. They are deferred because Phase 3 is
+   DDL, not because they stopped mattering.
+2. **That the specification is verified.** Everything above is document
+   agreement. The only claims a document can support are about documents.
+
+Known internal conflicts, resolved by precedence rather than by editing history:
+
+- `physical-model.md` §4 named `constraints.value_min`, a column `D6` replaced
+  with `threshold_lower`/`threshold_upper`, and gave `numeric(6,2)` where
+  `tables-catalog.md` §5 gives `numeric(10,2)`. The per-table document wins on
+  columns; `physical-model.md` was corrected to name the real columns and the real
+  precision. Recorded here because a silent edit to a normative document is worse
+  than a recorded one.
+- `D11` says every table carries `created_at`; `field_outlook_cells` carries
+  `resolved_at` instead, which is the same instant. The per-table column list wins;
+  a second column holding the same value is a second answer.
+
+## §11 — Phase 3 implementation deviations
+
+Where the SQL and this specification differ, the difference is listed here rather
+than left for a reader to find. Four items. Three are additions the specification
+implied but did not spell out; one is a deviation with a recorded reason.
+
+| # | Location | What the SQL does | Why |
+|---|---|---|---|
+| 11.1 | `monthly_outlooks_value_state_check` | written as an implication: `(value_mm IS NULL) = (data_class IS NULL) AND (missing_reason IS NULL OR missing_reason = 'beyond_horizon' OR (value_mm IS NULL AND data_class IS NULL))` | §5 states the rule correctly in prose ("value present ⟺ data class present; the no-value reasons imply both are absent") but the constraint only enforces the first half literally. The second half is a tautology whenever a value is present, which would allow `pending` to sit beside a number — the exact rendering the constraint exists to prevent. Same rule, enforced |
+| 11.2 | `monthly_outlooks_data_class_check` | added, mirroring all nine `WeatherDataClass` values | §5 lists no constraint for the column while `physical-model.md` §5 says a contract-enum column mirrors the enum. A nine-value `CHECK` cannot reject a valid contract value, so both documents are satisfied. `weather_records` keeps the narrower four-class `CHECK` that §4 states, which is a different rule for a different table |
+| 11.3 | `monthly_outlooks_beyond_horizon_value_check` | added: `missing_reason <> 'beyond_horizon' OR value_mm IS NOT NULL` | §5's state table gives `beyond_horizon` a value in both of its rows, and `beyond_horizon_check` alone permits a climatology month with no number. This is the pair that makes "the horizon genuinely ends" render something |
+| 11.4 | `field_outlook_cells` | no `created_at`; `resolved_at` is the row's creation instant | `physical-model.md` §8 says every table carries `created_at`; `tables-identity.md` §4 names the instant `resolved_at`. The per-table list wins — a second column holding the same value is a second answer, and `D11`'s intent is that a creation instant exists, not that its name is fixed |
+
+Also recorded, not a deviation but a note a reader will want: several `CHECK`
+constraints are stated in a column table without a name (`cultivars.duration_days_min
+> 0`, `photo…` — no, see below). The names given in the migration follow
+`physical-model.md` §1's `<table>_<subject>_check` pattern, so they are consistent
+without being quotable from the specification:
+
+| Table | Constraint | Stated where |
+|---|---|---|
+| `cultivars` | `cultivars_duration_min_check`, `cultivars_nursery_days_check`, `cultivars_altitude_min_check` | §2 column table (`CHECK (> 0)`, `CHECK (>= 0)`) |
+| `cultivars` | `cultivars_rule_version_check` | did not exist; see below |
+| `outlook_cells` | `outlook_cells_served_lat_check`, `outlook_cells_served_lon_check` | §1 column table |
+| `planting_windows` | `planting_windows_score_range_check`, `planting_windows_weakest_class_check` | §2 column table (`CHECK (BETWEEN 0 AND 100)`, `WeatherDataClass`) |
+| `ingestion_runs`, `weather_records`, `monthly_outlooks`, `climatology_normals`, `crop_profile_versions` | `*_version_check` | `physical-model.md` §6 (`btrim(col) <> ''` for opaque version strings) |

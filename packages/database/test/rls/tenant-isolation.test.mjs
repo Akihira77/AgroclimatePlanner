@@ -33,8 +33,14 @@ const wide = createPrismaClient({ connectionString: roleConnectionString("app_ap
 const singleScope = createTenantScope(single);
 const wideScope = createTenantScope(wide);
 
-/** @type {{ tenantA: string, tenantB: string, farmA: string, farmB: string, fieldA: string }} */
+/** @type {{ tenantA: string, tenantB: string, farmA: string, farmB: string, fieldA: string, fieldB: string }} */
 const fixtures = {};
+
+/** Reference catalogue rows every Phase 3 derived table needs. Created once, by migration_owner. */
+const reference = {};
+
+/** Tenant-B rows targeted by the negative assertions, keyed by table. Deleted by id in `after`. */
+const derived = {};
 
 /** Create a tenant with one farm and one field. Ids come from the database (uuidv7). */
 async function createTenant(label) {
@@ -86,9 +92,143 @@ before(async () => {
   fixtures.fieldA = a.fieldId;
   fixtures.tenantB = b.userId;
   fixtures.farmB = b.farmId;
+  fixtures.fieldB = b.fieldId;
+
+  // Reference catalogue. Unique markers keep two runs against the same database
+  // from colliding on crops_slug_key / outlook_cells_grid_key / the profile key.
+  const suffix = `${Date.now().toString(36)}-${Math.random().toString(16).slice(2, 10)}`;
+
+  const { rows: crop } = await owner.query(
+    `insert into app.crops (slug, name_id, name_en, category)
+     values ($1, 'Padi', 'Rice', 'cereal') returning id`,
+    [`rls-crop-${suffix}`],
+  );
+  reference.crop = crop[0].id;
+
+  const { rows: cultivar } = await owner.query(
+    `insert into app.cultivars
+       (crop_id, name, duration_days_min, duration_days_typical, duration_days_max, cycle_start)
+     values ($1, $2, 90, 110, 130, 'sowing') returning id`,
+    [reference.crop, `rls cultivar ${suffix}`],
+  );
+  reference.cultivar = cultivar[0].id;
+
+  const { rows: profile } = await owner.query(
+    `insert into app.crop_profile_versions (cultivar_id, rule_version)
+     values ($1, $2) returning id`,
+    [reference.cultivar, `rls-${suffix}`],
+  );
+  reference.profileVersion = profile[0].id;
+
+  const { rows: cell } = await owner.query(
+    `insert into app.outlook_cells (provider, model, cell_key)
+     values ('bmkg', 'rls-model', $1) returning id`,
+    [`rls-cell-${suffix}`],
+  );
+  reference.outlookCell = cell[0].id;
+
+  // Tenant B's rows: the objects every "A must not touch B" assertion aims at.
+  const { rows: fieldOutlookCell } = await owner.query(
+    `insert into app.field_outlook_cells
+       (user_id, field_id, outlook_cell_id, provider, model, extraction_policy, distance_km)
+     values ($1, $2, $3, 'bmkg', 'rls-model', 'centroid', 1.5) returning id`,
+    [fixtures.tenantB, fixtures.fieldB, reference.outlookCell],
+  );
+  derived.field_outlook_cells = fieldOutlookCell[0].id;
+
+  const { rows: observation } = await owner.query(
+    `insert into app.field_observations (user_id, field_id, kind, observed_at, entered_by)
+     values ($1, $2, 'note', now(), $1) returning id`,
+    [fixtures.tenantB, fixtures.fieldB],
+  );
+  derived.field_observations = observation[0].id;
+
+  const { rows: planting } = await owner.query(
+    `insert into app.plantings
+       (user_id, field_id, cultivar_id, planted_at, cycle_start_used, area_planted_ha, status)
+     values ($1, $2, $3, current_date, 'sowing', 1.0, 'active') returning id`,
+    [fixtures.tenantB, fixtures.fieldB, reference.cultivar],
+  );
+  derived.plantings = planting[0].id;
+
+  const { rows: harvest } = await owner.query(
+    `insert into app.harvests (user_id, planting_id, harvested_at, yield_kg)
+     values ($1, $2, current_date, 12.5) returning id`,
+    [fixtures.tenantB, derived.plantings],
+  );
+  derived.harvests = harvest[0].id;
+
+  const { rows: run } = await owner.query(
+    `insert into app.suitability_runs
+       (user_id, field_id, profile_version_id, engine_version, derivation_version,
+        dimension_coverage, input_refs, field_snapshot, field_snapshot_hash, input_snapshot_hash)
+     values ($1, $2, $3, 'rls-engine', 'rls-derivation',
+             '[]'::jsonb, '[]'::jsonb, '{}'::jsonb, repeat('a', 64), repeat('b', 64))
+     returning id`,
+    [fixtures.tenantB, fixtures.fieldB, reference.profileVersion],
+  );
+  derived.suitability_runs = run[0].id;
+
+  const { rows: window } = await owner.query(
+    `insert into app.planting_windows
+       (user_id, suitability_run_id, field_id, crop_id, cultivar_id, profile_version_id,
+        window_start, window_end, evaluation_basis, primary_basis, mixed_evidence,
+        weakest_evidence_class, evidence_segments, missing_ranges, suitability,
+        input_refs, field_snapshot_hash, input_snapshot_hash)
+     values ($1, $2, $3, $4, $5, $6,
+             current_date, current_date + 7, 'daily', 'daily', false,
+             'weather_forecast', '[]'::jsonb, '[]'::jsonb, 'suitable',
+             '[]'::jsonb, repeat('c', 64), repeat('d', 64))
+     returning id`,
+    [
+      fixtures.tenantB,
+      derived.suitability_runs,
+      fixtures.fieldB,
+      reference.crop,
+      reference.cultivar,
+      reference.profileVersion,
+    ],
+  );
+  derived.planting_windows = window[0].id;
+
+  const { rows: briefing } = await owner.query(
+    `insert into app.ai_briefings
+       (user_id, field_id, suitability_run_id, body, model_id, prompt_version,
+        derivation_version, input_refs, field_snapshot_hash, source_artifact_hashes,
+        input_snapshot_hash, unreproducible_reason)
+     values ($1, $2, $3, '{}'::jsonb, 'rls-model', 'rls-prompt',
+             'rls-derivation', '[]'::jsonb, repeat('e', 64), array[repeat('f', 64)],
+             repeat('9', 64), 'model call is not replayable')
+     returning id`,
+    [fixtures.tenantB, fixtures.fieldB, derived.suitability_runs],
+  );
+  derived.ai_briefings = briefing[0].id;
 });
 
 after(async () => {
+  // Reverse dependency order, keyed on ids this run generated. `before` may have
+  // failed part-way, so only defined ids are filtered in; nothing is truncated.
+  const ids = (list) => list.filter((id) => typeof id === "string");
+  const remove = async (table, list) => {
+    const present = ids(list);
+    if (present.length === 0) return;
+    await owner
+      .query(`delete from app.${table} where id = any($1::uuid[])`, [present])
+      .catch(() => {});
+  };
+
+  await remove("ai_briefings", [derived.ai_briefings]);
+  await remove("planting_windows", [derived.planting_windows]);
+  await remove("harvests", [derived.harvests]);
+  await remove("suitability_runs", [derived.suitability_runs]);
+  await remove("plantings", [derived.plantings]);
+  await remove("field_observations", [derived.field_observations]);
+  await remove("field_outlook_cells", [derived.field_outlook_cells]);
+  await remove("crop_profile_versions", [reference.profileVersion]);
+  await remove("cultivars", [reference.cultivar]);
+  await remove("crops", [reference.crop]);
+  await remove("outlook_cells", [reference.outlookCell]);
+
   await owner
     .query("delete from app.fields where user_id = any($1)", [[fixtures.tenantA, fixtures.tenantB]])
     .catch(() => {});
@@ -274,5 +414,194 @@ describe("tenant scope", () => {
     );
     await rejected(apiPg, "drop tenant table", "drop table app.fields", [], "42501");
     await rejected(apiPg, "write ledger", "delete from app._prisma_migrations", [], "42501");
+  });
+});
+
+/**
+ * SQLSTATEs a Prisma raw-query error might carry, outermost first. The driver
+ * adapter wraps the original `pg` error; the code is read from whichever layer
+ * kept it, never from the message text.
+ */
+function sqlStates(error) {
+  return [
+    // Prisma 7's driver adapter reports the original PostgreSQL code here.
+    error?.meta?.driverAdapterError?.cause?.originalCode,
+    error?.meta?.code,
+    error?.cause?.code,
+    error?.meta?.cause?.code,
+    error?.code,
+  ].filter((value) => typeof value === "string");
+}
+
+function assertSqlState(label, error, expected) {
+  const seen = sqlStates(error);
+  assert.ok(
+    seen.includes(expected),
+    `${label}: expected SQLSTATE ${expected}, saw ${JSON.stringify({ code: error?.code, meta: error?.meta })}`,
+  );
+}
+
+/** Resolve a `withTenant` mutation to an outcome instead of throwing, so the code can be inspected. */
+async function attempt(scope, tenantId, sql, parameters = []) {
+  return scope
+    .withTenant(tenantId, (tx) => tx.$executeRawUnsafe(sql, ...parameters))
+    .then(
+      (rows) => ({ ok: true, rows }),
+      (error) => ({ ok: false, error }),
+    );
+}
+
+const phaseThreeTables = [
+  {
+    table: "field_outlook_cells",
+    rowId: () => derived.field_outlook_cells,
+    crossInsert: () => ({
+      sql: `insert into app.field_outlook_cells
+              (user_id, field_id, outlook_cell_id, provider, model, extraction_policy, distance_km)
+            values ($1::uuid, $2::uuid, $3::uuid, 'ecmwf', 'cross-model', 'centroid', 1.0)`,
+      parameters: [fixtures.tenantA, fixtures.fieldB, reference.outlookCell],
+    }),
+  },
+  {
+    table: "field_observations",
+    rowId: () => derived.field_observations,
+    crossInsert: () => ({
+      sql: `insert into app.field_observations (user_id, field_id, kind, observed_at, entered_by)
+            values ($1::uuid, $2::uuid, 'note', now(), $1::uuid)`,
+      parameters: [fixtures.tenantA, fixtures.fieldB],
+    }),
+  },
+  {
+    table: "plantings",
+    rowId: () => derived.plantings,
+    crossInsert: () => ({
+      sql: `insert into app.plantings
+              (user_id, field_id, cultivar_id, planted_at, cycle_start_used, area_planted_ha, status)
+            values ($1::uuid, $2::uuid, $3::uuid, current_date, 'sowing', 1.0, 'active')`,
+      parameters: [fixtures.tenantA, fixtures.fieldB, reference.cultivar],
+    }),
+  },
+  {
+    table: "harvests",
+    rowId: () => derived.harvests,
+    crossInsert: () => ({
+      sql: `insert into app.harvests (user_id, planting_id, harvested_at, yield_kg)
+            values ($1::uuid, $2::uuid, current_date, 1.0)`,
+      parameters: [fixtures.tenantA, derived.plantings],
+    }),
+  },
+  {
+    table: "suitability_runs",
+    rowId: () => derived.suitability_runs,
+    crossInsert: () => ({
+      sql: `insert into app.suitability_runs
+              (user_id, field_id, profile_version_id, engine_version, derivation_version,
+               dimension_coverage, input_refs, field_snapshot, field_snapshot_hash,
+               input_snapshot_hash, status)
+            values ($1::uuid, $2::uuid, $3::uuid, 'cross-engine', 'cross-derivation',
+                    '[]'::jsonb, '[]'::jsonb, '{}'::jsonb, repeat('1', 64),
+                    repeat('2', 64), 'failed')`,
+      parameters: [fixtures.tenantA, fixtures.fieldB, reference.profileVersion],
+    }),
+  },
+  {
+    table: "planting_windows",
+    rowId: () => derived.planting_windows,
+    crossInsert: () => ({
+      sql: `insert into app.planting_windows
+              (user_id, suitability_run_id, field_id, crop_id, cultivar_id, profile_version_id,
+               window_start, window_end, evaluation_basis, primary_basis, mixed_evidence,
+               weakest_evidence_class, evidence_segments, missing_ranges, suitability,
+               input_refs, field_snapshot_hash, input_snapshot_hash)
+            values ($1::uuid, $2::uuid, $3::uuid, $4::uuid, $5::uuid, $6::uuid,
+                    current_date, current_date + 7, 'daily', 'daily', false,
+                    'weather_forecast', '[]'::jsonb, '[]'::jsonb, 'suitable',
+                    '[]'::jsonb, repeat('3', 64), repeat('4', 64))`,
+      parameters: [
+        fixtures.tenantA,
+        derived.suitability_runs,
+        fixtures.fieldA,
+        reference.crop,
+        reference.cultivar,
+        reference.profileVersion,
+      ],
+    }),
+  },
+  {
+    table: "ai_briefings",
+    rowId: () => derived.ai_briefings,
+    crossInsert: () => ({
+      sql: `insert into app.ai_briefings
+              (user_id, field_id, suitability_run_id, body, model_id, prompt_version,
+               derivation_version, input_refs, field_snapshot_hash, source_artifact_hashes,
+               input_snapshot_hash, unreproducible_reason)
+            values ($1::uuid, $2::uuid, $3::uuid, '{}'::jsonb, 'cross-model', 'cross-prompt',
+                    'cross-derivation', '[]'::jsonb, repeat('5', 64), array[repeat('6', 64)],
+                    repeat('7', 64), 'model call is not replayable')`,
+      parameters: [fixtures.tenantA, fixtures.fieldA, derived.suitability_runs],
+    }),
+  },
+];
+
+describe("phase 3 tenant-owned tables", () => {
+  before(async () => {
+    // A negative assertion against a row that does not exist proves nothing.
+    for (const spec of phaseThreeTables) {
+      const { rows } = await owner.query(`select user_id from app.${spec.table} where id = $1`, [
+        spec.rowId(),
+      ]);
+      assert.equal(rows.length, 1, `${spec.table}: tenant B fixture is missing`);
+      assert.equal(rows[0].user_id, fixtures.tenantB, `${spec.table}: fixture is not tenant B's`);
+    }
+  });
+
+  for (const spec of phaseThreeTables) {
+    test(`${spec.table} — tenant A cannot SELECT tenant B's row`, async () => {
+      const rows = await singleScope.withTenant(fixtures.tenantA, (tx) =>
+        tx.$queryRawUnsafe(`select id from app.${spec.table} where id = $1::uuid`, spec.rowId()),
+      );
+      assert.equal(rows.length, 0, `${spec.table}: tenant B's row was visible to tenant A`);
+    });
+
+    test(`${spec.table} — tenant A cannot UPDATE tenant B's row`, async () => {
+      const affected = await singleScope.withTenant(fixtures.tenantA, (tx) =>
+        tx.$executeRawUnsafe(
+          `update app.${spec.table} set user_id = user_id where id = $1::uuid`,
+          spec.rowId(),
+        ),
+      );
+      assert.equal(affected, 0, `${spec.table}: tenant A updated a tenant B row`);
+    });
+
+    test(`${spec.table} — tenant A cannot DELETE tenant B's row`, async () => {
+      const removed = await singleScope.withTenant(fixtures.tenantA, (tx) =>
+        tx.$executeRawUnsafe(`delete from app.${spec.table} where id = $1::uuid`, spec.rowId()),
+      );
+      assert.equal(removed, 0, `${spec.table}: tenant A deleted a tenant B row`);
+    });
+
+    test(`${spec.table} — tenant A cannot INSERT under tenant B's parent`, async () => {
+      const { sql, parameters } = spec.crossInsert();
+      const outcome = await attempt(singleScope, fixtures.tenantA, sql, parameters);
+
+      assert.equal(
+        outcome.ok,
+        false,
+        `${spec.table}: the cross-tenant insert succeeded (${outcome.rows} rows)`,
+      );
+      // 23503, not 42501: the policy accepts user_id = A, and the composite
+      // ownership FK is the boundary that refuses the foreign parent.
+      assertSqlState(spec.table, outcome.error, "23503");
+    });
+  }
+
+  test("no tenant context — every phase 3 table returns zero rows", async () => {
+    for (const spec of phaseThreeTables) {
+      const { rows } = await apiPg.query(
+        `select count(*)::int as n from app.${spec.table} where id = $1`,
+        [spec.rowId()],
+      );
+      assert.equal(rows[0].n, 0, `${spec.table}: a row is visible with no tenant context`);
+    }
   });
 });

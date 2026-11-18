@@ -32,7 +32,7 @@ Read in this order. Every later document assumes the earlier ones.
 
 Supporting:
 
-- `open-decisions.md` — everything **not** settled: the 25 `D-nn` decisions made
+- `open-decisions.md` — everything **not** settled: the 26 `D-nn` decisions made
   here, the 29 `OPEN-nn` questions left open, and the blocker matrix that names
   the subsystem each blocker stops.
 - `consistency-checklist.md` — the cross-document review, including the

@@ -19,9 +19,10 @@ signal that it matters — `OPEN-01` matters a great deal and still does not sto
 a migration from applying.
 
 **The register is 29 items: 14 P1 and 15 P2.** The 14 are classified by what they
-stop in §1.1 — one changes the Phase 3 DDL, twelve block a slice built on top of
-it, and one blocks nothing because a labelled fallback already ships. The 15 P2
-items are in §3 and block nothing in Phase 3 by definition.
+stop in §1.1 — none blocks the Phase 3 DDL, twelve block a slice built on top of
+it, one is mitigated by a labelled fallback, and one's DDL half is settled by
+omission (`D26`). The 15 P2 items are in §3 and block nothing in Phase 3 by
+definition. §5 records the Phase 2.4 disposition of every id.
 
 Nothing in this list is a design preference. Each one is a question where a
 plausible answer exists and choosing it silently would put an unapproved decision
@@ -36,44 +37,68 @@ means something else:** it lists **all 14 P1 items**, not a selection. It is the
 complete P1 register, and it is the single source for "what is blocked and by
 what". Every other document points here instead of restating it.
 
-The `Applies` column separates the two things "P1" can mean here:
+Two columns describe impact, and they are independent of severity:
+
+`Applies` — where the decision lands:
 
 | Value | Means |
 |---|---|
 | **Phase 3 DDL** | the decision changes what the Phase 3 migration must literally contain, so that migration cannot be written correctly without it |
 | **after Phase 3** | the decision blocks a slice built on top of Phase 3 — auth, snapshot, ingest, window write, worker, AI, lifecycle. Phase 3's 19 tables, constraints, indexes, policies, and grants are written without it |
-| **not blocking** | a degraded or labelled path already exists; the decision improves a path, it does not stop one |
+
+`Blocking` — whether a path exists today. Added in Phase 2.4, because "not P0" and
+"not blocking" were being used as if they were the same claim:
+
+| Value | Means | Example |
+|---|---|---|
+| **hard** | no implementation path exists; the affected slice cannot be written at all | `OPEN-01` — nothing can read a credential |
+| **conditional** | the path exists and works until a named condition enters scope, and then it stops | `OPEN-28` — the threat model holds until a leaked DSN is in scope |
+| **mitigated** | a degraded path ships and is labelled as degraded; the decision improves it, it does not stop it | `OPEN-02` — the BMKG band falls back to labelled Open-Meteo |
+| **none** | the DDL half is settled by omission, so nothing is blocked; only a vocabulary or contract remains open | `OPEN-09` — `D26` ships `plantings` without the default and without the index |
+
+Severity stays a separate axis: it measures the scope of the subsystem the item
+affects, not whether that subsystem has a fallback. `OPEN-02` is P1 and
+`mitigated`; `OPEN-28` is P1 and `conditional`; neither is `hard`, and neither was
+reclassified to P2 to make the distinction go away.
 
 "Phase 3" here means the deliverables the phase tracker records: the 19 specified
 tables, their constraints and indexes, the RLS policies, and the grants, as
 hand-written SQL applied with `prisma migrate deploy`. No runtime write path is
-part of it, which is why almost nothing below is `Phase 3 DDL`.
+part of it.
 
-| ID | Sev | Category | Applies | What is unresolved | Blocked | Continues independently |
-|---|---|---|---|---|---|---|
-| `OPEN-09` | P1 | catalog vocabulary | **Phase 3 DDL** | whether the planting status vocabulary spells `active` | the `plantings.status` `DEFAULT` and `plantings_active_idx`, whose predicate names that literal — either would encode an unmade decision | the `plantings` table without a default, `harvests`, every other table and index |
-| `OPEN-01` | P1 | authentication | after Phase 3 | how a credential is read before a tenant context exists | login, session issuance, and therefore every authenticated request | the DDL, the catalog, the weather plane, all RLS policies and grants |
-| `OPEN-13` | P1 | authentication | after Phase 3 | where a session lives — Redis vs a table | session issuance and session read, together with `OPEN-01`; a table would add a 23rd entity | the DDL — this model contains no session table and does not need one |
-| `OPEN-17` | P1 | field snapshot | after Phase 3 | what `areaHa` means for a `POINT`-shaped field | field snapshot creation for point-shaped fields, and every artifact derived from one | the DDL (a `POINT` row is still storable); `POLYGON`/`MULTIPOLYGON` fields end to end |
-| `OPEN-21` | P1 | field snapshot | after Phase 3 | the `irrigationAvailable` boolean mapping and three field vocabularies | field → snapshot construction | the DDL — the columns stay unconstrained `text`; every non-snapshot path |
-| `OPEN-18` | P1 | cell resolution | after Phase 3 | the `cell_key` rounding rule, per model | writing a cell identity, and field → cell resolution for any model whose rule is undefined | the DDL (`cell_key` is `text` for exactly this reason), the catalog, every query that reads an already-keyed cell |
-| `OPEN-26` | P1 | window write | after Phase 3 | the six-check `EvidenceSegment` partition validator | persisting a `planting_windows` row | the table, its index, every read path, `suitability_runs`, `ai_briefings` |
-| `OPEN-27` | P1 | worker | after Phase 3 | how the worker learns which fields a cell serves | `recompute.windows` — the job that delivers a new forecast to a dashboard | the DDL **and** the grants, which ship the documented default: no `app_system` grant on a tenant-owned table |
-| `OPEN-11` | P1 | AI slice | after Phase 3 | the `ClimateBriefing` body shape | writing or validating an `ai_briefings` row | the `ai_briefings` DDL; the table is createable exactly as specified, it simply cannot yet hold a valid document |
-| `OPEN-04` | P1 | identity lifecycle | after Phase 3 | the account-deletion policy | the deletion path and whether `users` gains a partial unique email index | the `users` DDL as implemented; registration; every read |
-| `OPEN-03` | P1 | deployment / licensing | after Phase 3 | Open-Meteo paid plan vs self-host | production deployment legality and `raw_payload_ref` retention | the DDL; non-production use |
-| `OPEN-05` | P1 | retention | after Phase 3 | per-provider raw payload retention | a `reproducible: true` claim for an artifact built on that provider | the DDL; artifacts stored with `reproducible: false` and a reason |
-| `OPEN-02` | P1 | provider | **not blocking** | BMKG written permission | the 0–3 d BMKG band only, which already has a labelled Open-Meteo fallback | everything — no column, constraint, or query in this model references BMKG |
-| `OPEN-28` | P1 | security hardening | after Phase 3 | whether signed tenant context (ADR-003 A2) is required | nothing, until a leaked `app_api` DSN is in scope | everything |
+| ID | Sev | Category | Applies | Blocking | What is unresolved | Blocked | Continues independently |
+|---|---|---|---|---|---|---|---|
+| `OPEN-09` | P1 | catalog vocabulary | after Phase 3 (vocabulary only) | **none** — `D26` omits the DDL | whether the planting status vocabulary spells `active` | the `plantings.status` default and `plantings_active_idx`, both **deliberately not created** in Phase 3 | the `plantings` table without a default, `harvests`, every other table and index |
+| `OPEN-01` | P1 | authentication | after Phase 3 | **hard** | how a credential is read before a tenant context exists | login, session issuance, and therefore every authenticated request | the DDL, the catalog, the weather plane, all RLS policies and grants |
+| `OPEN-13` | P1 | authentication | after Phase 3 | **hard** | where a session lives — Redis vs a table | session issuance and session read, together with `OPEN-01`; a table would add a 23rd entity | the DDL — this model contains no session table and does not need one |
+| `OPEN-17` | P1 | field snapshot | after Phase 3 | **hard**, for point-shaped fields only | what `areaHa` means for a `POINT`-shaped field | field snapshot creation for point-shaped fields, and every artifact derived from one | the DDL (a `POINT` row is still storable); `POLYGON`/`MULTIPOLYGON` fields end to end |
+| `OPEN-21` | P1 | field snapshot | after Phase 3 | **hard** | the `irrigationAvailable` boolean mapping and three field vocabularies | field → snapshot construction | the DDL — the columns stay unconstrained `text`; every non-snapshot path |
+| `OPEN-18` | P1 | cell resolution | after Phase 3 | **hard** | the `cell_key` rounding rule, per model | writing a cell identity, and field → cell resolution for any model whose rule is undefined | the DDL (`cell_key` is `text` for exactly this reason), the catalog, every query that reads an already-keyed cell |
+| `OPEN-26` | P1 | window write | after Phase 3 | **hard** | the six-check `EvidenceSegment` partition validator | persisting a `planting_windows` row | the table, its index, every read path, `suitability_runs`, `ai_briefings` |
+| `OPEN-27` | P1 | worker | after Phase 3 | **hard** | how the worker learns which fields a cell serves | `recompute.windows` — the job that delivers a new forecast to a dashboard | the DDL **and** the grants, which ship the documented default: no `app_system` grant on a tenant-owned table |
+| `OPEN-11` | P1 | AI slice | after Phase 3 | **hard** | the `ClimateBriefing` body shape | writing or validating an `ai_briefings` row | the `ai_briefings` DDL; the table is createable exactly as specified, it simply cannot yet hold a valid document |
+| `OPEN-04` | P1 | identity lifecycle | after Phase 3 | **hard** | the account-deletion policy | the deletion path and whether `users` gains a partial unique email index | the `users` DDL as implemented; registration; every read |
+| `OPEN-03` | P1 | deployment / licensing | after Phase 3 | **conditional** — at production launch | Open-Meteo paid plan vs self-host | production deployment legality and `raw_payload_ref` retention | the DDL; non-production use |
+| `OPEN-05` | P1 | retention | after Phase 3 | **hard** for a `reproducible: true` claim | per-provider raw payload retention | that claim for an artifact built on the provider | the DDL; artifacts stored with `reproducible: false` and a reason |
+| `OPEN-02` | P1 | provider | **Phase 3 DDL: never** | **mitigated** — labelled fallback ships | BMKG written permission | the 0–3 d BMKG band only | everything — no column, constraint, or query in this model references BMKG |
+| `OPEN-28` | P1 | security hardening | after Phase 3 | **conditional** — if a leaked DSN enters scope | whether signed tenant context (ADR-003 A2) is required | nothing, today | everything |
 
 Reading the matrix:
 
-- **Exactly one P1 item is a Phase 3 DDL blocker: `OPEN-09`.** `plantings.status`
-  has a `DEFAULT 'active'` and `plantings_active_idx` filters on
-  `status = 'active'`; both spell a value whose vocabulary is undecided
-  (`tables-identity.md` §6, `indexes-and-query-patterns.md` §2). The migration can
-  omit the default and the index, or it can decide the vocabulary. It cannot do
-  neither and claim neither was chosen.
+- **No P1 item blocks the Phase 3 DDL any more.** Until Phase 2.4 the single
+  blocker was `OPEN-09`: `plantings.status` has a `DEFAULT 'active'` and
+  `plantings_active_idx` filters on `status = 'active'`, both spelling a value
+  whose vocabulary is undecided. `D26` removes the question from the DDL instead
+  of answering it — `plantings` ships with no default on that column and no
+  partial index on that literal, so the vocabulary stays open and the table is
+  still creatable. The vocabulary itself remains P1 and blocks the first writer.
+- **"Not blocking Phase 3" is not one condition, and the `Blocking` column says
+  which one applies.** `hard` means no path exists. `conditional` means the path
+  works until a named condition enters scope — `OPEN-03` at production launch,
+  `OPEN-28` if a leaked DSN is in scope. `mitigated` means a labelled fallback
+  ships — `OPEN-02`. `none` means Phase 3 settles it by omission — `OPEN-09`.
+  Collapsing these into one bucket is how `OPEN-02` and `OPEN-28` ended up looking
+  identical when they are not.
 - **The four items previously listed alone here — `OPEN-01`, `OPEN-17`,
   `OPEN-26`, `OPEN-27` — are not Phase 3 DDL blockers either.** They were the
   four that block the *first slice that consumes a Phase 3 table*: auth, snapshot,
@@ -191,13 +216,15 @@ No enum is written anywhere. `plantings_active_idx` assumes a value spelled
 `active`, and the column carries `DEFAULT 'active'`. Options: `active` ·
 `harvested` · `failed` · `abandoned`.
 
-**Blocks:** the `plantings.status` `DEFAULT` and `plantings_active_idx` — both are
-Phase 3 DDL and both would encode the spelling before anyone chose it — and the
-"what is growing here" query that reads through the index
-(`tables-identity.md` §6, `indexes-and-query-patterns.md` §2).
-**Does not block:** the rest of `plantings` (the column can be `NOT NULL`-less
-`text` with no default), or any other table. This is the **only** P1 item that
-changes what the Phase 3 migration must contain.
+**Blocks:** the first writer of a `plantings` row, and the "what is growing here"
+query that would read through the index (`tables-identity.md` §6,
+`indexes-and-query-patterns.md` §2).
+**Does not block Phase 3 any more.** `D26` (Phase 2.4) removes the question from
+the migration instead of answering it: the column ships `NOT NULL` with **no
+default**, and `plantings_active_idx` is **not created**. Both arrive in one
+additive migration once the vocabulary is decided, with no data rewrite — no row
+can exist before then. `D26` is a decision about the DDL, not about the
+vocabulary, and the vocabulary is still open.
 
 ### `OPEN-18` — `cell_key` rounding rule per model — **P1**
 
@@ -319,3 +346,60 @@ in the document that makes it.
 | `D23` | harvest is per picking event — many per planting; yield is aggregated at read time | `tables-identity.md` §7 |
 | `D24` | `weather_records` stores only the four forecast classes; observations, climatology, and verification truth have other homes | `tables-climate.md` §4 |
 | `D25` | the suitability vocabulary is `suitable`/`conditional`/`unsuitable`/`insufficient_data`; `poor` is gone | `tables-derived.md` §2 |
+| `D26` | `plantings.status` ships with no `DEFAULT` and no `plantings_active_idx`; both arrive with the vocabulary (`OPEN-09`) in one additive migration | `tables-identity.md` §6 |
+
+## 5. Phase 2.4 dispositions
+
+Every id has exactly one disposition. The vocabulary is fixed, because "not P0"
+and "deferred" were doing too much work:
+
+| Disposition | Means |
+|---|---|
+| **RESOLVED** | a decision is made and recorded; the item is no longer open |
+| **DEFERRED** | no Phase 3 dependency; assigned to a named later subsystem, where the work is technical rather than a judgement call |
+| **BLOCKED_EXTERNAL_INPUT** | needs a product, legal, licensing, agronomic, or security decision this project cannot make for itself |
+| **NOT_APPLICABLE** | only with evidence; no item currently uses it |
+
+| ID | Disposition | Assigned to | Why Phase 3 does not depend on it |
+|---|---|---|---|
+| `OPEN-09` | **DEFERRED** | the first `plantings` writer | the DDL half is settled by omission (`D26`): no default, no partial index |
+| `OPEN-01` | **BLOCKED_EXTERNAL_INPUT** | authentication slice; owner approval of a fourth role or a `SECURITY DEFINER` function | `app_api` keeps no grant on `app.users`; Phase 3 adds no auth object |
+| `OPEN-13` | **BLOCKED_EXTERNAL_INPUT** | authentication slice, with `OPEN-01` | no session table exists in this model |
+| `OPEN-17` | **BLOCKED_EXTERNAL_INPUT** | product decision, then the snapshot path | a `POINT` row is storable; only its snapshot is impossible |
+| `OPEN-18` | **DEFERRED** | ingestion; the rule is derivable from each grid's published resolution | `cell_key` is `text`; no constraint depends on its content |
+| `OPEN-21` | **BLOCKED_EXTERNAL_INPUT** | agronomic decision, then snapshot construction | the columns stay unconstrained `text` |
+| `OPEN-26` | **DEFERRED** | the window engine that produces segments | the table, plus a `jsonb_typeof` array check, is all the schema can honestly do |
+| `OPEN-27` | **BLOCKED_EXTERNAL_INPUT** | worker phase, with a security review of the narrowest read shape | grants ship the default: nothing to `app_system` |
+| `OPEN-11` | **DEFERRED** | AI slice; the contract is authored with the briefing engine | `ai_briefings` is creatable exactly as specified |
+| `OPEN-04` | **BLOCKED_EXTERNAL_INPUT** | product/legal decision on account deletion | `users` is already implemented and unchanged |
+| `OPEN-03` | **BLOCKED_EXTERNAL_INPUT** | commercial decision at production launch | development use is inside the free tier |
+| `OPEN-05` | **BLOCKED_EXTERNAL_INPUT** | licensing, per provider | the column is an object-store key, granted or `NULL` |
+| `OPEN-02` | **BLOCKED_EXTERNAL_INPUT** | BMKG written permission | the labelled Open-Meteo fallback ships |
+| `OPEN-28` | **DEFERRED** (conditional) | security review, only if a leaked DSN enters scope | the current threat model is the documented one |
+| `OPEN-06` | **DEFERRED** | catalog seed authoring | `photoperiod_sensitivity` is unconstrained text, unused |
+| `OPEN-07` | **DEFERRED** | constraint engine | `comparator = 'window'` is rejected by a `CHECK` |
+| `OPEN-08` | **DEFERRED** | catalog seed authoring | `requirement_profile` is unconstrained text |
+| `OPEN-10` | **DEFERRED** | catalog seed authoring | `crops.category` is unconstrained text; no code branches on it |
+| `OPEN-12` | **DEFERRED** | Phase 9 verification/scoring | no verification table is specified or created |
+| `OPEN-14` | **DEFERRED** | weather aggregation | the vocabularies are named in a `CHECK`, not frozen |
+| `OPEN-15` | **DEFERRED** | resolution engine, when multi-cell weighting exists | `centroid` is the v1 policy |
+| `OPEN-16` | **DEFERRED** | Phase 4 retention work | an empty table has no growth policy to enforce |
+| `OPEN-19` | **DEFERRED** | `updated_at` maintenance, when a writer exists | `DEFAULT now()` is applied; no trigger |
+| `OPEN-20` | **DEFERRED** | catalog seed authoring | the catalogs are empty until seeded |
+| `OPEN-22` | **DEFERRED** | Phase 6 spatial queries | the index exists and is unused |
+| `OPEN-23` | **DEFERRED** | application invariant, with the planting writer | not expressible as a database constraint |
+| `OPEN-24` | **DEFERRED** | catalog constraint authoring | one composite FK plus one unique key, added later |
+| `OPEN-25` | **DEFERRED** | writer discipline | a looping supersession chain is a bug, not a state |
+| `OPEN-29` | **DEFERRED** | snapshot builder | the column stores what the contract says it stores |
+
+**Counts:** 0 RESOLVED, 20 DEFERRED, 9 BLOCKED_EXTERNAL_INPUT, 0 NOT_APPLICABLE.
+
+Zero `RESOLVED` is the honest result, not an omission: every remaining `OPEN` is
+a question whose answer has an owner outside this task — a product decision, a
+licence, an agronomic vocabulary, or a security review. The one thing Phase 2.4
+could settle was whether any of them changes the Phase 3 DDL, and `D26` settled
+the only one that did.
+
+Note that `RESOLVED` is not the goal. A phase that resolved `OPEN-17` by assuming a
+500 m radius "for now" would have made the database lie about a plot's area, and
+that lie is inside a hash.

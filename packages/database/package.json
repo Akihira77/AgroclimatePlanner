@@ -27,7 +27,8 @@
     "db:migrate": "prisma migrate deploy",
     "db:status": "prisma migrate status",
     "db:studio": "prisma studio",
-    "test:rls": "pnpm build && node --test test/rls/*.test.mjs"
+    "test:rls": "pnpm build && node --test test/rls/*.test.mjs",
+    "test:schema": "pnpm build && node --test test/schema/*.test.mjs"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.10.1",

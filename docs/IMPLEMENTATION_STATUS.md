@@ -286,7 +286,7 @@ Documentation only. No migration, no Prisma model, no policy, no grant, no runti
 | `temporal-and-weather-semantics.md` | every date/timestamp meaning, the horizon map, freshness thresholds, and five distinct missing-data representations |
 | `indexes-and-query-patterns.md` | 25 named queries and every index justified by one |
 | `lifecycle-and-retention.md` | three removal mechanisms and no others; append-and-supersede in full |
-| `open-decisions.md` | 25 `D-nn` decisions taken, 29 `OPEN-nn` questions left open with severity, scope, and what would settle each; one authoritative blocker matrix (none P0) |
+| `open-decisions.md` | 26 `D-nn` decisions taken, 29 `OPEN-nn` questions left open with severity, scope, disposition, and what would settle each; one authoritative blocker matrix (none P0) |
 | `consistency-checklist.md` | 50+ cross-document checks, three defects found in other documents, and the withheld approval |
 | `docs/adr/ADR-003-trusted-tenant-context.md` | what `app.user_id` actually guarantees, measured |
 
@@ -303,7 +303,7 @@ Correction pass over Phase 2.3, driven by the independent architecture review. D
 | Correction | Before | After |
 |---|---|---|
 | open-decision count | "25 questions left open" in two places (a real 25 that matched the `D-nn` count, not the `OPEN-nn` count) | **29 defined, 29 referenced, 0 dangling**; 25 of them cited outside `open-decisions.md`, and the document now says so instead of implying all are cross-referenced |
-| decision count | 25 `D-nn` | 25 `D-nn`, 12 cited outside the decision table, 0 dangling |
+| decision count | 25 `D-nn` | 25 `D-nn`, 12 cited outside the decision table, 0 dangling (`D26` added in 2.4) |
 | severity scheme | P0 = "blocks Phase 3 start", which was false for every item that carried it | severity is **scope**: P0 = blocks the whole phase, P1 = blocks one named subsystem, P2 = settle during implementation. **Nothing is P0**, because every table, constraint, index, policy, and grant can be created today |
 | `OPEN-17` severity | P0 in `open-decisions.md`, P1 in `spatial-model.md` | **P1 in both**, with the scope stated: only point-shaped fields are blocked; escalates to P0 if point fields become a v1 requirement |
 | `OPEN-26` visibility | P1 in the detail list, absent from the blocker summary | in the authoritative matrix as a `planting_windows` **write-path** blocker; `tables-derived.md` now states that no invalid partition may be persisted as a valid window once the writer exists |
@@ -337,3 +337,106 @@ The defect: `open-decisions.md` §1.1 presented four P1 items as *the* blocker m
 Four things this phase deliberately did **not** do: resolve any `OPEN-nn`, invent a classification where the documents did not support one, renumber an id, or soften `OPEN-17`'s escalation clause. `OPEN-09` appears in the matrix as a finding, not as a decision — `plantings.status` has no vocabulary today and this phase did not choose one.
 
 Verification was documentation-only: one script over 18 files checking definition uniqueness, matrix coverage in both directions, severity agreement, reference integrity and exhaustive-sounding phrasing, plus `git diff --check` and `git status --short`. `docs/` is in `.prettierignore`, so `pnpm format:check` says nothing about these files.
+
+### Phase 2.4 outcome — decision closure, one DDL blocker removed by omission
+
+The phase asked one question: does anything unresolved make a Phase 3 table or
+security boundary unsafe to implement? After auditing all 29 `OPEN-nn` and all 26
+`D-nn` decisions, the answer is **no** — and it is an answer about the *DDL*, not
+about the subsystems those items block.
+
+| Decision | Content |
+|---|---|
+| `D26` | `plantings.status` ships with no `DEFAULT` and `plantings_active_idx` is **not created**. Both would spell a value `OPEN-09` has not chosen. They arrive together, in one additive migration with no data rewrite, once the vocabulary is settled — and no row can exist before then |
+| disposition vocabulary | `RESOLVED` / `DEFERRED` / `BLOCKED_EXTERNAL_INPUT` / `NOT_APPLICABLE`, applied to every id in `open-decisions.md` §5. **0 resolved, 20 deferred, 9 blocked on external input, 0 not-applicable** |
+| blocking vs severity | two independent axes, because "not P0" and "not blocking" were being used as the same claim. `Blocking` now reads `hard` / `conditional` / `mitigated` / `none`; `OPEN-02` is P1 and `mitigated`, `OPEN-28` is P1 and `conditional` |
+
+**Zero `RESOLVED` is the honest result.** Every remaining `OPEN` is a question whose
+answer has an owner outside this task: a product decision (`OPEN-17`, `OPEN-04`), a
+licence (`OPEN-02`, `OPEN-03`, `OPEN-05`), an agronomic vocabulary (`OPEN-09`,
+`OPEN-21`, `OPEN-06`), or a security review (`OPEN-01`, `OPEN-27`, `OPEN-28`).
+Resolving `OPEN-17` by assuming a 500 m radius "for now" would have made the
+database lie about a plot's area, and that lie would be inside a hash.
+
+`OPEN-09` is therefore **deferred, not closed**: the DDL half is settled by
+omission, the vocabulary is still open, and the first writer is still blocked.
+
+Two normative documents were corrected against the per-table specifications while
+auditing the `D-nn` set, both recorded in `consistency-checklist.md` §10 because a
+silent edit to a normative document is worse than a recorded one:
+`physical-model.md` §4 named `constraints.value_min` (a column `D6` replaced with
+`threshold_lower`/`threshold_upper`) and gave it `numeric(6,2)` where
+`tables-catalog.md` §5 gives `numeric(10,2)`.
+
+### Phase 3 outcome — the nineteen tables exist
+
+One migration, hand-written SQL, applied with `prisma migrate deploy`:
+`packages/database/prisma/migrations/20261118030000_domain_tables/migration.sql`.
+
+| Group | Tables |
+|---|---|
+| field operations (tenant, RLS forced) | `field_outlook_cells`, `field_observations`, `plantings`, `harvests` |
+| catalog (reference, no RLS) | `crops`, `cultivars`, `crop_profile_versions`, `growth_stages`, `constraints`, `source_refs` |
+| weather plane (global, no RLS) | `outlook_cells`, `forecast_runs`, `ingestion_runs`, `weather_records`, `monthly_outlooks`, `climatology_normals` |
+| derived artifacts (tenant, RLS forced) | `suitability_runs`, `planting_windows`, `ai_briefings` |
+
+`app.users`, `app.farms` and `app.fields` are untouched. The database now holds 22
+domain tables, 20 policies (10 tenant tables × tenant isolation + owner access), and
+36 new indexes. `app_system` received **nothing** on any tenant-owned table and
+`RW` on the twelve global ones; `app_api` received `R` on the catalog and the
+weather plane, `R` plus one column-level `INSERT (provider, model, cell_key)` on
+`outlook_cells`, and `RW` on the tenant tables it owns.
+
+Three things the migration deliberately does not do: no `DEFAULT` on
+`plantings.status`, no `plantings_active_idx` (`D26`), and no
+`crop_profile_versions_immutable` trigger (`tables-catalog.md` §3 specifies it and
+defers it). Nothing is `CONCURRENTLY`: the tables are empty, and `migrate deploy`
+wraps each migration in one transaction anyway.
+
+Verified by running, not by reading:
+
+| Check | Command | Result |
+|---|---|---|
+| applies to the development database | `pnpm db:migrate` | 3 migrations, "All migrations have been successfully applied", exit 0 |
+| `app` schema shape | `pg_class` / `pg_constraint` / `pg_indexes` | 22 domain tables (+ `_prisma_migrations`), 36 FK, 116 `CHECK`, 13 `UNIQUE`, 75 indexes, 20 policies |
+| blocking invariants | `pg_attribute` / `pg_index` | `plantings.status` `column_default` NULL; `plantings_active_idx` absent; `weather_records_live_key.indnullsnotdistinct = true`; `app_api` holds `INSERT` on exactly `outlook_cells.provider/model/cell_key`; no `app_api` privilege on `users` |
+| installs from empty | isolated compose project `agroclimate-cleanverify`, port 5499, own volume | bootstrap + `db:migrate` exit 0; all 23 relations, 7 forced-RLS tables, 20 policies, and the `app_system`/`app_api` matrices as above; re-run reports "No pending migrations to apply"; project and volume removed, development container untouched |
+| constraint behaviour | savepoint-isolated inserts as `migration_owner` on the development database, rolled back | `plantings` without `status` → `23502`; `pending` with a value → `23514` on `value_state`; `beyond_horizon` on a non-climatology class → `23514` on `beyond_horizon_check`; a climatology `beyond_horizon` month → accepted; cross-tenant field on `plantings` → `23503` on `plantings_field_owner_fkey`; duplicate live `weather_records` row with `ensemble_member` NULL → `23505` on `weather_records_live_key` |
+| point geometry | `ST_Area(POINT(…))` | **0**, which is the measured basis of `OPEN-17`: a point-shaped field has `area_ha = 0` and cannot satisfy a positive-area snapshot |
+
+Four implementation deviations are recorded in `consistency-checklist.md` §11 rather
+than left for a reader to find: `monthly_outlooks_value_state_check` written as an
+implication (the specification's prose states the rule, its literal constraint does
+not enforce half of it), a nine-value `data_class` `CHECK` on `monthly_outlooks`
+mirroring the contract enum, a `beyond_horizon` ⇒ value-present check, and
+`field_outlook_cells` carrying `resolved_at` instead of `created_at`.
+
+| RLS isolation, seven new tenant tables | `pnpm test:rls`, as `app_api` through `withTenant` | 39 tests / 39 pass. Tenant A sees zero rows of tenant B for SELECT, UPDATE and DELETE on all seven; an INSERT naming tenant B's parent fails `23503` on all seven; no tenant context returns zero rows. UPDATE/DELETE report **zero rows affected, no error** — the `USING` clause filters the row before `WITH CHECK` is reached, and the suite asserts the row count rather than inventing a `42501` |
+| schema conformance | `pnpm --filter @agroclimate/database test:schema` | 12 tests / 12 pass: 22-table inventory with no extras, PK on all 22, RLS forced on 10 and off on 12, `plantings.status` default NULL, no `plantings_active_idx`, `weather_records_live_key` unique + NULLS NOT DISTINCT, all nine composite ownership edges present with `conkey` length 2 and their `(id, user_id)` targets existing, `fields.geom` `geometry(Geometry,4326)`, `fields.area_ha` `attgenerated = 's'`, zero unconstrained `geometry` columns |
+| privilege matrix, all 22 tables | `pnpm db:verify` | 355 assertions / 0 fail (was 118 covering three tables); `db:verify:probes` 12 / 0 |
+| tenant boundary, actual roles | direct `pg` connections as `app_api` and `app_system` | `app_system`: `SELECT app.fields`, `INSERT app.fields`, `UPDATE app.planting_windows`, `DELETE app.harvests`, `CREATE TABLE app.evil`, `SET ROLE app_api`, `SET ROLE migration_owner` → all `42501`; `SELECT app.weather_records` allowed. `app_api`: the three-column `INSERT` on `outlook_cells` succeeds with `served_lat` NULL, naming `served_lat` → `42501`, `INSERT app.crops` → `42501`, `CREATE TABLE` → `42501` |
+
+**Still not done, and not claimed:** `OPEN-27` is unimplemented — `app_system`
+cannot answer "which fields does this cell serve", because granting that read is the
+decision it is waiting on. `OPEN-01` is unimplemented — `app_api` holds no
+privilege on `app.users`. `OPEN-26`'s six-check partition validator does not exist,
+so a malformed `planting_windows` partition is storable by any path that can write
+the table, and the `jsonb_typeof = 'array'` check is not that validator. The
+`crop_profile_versions_immutable` trigger is not created.
+
+Prisma was synchronized by hand, because `migrate dev` cannot diff a schema that
+contains PostGIS's own objects: `schema.prisma` now carries 22 models, and
+`prisma validate` and `prisma generate` both pass. The file is a *representation*,
+not the source of truth, and it says so in its header. Three things it cannot
+express, each named in the model it belongs to rather than dropped silently:
+
+| Not representable | Where it lives |
+|---|---|
+| every `CHECK` constraint (116 of them) | SQL only. A Prisma `enum` was deliberately **not** introduced for any text-plus-`CHECK` column: it would claim a vocabulary the database enforces and Prisma does not |
+| partial and `NULLS NOT DISTINCT` indexes (12: `weather_records_live_key`, the live/superseded keys on the derived tables, `plantings`-adjacent partials, `ingestion_runs_running_idx`) | SQL only |
+| RLS, policies, grants, the composite-FK *targets* on `farms`/`fields`, and the deferred trigger | SQL only |
+
+One deliberate omission in the other direction: no new model carries `@updatedAt`.
+`updated_at` is a plain column with a `now()` default and no trigger maintains it
+(`OPEN-19`), so marking it `@updatedAt` would have Prisma write a value the
+database never enforces and a migration never creates.

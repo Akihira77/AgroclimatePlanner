@@ -18,7 +18,7 @@ inputs have moved on (`provenance-contract.md` §4).
 | Ownership key | `user_id`, denormalised from `fields` |
 | Purpose | one evaluation of one field against one profile version, aggregating the windows it produced |
 | Lifecycle | created by `recompute.windows` inside `withTenant(ownerId)`; superseded by a later run; never deleted |
-| Exists | no (Phase 3) |
+| Exists | yes (Phase 3, `20261118030000_domain_tables`) |
 
 | Column | Type | Null | Default | Meaning |
 |---|---|---|---|---|
@@ -96,7 +96,7 @@ Notes:
 | Ownership key | `user_id` |
 | Purpose | one recommended interval for one crop/variety on one field, with the evidence partition that justifies it |
 | Lifecycle | created with its run; superseded by a later recompute; a failed recompute leaves the previous window `active` |
-| Exists | no (Phase 3) |
+| Exists | yes (Phase 3, `20261118030000_domain_tables`) |
 
 | Column | Type | Null | Default | Meaning |
 |---|---|---|---|---|
@@ -212,7 +212,7 @@ Notes:
 | Ownership key | `user_id` |
 | Purpose | natural-language narration of a structured result; it explains, it never decides |
 | Lifecycle | generated on request, cached by `input_snapshot_hash`; invalidated by input identity, never by a clock; superseded, never deleted |
-| Exists | no (Phase 3) |
+| Exists | yes (Phase 3, `20261118030000_domain_tables`) |
 
 | Column | Type | Null | Default | Meaning |
 |---|---|---|---|---|

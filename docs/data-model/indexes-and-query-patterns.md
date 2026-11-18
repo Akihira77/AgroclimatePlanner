@@ -67,7 +67,7 @@ inside `withTenant`.
 | `field_outlook_cells_field_idx` | `(field_id)` | Q3 (all providers) |
 | `field_observations_field_time_idx` | `(field_id, observed_at DESC)` | Q4 |
 | `plantings_field_idx` | `(field_id, planted_at DESC)` | Q5 |
-| `plantings_active_idx` | `(user_id, field_id) WHERE status = 'active'` | priority rule; **depends on `OPEN-09`** naming `active` |
+| ~~`plantings_active_idx`~~ | `(user_id, field_id) WHERE status = 'active'` | priority rule; **deferred** — the predicate names a literal `OPEN-09` has not chosen, and `D26` ships `plantings` without it |
 | `plantings_id_user_id_key` | `UNIQUE (id, user_id)` | composite-FK target |
 | `harvests_planting_idx` | `(planting_id, harvested_at DESC)` | Q6 |
 | `harvests_user_time_idx` | `(user_id, harvested_at DESC)` | per-season totals |

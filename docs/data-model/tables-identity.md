@@ -212,7 +212,7 @@ Notes:
 | Ownership key | `user_id` |
 | Purpose | which provider cell serves which field, with the distance and the extraction policy used — stored, not recomputed on read |
 | Lifecycle | one live row per `(field_id, provider, model)`; a geometry edit supersedes them and inserts replacements; never hard-deleted while the field exists |
-| Exists | no (Phase 3) |
+| Exists | yes (Phase 3, `20261118030000_domain_tables`) |
 
 | Column | Type | Null | Default | Meaning |
 |---|---|---|---|---|
@@ -278,7 +278,7 @@ Notes:
 | Ownership key | `user_id` |
 | Purpose | the only source that may be displayed as an observation — user-entered measurements, never provider data |
 | Lifecycle | created by the user; editable and deletable while the field is live; feeds `fieldSnapshot.observationsUsed` |
-| Exists | no (Phase 3) |
+| Exists | yes (Phase 3, `20261118030000_domain_tables`) |
 
 | Column | Type | Null | Default | Meaning |
 |---|---|---|---|---|
@@ -334,7 +334,7 @@ Notes:
 | Ownership key | `user_id` |
 | Purpose | what is actually growing, when it started, and on which cycle basis — the input that makes a recommendation specific to a season |
 | Lifecycle | created at sowing/transplant; status advances; never deleted while history matters |
-| Exists | no (Phase 3) |
+| Exists | yes (Phase 3, `20261118030000_domain_tables`) |
 
 | Column | Type | Null | Default | Meaning |
 |---|---|---|---|---|
@@ -345,7 +345,7 @@ Notes:
 | `planted_at` | `date` | no | — | sowing or transplant date, whichever `cycle_start_used` says |
 | `cycle_start_used` | `text` | no | — | `CHECK (IN ('sowing','transplant'))`; a cultivar may allow both, the row records which |
 | `area_planted_ha` | `double precision` | no | — | `CHECK (> 0)`; may be smaller than `fields.area_ha` |
-| `status` | `text` | no | `'active'` | vocabulary unsettled — `OPEN-09`; **not** checked until it is |
+| `status` | `text` | no | **none** | vocabulary unsettled — `OPEN-09`; no default and no `CHECK` (`D26`) |
 | `created_at` | `timestamptz(6)` | no | `now()` | — |
 | `updated_at` | `timestamptz(6)` | no | `now()` | — |
 
@@ -365,7 +365,7 @@ Indexes:
 | Name | Definition | Query |
 |---|---|---|
 | `plantings_field_idx` | `(field_id, planted_at DESC)` | "what is growing here" and the priority rule in `background-processing.md` §7 |
-| `plantings_active_idx` | `(user_id, field_id) WHERE status = 'active'` | near-term field prioritisation — depends on `OPEN-09` naming `active` |
+| ~~`plantings_active_idx`~~ | `(user_id, field_id) WHERE status = 'active'` | **not created in Phase 3** (`D26`): the predicate names a literal `OPEN-09` has not chosen. Arrives with the vocabulary, in its own migration |
 
 Notes:
 
@@ -376,6 +376,14 @@ Notes:
 - `status` has no `CHECK` because its vocabulary is not established. Adding one
   later is a migration; guessing now would put an unapproved enum into the schema
   and into the partial index above.
+- **`D26` — the column ships bare.** No `DEFAULT 'active'`, and no
+  `plantings_active_idx`. Both would encode a vocabulary decision nobody has made,
+  and a default is the worse of the two: it silently writes `'active'` into every
+  row a future caller omits the column for, including rows that are not active.
+  The column stays `NOT NULL`, so the first writer must supply a decided value —
+  which is exactly the block `OPEN-09` describes. Adding the default and the index
+  later is one additive migration with no data rewrite, because no row can exist
+  yet.
 
 ---
 
@@ -388,7 +396,7 @@ Notes:
 | Ownership key | `user_id` |
 | Purpose | realised yield per picking event |
 | Lifecycle | appended per picking; edited only to correct an entry; hard-deleted with its planting |
-| Exists | no (Phase 3) |
+| Exists | yes (Phase 3, `20261118030000_domain_tables`) |
 
 | Column | Type | Null | Default | Meaning |
 |---|---|---|---|---|

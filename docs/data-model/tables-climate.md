@@ -18,7 +18,7 @@ break the privilege model — so no column here references a tenant.
 | Class | global |
 | Purpose | the identity of a provider's grid node, and the coordinate it actually serves |
 | Lifecycle | created on first reference; `served_lat`/`served_lon` filled by the first successful ingest; never deleted |
-| Exists | no (Phase 3) |
+| Exists | yes (Phase 3, `20261118030000_domain_tables`) |
 
 | Column | Type | Null | Default | Meaning |
 |---|---|---|---|---|
@@ -69,7 +69,7 @@ Notes:
 | Class | global |
 | Purpose | "which model output" — the thing a user-facing "initialized 5 November" refers to |
 | Lifecycle | upserted by natural key; never deleted, never mutated except by a corrective migration |
-| Exists | no (Phase 3) |
+| Exists | yes (Phase 3, `20261118030000_domain_tables`) |
 
 | Column | Type | Null | Default | Meaning |
 |---|---|---|---|---|
@@ -119,7 +119,7 @@ Notes:
 | Class | global |
 | Purpose | "which normalization produced the numbers actually shown" |
 | Lifecycle | one row per `(forecast_run_id, ingestion_version)`; `attempt` increments in place; never deleted |
-| Exists | no (Phase 3) |
+| Exists | yes (Phase 3, `20261118030000_domain_tables`) |
 
 | Column | Type | Null | Default | Meaning |
 |---|---|---|---|---|
@@ -182,7 +182,7 @@ Notes:
 | Class | global |
 | Purpose | one normalized value: one variable, one validity time, one grid cell, one run |
 | Lifecycle | upserted per supersession key; a normalizer change supersedes rows; **never deleted** |
-| Exists | no (Phase 3) |
+| Exists | yes (Phase 3, `20261118030000_domain_tables`) |
 
 | Column | Type | Null | Default | Meaning |
 |---|---|---|---|---|
@@ -279,7 +279,7 @@ Notes:
 | Class | global, keyed by cell — **not** tenant-owned (`D2`) |
 | Purpose | one month of one variable for one cell, resolved to a single `dataClass`, with its anomaly and provenance |
 | Lifecycle | recomputed per cell; superseded by status change; never deleted; a `failed` attempt leaves the previous `active` row untouched |
-| Exists | no (Phase 3) |
+| Exists | yes (Phase 3, `20261118030000_domain_tables`) |
 
 | Column | Type | Null | Default | Meaning |
 |---|---|---|---|---|
@@ -377,7 +377,7 @@ Notes:
 | Class | global |
 | Purpose | the 1991–2020 monthly normal for a cell, per baseline version |
 | Lifecycle | built once per `(baseline_version)`; a rebuild is a **new version**, never an edit |
-| Exists | no (Phase 3) |
+| Exists | yes (Phase 3, `20261118030000_domain_tables`) |
 
 | Column | Type | Null | Default | Meaning |
 |---|---|---|---|---|

@@ -81,7 +81,7 @@ normalised value, and the golden vectors would fail.
 | Kind | Type | Why |
 |---|---|---|
 | measured provider value (`weather_records.value_mm`, `monthly_outlooks.value_mm`) | `double precision` | must round-trip exactly as received; `numeric` would rewrite `0.30000000000000004` into `0.3` and change a `recordSetHash` |
-| agronomic threshold (`constraints.value_min`) | `numeric(6,2)` | curated by a human, compared with tolerance, needs exact decimal semantics |
+| agronomic threshold (`constraints.threshold_lower` / `threshold_upper`) | `numeric(10,2)` | curated by a human, compared with tolerance, needs exact decimal semantics |
 | derived quantity (`fields.area_ha`) | `double precision` | computed by PostGIS from the geometry; there is one definition and it is not re-rounded |
 | coordinate (`served_lat`, `requested_lon`) | `double precision` | never `numeric`: providers publish floats and a served coordinate is a measurement |
 | money, ids, durations | not present | — |
