@@ -364,11 +364,30 @@ Sorted object keys do **not** normalise array order. Two payloads with identical
 | `DerivationProvenance.inputRefs` | `(kind, role, purpose, first id)` | no — two refs of the same role for different cells are both real |
 | `DerivationDescriptor.sourceArtifactHashes` | lexicographic | yes |
 | `SegmentProvenance.forecastRunIds` / `ingestionRunIds` | lexicographic | yes |
-| `MissingReason` ranges | `(startDate, endDate)` | no |
+| `DataInputRef.forecast.forecastRunIds` / `ingestionRunIds` | lexicographic | yes |
+| `DataInputRef.baseline.cellKeys` | lexicographic | yes |
+| `DataInputRef.observation.observationIds` | lexicographic | yes |
+| `missingRanges` | `(startDate, endDate)` | no — adjacent ranges are not duplicates |
+
+The nested `DataInputRef` arrays were the gap in the first version of this table: they are sets of ids that are hashed as part of the descriptor, so leaving their order to the producer made the parent `inputRefs` order — and therefore `inputSnapshotHash` — depend on response order.
+
+#### `first id` is computed after the nested arrays are canonicalised
+
+The fourth key of `inputRefs` is the ref's first identity id, and "first" means first **after** the nested array has been ordered lexicographically — i.e. the minimum, not `forecastRunIds[0]` as received. A ref carrying `["run-b", "run-a"]` must sort identically to one carrying `["run-a", "run-b"]`; reading element zero would make the parent order depend on the producer's emission order, which is exactly what this section exists to remove.
+
+Selection order across variants follows the variant that carries the ids: `forecastRunIds` → `observationIds` → `cellKeys`. `dataset` refs have no id array and fall back to `datasetVersion`, `baseline` to `baselineVersion`.
+
+#### Tie-breaking and conflict handling
+
+1. **Stable canonical representation is the final tie-breaker.** If two entries agree on every documented key, the full canonical serialisation of the entry decides the order. Without a total order, two runs could emit different orders for identical content and therefore different hashes.
+2. **Dedup is permitted only where the table says so,** and only when the entries are identical. Collapsing entries is not a general right of the canonicaliser.
+3. **Duplicate identity with conflicting content throws.** Where `dedupe` is `yes`, the identity *is* the record identity, so two records sharing it but differing in any other field are contradictory input — a duplicate `observationId` with a different `value`, or the same cell key with a different `distanceKm`. The canonicaliser raises an error and names the array; it never picks a winner.
+4. **Where `dedupe` is `no`, an identity collision is a sort tie, not a duplicate.** `inputRefs` and `missingRanges` deliberately keep every entry: two refs of one role for different cells are both real, and adjacent missing ranges are not a contradiction. Rule 3 does not apply there, because the key tuple is coarser than the record.
+5. **A missing key is an error, not a default.** An entry without an identity key cannot be ordered, so it is rejected rather than sorted to one end.
 
 Two rules that follow, and are not negotiable:
 
-1. Ordering is applied by the canonicaliser, not by whoever builds the object. A helper that hashes an already-ordered array is fine; a helper that expects callers to order it is the bug.
+1. Ordering is applied by the canonicaliser, not by whoever builds the object. A helper that hashes an already-ordered array is fine; a helper that expects callers to order it is the bug. **No caller is responsible for remembering canonical ordering**, and none may pre-sort and assume the canonicaliser will detect it.
 2. **Golden vectors must include a permutation case**: same content, shuffled arrays, identical hash. Without that vector the rule is a comment.
 
 `resolvedCells` is the case that matters most in practice — it is populated from a provider response in whatever order the provider returned, so two ingest runs of the same run could otherwise yield different field hashes for identical data.

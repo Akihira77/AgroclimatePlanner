@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CanonicalOrderError,
+  firstRefId,
   orderObjectArray,
   orderStringArray,
   objectArrayRules,
@@ -75,6 +76,31 @@ describe("canonical array ordering", () => {
     expect(
       orderObjectArray("inputRefs", [ref, earlier]).map((entry) => entry.forecastRunIds),
     ).toEqual([["run-a"], ["run-b"]]);
+  });
+
+  it("derives the first id from the canonicalised array, not from element zero", () => {
+    expect(firstRefId({ forecastRunIds: ["run-b", "run-a"] })).toBe("run-a");
+    expect(firstRefId({ cellKeys: ["cell-z", "cell-a"] })).toBe("cell-a");
+
+    const unsorted = {
+      kind: "forecast",
+      role: "seasonal",
+      purpose: "input",
+      forecastRunIds: ["run-b", "run-a"],
+      ingestionRunIds: ["ingest-1"],
+      recordSetHash: "a".repeat(64),
+    };
+    const sorted = { ...unsorted, forecastRunIds: ["run-a", "run-b"] };
+    const earlier = {
+      ...unsorted,
+      forecastRunIds: ["run-0"],
+      recordSetHash: "b".repeat(64),
+    };
+
+    const fromUnsorted = orderObjectArray("inputRefs", [unsorted, earlier]).map(firstRefId);
+    const fromSorted = orderObjectArray("inputRefs", [sorted, earlier]).map(firstRefId);
+    expect(fromUnsorted).toEqual(["run-0", "run-a"]);
+    expect(fromUnsorted).toEqual(fromSorted);
   });
 
   it("keeps adjacent missing ranges, ordered by date", () => {

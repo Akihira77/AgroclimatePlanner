@@ -163,13 +163,20 @@ export function orderStringArray(arrayName: StringArrayName, values: readonly st
 }
 
 /**
- * First identity id of a `DataInputRef`, used as the final sort key so that two
- * refs with the same `(kind, role, purpose)` still order deterministically.
+ * First identity id of a `DataInputRef`, used as the fourth sort key.
+ *
+ * "First" means first **after canonical ordering of the nested array**, i.e.
+ * the lexicographic minimum — not `array[0]`. A ref carrying
+ * `forecastRunIds: ["run-b", "run-a"]` must sort identically to one carrying
+ * `["run-a", "run-b"]`, otherwise the parent order depends on the order the
+ * producer happened to emit.
  */
 export function firstRefId(ref: Record<string, unknown>): string {
   for (const key of ["forecastRunIds", "observationIds", "cellKeys"] as const) {
     const value = ref[key];
-    if (Array.isArray(value) && typeof value[0] === "string") return value[0];
+    if (!Array.isArray(value)) continue;
+    const ids = value.filter((entry): entry is string => typeof entry === "string");
+    if (ids.length > 0) return ids.reduce((min, id) => (id < min ? id : min));
   }
   for (const key of [
     "baselineVersion",

@@ -58,14 +58,21 @@ export const missingReasonSchema = z.enum([
 ]);
 export type MissingReason = z.infer<typeof missingReasonSchema>;
 
-/** ISO 8601 calendar date, interpreted in Asia/Jakarta where a date appears. */
-export const isoDateSchema = z
-  .string()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "expected ISO date YYYY-MM-DD");
+/**
+ * ISO 8601 calendar date, interpreted in Asia/Jakarta wherever a date appears.
+ * Calendar validity is checked, not just shape: `2026-02-31` and `2026-13-01`
+ * are rejected, `2024-02-29` is accepted.
+ */
+export const isoDateSchema = z.iso.date();
 export type IsoDate = z.infer<typeof isoDateSchema>;
 
-/** ISO 8601 instant in UTC. */
-export const isoInstantSchema = z.iso.datetime({ offset: true });
+/**
+ * ISO 8601 instant, **UTC only**. `z.iso.datetime()` without `offset: true`
+ * requires the `Z` suffix and rejects `+07:00`, so the contract has exactly one
+ * representation. Values are rejected rather than normalised: silent conversion
+ * would store a different string from the one the provider published.
+ */
+export const isoInstantSchema = z.iso.datetime();
 export type IsoInstant = z.infer<typeof isoInstantSchema>;
 
 /**
