@@ -188,16 +188,33 @@ function compareIdentities(left: readonly string[], right: readonly string[]): n
 }
 
 /**
- * Every index from 0 to length-1 must be an own property. A hole survives
- * `map()`, and `join()` would then emit `[,"x"]` — not valid JSON, and not a
- * value anyone can reproduce from the same inputs.
+ * Builds the element list with an explicit loop instead of `map()`.
+ *
+ * Two reasons, both observable: `map()` preserves holes (so a sparse array
+ * would emit `[,"x"]`, which is not JSON), and it *invokes* a getter defined at
+ * an index. A canonicaliser that calls an accessor is executing caller code and
+ * hashing a value that was never passed to it.
  */
-function assertDense(values: readonly unknown[], path: string): void {
+function canonicalizeElements(
+  values: readonly unknown[],
+  path: string,
+  stack: Set<object>,
+): Node[] {
+  const items: Node[] = [];
   for (let index = 0; index < values.length; index += 1) {
-    if (!Object.hasOwn(values, index)) {
+    const descriptor = Object.getOwnPropertyDescriptor(values, index);
+    if (!descriptor) {
       throw new CanonicalizationError(path, `sparse array: index ${index} is missing`);
     }
+    if (!("value" in descriptor)) {
+      throw new CanonicalizationError(
+        `${path}[${index}]`,
+        "accessor at an array index is not serialisable",
+      );
+    }
+    items.push(canonicalizeValue(descriptor.value, `${path}[${index}]`, undefined, stack));
   }
+  return items;
 }
 
 function canonicalizeArray(
@@ -214,10 +231,7 @@ function canonicalizeArray(
     );
   }
 
-  assertDense(values, path);
-  const items = values.map((value, index) =>
-    canonicalizeValue(value, `${path}[${index}]`, undefined, stack),
-  );
+  const items = canonicalizeElements(values, path, stack);
   if (rule.kind === "sequence") return new ArrayNode(items);
 
   const scored = items.map((item) => ({

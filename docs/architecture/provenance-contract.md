@@ -360,6 +360,7 @@ Each `inputRefs` entry contributes only its identity fields — `kind`, `role`, 
 | Object keys | sorted by UTF-16 code unit (not locale collation), recursively; emitted from an explicit sorted entry list, never from object enumeration | yes |
 | Arrays | ordered by the table below, recursively; an array with no declared rule **throws** | yes |
 | Sparse arrays | rejected, with the array path and the missing index in the error | yes |
+| Accessors — object property or array index | rejected without invoking the getter | yes |
 | Non-plain objects (`Date`, `Map`, `Set`, `RegExp`, class instances) | rejected, never serialised as `{}` | yes |
 | Own `__proto__` key | preserved as an ordinary property; never assigned through the prototype | yes |
 | Numbers | ECMAScript `Number::toString` — shortest round-trip; `-0` → `0` | yes |

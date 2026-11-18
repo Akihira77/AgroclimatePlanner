@@ -284,3 +284,46 @@ describe("unsupported object prototypes", () => {
     expect(() => canonicalJson({ [Symbol("k")]: 1 })).toThrow(/symbol-keyed/);
   });
 });
+
+describe("array accessors", () => {
+  const withGetter = (): { values: string[]; reads: () => number } => {
+    let count = 0;
+    const values = ["placeholder"];
+    Object.defineProperty(values, "0", {
+      get() {
+        count += 1;
+        return "sneaky";
+      },
+      enumerable: true,
+      configurable: true,
+    });
+    return { values, reads: () => count };
+  };
+
+  it("rejects an accessor at an index without executing the getter", () => {
+    const { values, reads } = withGetter();
+    expect(() => canonicalJson({ sourceArtifactHashes: values })).toThrow(
+      /accessor at an array index/,
+    );
+    expect(reads()).toBe(0);
+  });
+
+  it("rejects an accessor inside a sequence array", () => {
+    const { values, reads } = withGetter();
+    expect(() => canonicalJson({ evidenceSegments: values })).toThrow(/accessor at an array index/);
+    expect(reads()).toBe(0);
+  });
+
+  it("names the array and index in the path", () => {
+    const { values } = withGetter();
+    expect(() => canonicalJson({ sourceArtifactHashes: values })).toThrow(
+      /\$\.sourceArtifactHashes\[0\]/,
+    );
+  });
+
+  it("still accepts a dense array of plain values", () => {
+    expect(canonicalJson({ sourceArtifactHashes: ["b", "a"] })).toBe(
+      '{"sourceArtifactHashes":["a","b"]}',
+    );
+  });
+});
