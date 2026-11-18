@@ -19,4 +19,83 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  // Application objects live in `app`, owned by migration_owner (Phase 2.2.2).
+  // Prisma qualifies every statement with this schema; without it the client
+  // asks for `public.farms`, which does not exist and never will.
+  schemas  = ["app"]
+}
+
+// Phase 2.2.3 — tenant-owned tables. The SQL in
+// prisma/migrations/20261118020000_tenant_tables is authoritative: this file is
+// kept in sync by hand, because `migrate dev` cannot diff a schema that
+// contains PostGIS's own tables.
+//
+// Two columns are `Unsupported`, on purpose. `geom` is a PostGIS geometry that
+// Prisma cannot read or write, and `area_ha` is a generated column that the
+// database computes from `geom`. Both are reached through raw SQL; leaving them
+// out entirely would make this file lie about the schema, and pretending they
+// are ordinary columns would let the client write values the database rejects.
+
+model User {
+  id           String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  locale       String   @default("id")
+  timezone     String   @default("Asia/Jakarta")
+  role         String   @default("owner")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  farms        Farm[]
+
+  @@schema("app")
+  @@map("users")
+}
+
+model Farm {
+  id        String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  name      String
+  region    String?
+  notes     String?
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  user   User    @relation(fields: [userId], references: [id])
+  fields Field[]
+
+  // The target of fields' composite foreign key, mirrored here so the schema
+  // reflects why the constraint exists.
+  @@unique([id, userId], map: "farms_id_user_id_key")
+  @@index([userId], map: "farms_user_id_idx")
+  @@schema("app")
+  @@map("farms")
+}
+
+model Field {
+  id                     String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId                 String   @map("user_id") @db.Uuid
+  farmId                 String   @map("farm_id") @db.Uuid
+  name                   String
+  geom                   Unsupported("geometry(Geometry, 4326)") @default(dbgenerated())
+  areaHa                 Unsupported("double precision")? @map("area_ha")
+  elevationM             Decimal? @map("elevation_m") @db.Decimal(7, 2)
+  soilType               String?  @map("soil_type")
+  soilPh                 Decimal? @map("soil_ph") @db.Decimal(3, 1)
+  drainageClass          String?  @map("drainage_class")
+  irrigationAvailability String?  @map("irrigation_availability")
+  waterSource            String?  @map("water_source")
+  croppingHistoryNotes   String?  @map("cropping_history_notes")
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt              DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  // Ownership travels with the reference: (farm_id, user_id) -> farms(id, user_id).
+  farm Farm @relation(fields: [farmId, userId], references: [id, userId])
+
+  @@unique([id, userId], map: "fields_id_user_id_key")
+  @@index([userId], map: "fields_user_id_idx")
+  @@index([farmId], map: "fields_farm_id_idx")
+  @@schema("app")
+  @@map("fields")
 }

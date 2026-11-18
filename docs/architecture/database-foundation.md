@@ -14,9 +14,14 @@ migration ledger — not the schema author.
 | Client factory | `packages/database/src/index.ts` |
 | Role boundary, schema ownership, default deny | `packages/database/bootstrap/roles.sql` |
 | Role provisioning (passwords from env, cluster-admin connection) | `packages/database/scripts/bootstrap.mjs` |
-| Privilege verification against the real roles | `packages/database/scripts/verify-privileges.mjs` |
+| Shared connection resolution for every script | `packages/database/scripts/lib/connections.mjs` |
+| Privilege verification against the real roles | `packages/database/scripts/lib/privilege-verification.mjs` |
+| Probe isolation and cleanup-safety test | `packages/database/scripts/verify-probe-isolation.mjs` |
+| Tenant tables, RLS policies, runtime grants | `packages/database/prisma/migrations/20261118020000_tenant_tables/` |
+| `withTenant` — the only tenant entry point | `packages/database/src/tenant.ts` |
+| Unit tests (no database) and RLS integration tests | `packages/database/test/unit/`, `packages/database/test/rls/` |
 
-Root scripts: `db:up`, `db:down`, `db:reset`, `db:bootstrap`, `db:migrate`, `db:verify`, `db:generate`, `db:status`.
+Root scripts: `db:up`, `db:down`, `db:reset`, `db:bootstrap`, `db:migrate`, `db:verify`, `db:verify:probes`, `db:generate`, `db:status`.
 
 `db:reset` deletes the volume — which deletes the roles too, `initdb` having run
 once — so it re-runs `db:bootstrap` before `db:migrate`. The order matters.
@@ -280,11 +285,11 @@ password, and asserts behaviour. A denial counts only when PostgreSQL answers
 SQLSTATE `42501`; a missing table (`42P01`), a bad credential (`28P01`), or a
 syntax error all fail the check instead of silently looking like a boundary.
 
-61 checks, covering: identity (`current_user` matches the role, so a denial from
+65 checks, covering: identity (`current_user` matches the role, so a denial from
 the wrong role cannot pass), attributes, absence of memberships, schema ownership
-and `USAGE`/`CREATE`, default privileges, and then, against probe objects created
-*after* the grants were configured — so any access would have to come from a
-default that grants too much:
+and `USAGE`/`CREATE`, default privileges, bootstrap idempotency, and then, against
+probe objects created *after* the grants were configured — so any access would
+have to come from a default that grants too much:
 
 - `SELECT`/`INSERT`/`UPDATE`/`DELETE` on an ungranted table, for both roles
 - `CREATE`/`ALTER`/`DROP` on application tables
@@ -303,9 +308,234 @@ refused exactly where `app_api` is.
 
 ### Probe objects never persist
 
-`app.privilege_probe`, its sequence, and its function are created by the
-verification run and dropped in a `finally` block. They are not migrations and
-never appear in a migration ledger.
+The verification creates `app.privilege_probe_{t,s,f}_<token>`, where the token
+is 12 hex characters generated per run, and drops them in a `finally` block. They
+are not migrations and never appear in a migration ledger.
+
+Two properties follow, and both are asserted by `pnpm db:verify:probes`:
+
+- **Concurrency.** Two runs in flight create distinct objects by construction, so
+  neither can drop the other's table mid-assertion. The old static names made
+  concurrent runs delete each other's fixtures, and a name clash with a real
+  object would have dropped it.
+- **Cleanup safety.** Only objects whose creation succeeded are dropped, and only
+  under this run's token. A failing setup leaves its own partial work removed and
+  anything else alone — the test forces a failure through the library's
+  `afterProbeSetup` hook and then asserts the schema is clean.
+
+The legacy names (`privilege_probe`, `privilege_probe_sequence`,
+`privilege_probe_function`) are now the decoy fixture: the test creates them,
+runs two verifications concurrently, and asserts all three survive with the same
+oids, the same row, the same sequence value, and the same function result.
+`privilege_probe_sequence` and `privilege_probe_function` share a prefix with the
+new scheme, which is why the leftover scan matches `privilege\_probe\_[tsf]\_%`
+rather than the looser pattern.
+
+### Bootstrap is checked for idempotency, not assumed
+
+`db:verify` plants `GRANT CREATE ON SCHEMA app TO app_api`, re-runs
+`bootstrap.mjs` as the cluster admin, and then asserts the grant is gone and
+`USAGE` remains. Bootstrap normalises with `REVOKE ALL ON SCHEMA app FROM
+app_api, app_system` before granting `USAGE`, so repeated runs converge instead
+of accumulating whatever an older bootstrap version left behind.
+
+Without cluster-admin credentials — `BOOTSTRAP_DATABASE_URL` unset outside
+development — the check prints `SKIP` with the reason and is excluded from the
+pass count. A skipped assertion is never reported as a pass.
+
+`public` is owned by `pg_database_owner`, so only a cluster admin can normalise
+direct grants on it; `REVOKE CREATE ON SCHEMA public` for the runtime roles is
+part of the bootstrap, and `db:verify` asserts the effect
+(`has_schema_privilege(app_api, 'public', 'CREATE')` is false).
+
+### Fresh-volume verification in a throwaway Compose project
+
+The documented reset path deletes a volume, so it must not be exercised against
+the development database. Run it as a separate Compose project instead — its own
+container name, its own port, and a volume that belongs only to it:
+
+```bash
+COMPOSE_PROJECT_NAME=agroclimate-reset-check \
+DB_CONTAINER_NAME=agroclimate-db-reset-check \
+POSTGRES_PORT=5542 \
+NODE_ENV=development \
+pnpm db:reset
+
+# same four variables:
+pnpm db:verify
+pnpm db:status
+
+# teardown: the isolated project only
+COMPOSE_PROJECT_NAME=agroclimate-reset-check \
+DB_CONTAINER_NAME=agroclimate-db-reset-check \
+POSTGRES_PORT=5542 docker compose down -v
+```
+
+Exported variables beat the root `.env` on both sides — Compose's own precedence,
+and `process.loadEnvFile` fills in only what the environment does not already set
+— so the isolated run cannot reach 5442 even though `.env` says 5442.
+
+`container_name` is `${DB_CONTAINER_NAME:-agroclimate-db}` for exactly this
+reason: two Compose projects cannot share a container name, and renaming the
+development container outright would orphan the running one on a live port.
+
+## Tenant isolation (Phase 2.2.3)
+
+Three tables, one ownership column, one policy shape. This is the first point at
+which a forgotten `WHERE user_id = …` stops being a data-leak class bug, because
+PostgreSQL refuses the rows instead.
+
+### Inventory
+
+| Table | Ownership column | Policy `USING` / `WITH CHECK` |
+|---|---|---|
+| `app.users` | `id` (the tenant itself) | `id = NULLIF(current_setting('app.user_id', true), '')::uuid` |
+| `app.farms` | `user_id` | `user_id = NULLIF(current_setting('app.user_id', true), '')::uuid` |
+| `app.fields` | `user_id`, denormalised from `farms` | same as `farms` |
+
+`user_id` is denormalised onto `fields` on purpose (domain-model §5, §7). The
+alternative — a policy that joins through `farms` — makes every write a join
+against another RLS-protected table, and puts the ownership rule in two places
+instead of one.
+
+Every table carries `ENABLE` **and** `FORCE ROW LEVEL SECURITY`. Without `FORCE`
+the table owner bypasses its own policies, and the owner is `migration_owner` —
+the connection that runs migrations and fixtures. `FORCE` also means the owner
+needs a policy of its own, which is why each table has an explicit
+`*_owner_full_access` policy for `migration_owner`. That widens nothing: owning a
+table already means `ALTER` and `DROP`.
+
+### Fail-closed, in three ways
+
+```sql
+user_id = NULLIF(current_setting('app.user_id', true), '')::uuid
+```
+
+- unset → `current_setting(..., true)` is `NULL` → `NULLIF` is `NULL` → no row matches
+- empty string → `NULLIF` is `NULL` → no row matches
+- set → compared as `uuid`
+
+No cast error, no default tenant, no "all rows if unset". A missing context reads
+zero rows and cannot write: `WITH CHECK` has nothing to compare against, so
+`INSERT` is rejected at SQLSTATE `42501` rather than silently storing a row
+nobody can read.
+
+### Ownership travels with the reference
+
+```sql
+CONSTRAINT fields_farm_owner_fkey FOREIGN KEY (farm_id, user_id)
+  REFERENCES app.farms (id, user_id)
+```
+
+With `farms` carrying `UNIQUE (id, user_id)` as the target. A tenant cannot
+create a field under another tenant's farm by writing its own `user_id`: the pair
+must match a real farm row. This is a **referential-integrity** denial (`23503`),
+distinct from an RLS denial (`42501`), and the test asserts the SQLSTATE rather
+than lumping both together as "rejected".
+
+### Runtime grants
+
+| Table | `app_api` | `app_system` |
+|---|---|---|
+| `users` | none | none |
+| `farms` | `SELECT, INSERT, UPDATE, DELETE` | none |
+| `fields` | `SELECT, INSERT, UPDATE, DELETE` | none |
+
+No `GRANT ALL`, no `GRANT … ON ALL TABLES`, no default privileges added: 2.2.2's
+default-deny stays the baseline and each table opts in explicitly.
+
+`app_system` keeps `BYPASSRLS` and receives nothing on these tables.
+`background-processing.md` §10 rule 2 says a new tenant-owned table ships without
+an `app_system` grant; the maintenance sweep that would need column-level reads
+does not exist yet, so the grants do not exist either. When it does, the columns
+are added one at a time and `db:verify` asserts the set equals the documented
+list.
+
+`app_api` has **no** grant on `app.users`. Reading a user by email is the
+authentication path, and it runs before a tenant context exists — granting
+`SELECT` here would either need an unpolicied table or invent a security-definer
+function. Deferred, not forgotten.
+
+### `withTenant` — the only entry point
+
+```ts
+const scope = createTenantScope(prisma);
+const farms = await scope.withTenant(userId, (tx) => tx.farm.findMany());
+```
+
+`packages/database/src/tenant.ts`. Four decisions worth stating:
+
+1. **Transaction-scoped.** `set_config('app.user_id', $1, true)` — the `true` is
+   the whole point. A session-level setting on a pooled connection becomes the
+   next request's identity.
+2. **Row-returning raw API.** `$queryRaw`, not `$executeRaw`: `set_config`
+   returns a row, and a write-path call discards the result — turning "the
+   context failed to apply" into "the context silently is not there".
+3. **The callback gets the transaction client.** It cannot reach the global
+   client through `withTenant`, and the type it receives is Prisma's
+   `TransactionClient`, which excludes `$transaction`, `$connect`, and the rest
+   of the lifecycle methods.
+4. **Nested scopes are rejected.** An inner `withTenant` would open an
+   independent transaction with a different tenant — and with one connection in
+   the pool it would deadlock behind its own caller. Internal functions take the
+   `tx` they are given. Detection is per async context (`AsyncLocalStorage`), so
+   two concurrent requests are not mistaken for nesting.
+
+Validation happens before the transaction opens: a non-canonical UUID throws
+`TenantContextError`, because an id that would never match a policy row is
+indistinguishable from "this tenant has no data".
+
+### Verified behaviour
+
+`pnpm --filter @agroclimate/database test:rls` — 10 tests, all against a real
+database and the real roles, fixtures created by `migration_owner` and every
+assertion run as `app_api` or `app_system`:
+
+| Scenario | Result |
+|---|---|
+| A sees only its own farms and fields | pass |
+| B sees only its own | pass |
+| No context: `SELECT` 0 rows, `INSERT` `42501`, `UPDATE`/`DELETE` 0 rows | pass |
+| Context gone after commit, on the same pooled connection (`poolMax: 1`) | pass |
+| Write and context gone after rollback | pass |
+| Concurrent A and B do not cross | pass |
+| Writing a row for another tenant → RLS violation, no row persisted | pass |
+| Field referencing another tenant's farm → `23503`, no row persisted | pass |
+| `app_system` refused `SELECT/INSERT/UPDATE/DELETE` on tenant tables (`42501`) | pass |
+| `app_api` refused DDL and ledger writes (`42501`) | pass |
+
+`pnpm db:verify` grew structural assertions over the same tables — `relrowsecurity`,
+`relforcerowsecurity`, owner, policy `cmd`/`roles`/`qual`/`with_check`, no policy
+granted to `PUBLIC`, the effective privilege matrix per table, the composite
+ownership FK, and column privileges for `app_system`. A policy row existing is not
+evidence that a query is isolated; that is what `test:rls` is for. Conversely a
+behavioural test as `app_api` cannot notice a missing `FORCE` flag, because
+`app_api` was never the bypassing role.
+
+### Schema file
+
+`schema.prisma` declares the three models with `schemas = ["app"]` and
+`@@schema("app")`. Without it Prisma emits `public.farms` and reports a missing
+table — the adapter does not read `?schema=` from the URL the way the query engine
+did. Two columns are `Unsupported`: `geom` (PostGIS, unreadable by the client) and
+`area_ha` (a generated column the database computes). Both are reached through raw
+SQL. Omitting them would make the file lie about the schema; declaring them as
+ordinary columns would let the client write values PostgreSQL rejects.
+
+`area_ha` is `ST_Area(geom::geography) / 10000` as a stored generated column, so
+there is one definition of area and it cannot drift from the geometry. A `POINT`
+geometry therefore has `area_ha = 0` — it has no area, and the column says so
+rather than guessing.
+
+### Not in this phase
+
+`docs/data-model/` does not exist, and `domain-model.md` §3–§6 name derived
+entities (`suitability_runs`, `planting_windows`, `ai_briefings`,
+`weather_records`) whose columns are discriminated unions and typed segments.
+Creating them here would mean inventing the physical schema the documents have
+not specified. They remain Phase 3.
+
+
 
 ## Prisma 7 specifics
 

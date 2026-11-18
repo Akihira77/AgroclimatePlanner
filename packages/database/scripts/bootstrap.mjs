@@ -7,22 +7,25 @@
  *
  * Passwords come from the environment and are applied through `format(%L, …)`,
  * never interpolated into a committed file and never printed.
+ *
+ * Idempotent by construction, which is what lets verification prove it: the SQL
+ * normalises grants on every run, so a direct `GRANT CREATE ON SCHEMA app` left
+ * behind by hand or by an older bootstrap is removed the next time this runs.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 
 import { Client } from "pg";
 
-const PACKAGE_ROOT = new URL("../", import.meta.url);
-const defaults = JSON.parse(readFileSync(new URL("database.defaults.json", PACKAGE_ROOT), "utf8"));
+import {
+  adminConnectionString,
+  defaults,
+  development,
+  env,
+  PACKAGE_ROOT,
+  ROLE_NAMES,
+} from "./lib/connections.mjs";
+
 const rolesSql = readFileSync(new URL("bootstrap/roles.sql", PACKAGE_ROOT), "utf8");
-
-// Same source, same precedence as prisma.config.ts: the root file fills in what
-// the environment has not already set.
-const ROOT_ENV_FILE = new URL("../../.env", PACKAGE_ROOT);
-if (existsSync(ROOT_ENV_FILE)) process.loadEnvFile(ROOT_ENV_FILE);
-
-const env = process.env;
-const development = env["NODE_ENV"] === "development";
 
 const ROLE_PASSWORD_VARIABLES = {
   migration_owner: "MIGRATION_OWNER_PASSWORD",
@@ -30,46 +33,29 @@ const ROLE_PASSWORD_VARIABLES = {
   app_system: "APP_SYSTEM_PASSWORD",
 };
 
-function required(name, fallback) {
-  const provided = env[name];
+function passwordFor(role) {
+  const variable = ROLE_PASSWORD_VARIABLES[role];
+  const provided = env[variable];
   if (provided !== undefined && provided !== "") return provided;
-  if (development) return fallback;
+  if (development) return defaults.roles[role];
   throw new Error(
-    `${name} is required outside development; refusing to use a placeholder credential`,
+    `${variable} is required outside development; refusing to use a placeholder credential`,
   );
 }
 
-function bootstrapConnectionString() {
-  const explicit = env["BOOTSTRAP_DATABASE_URL"];
-  if (explicit !== undefined && explicit !== "") return explicit;
-  if (!development) {
-    throw new Error(
-      "BOOTSTRAP_DATABASE_URL is required outside development. Role bootstrap is a cluster-admin action; there is no localhost fallback.",
-    );
-  }
-
-  const user = encodeURIComponent(required("POSTGRES_USER", defaults.owner));
-  const password = encodeURIComponent(required("POSTGRES_PASSWORD", defaults.ownerPassword));
-  const host = env["POSTGRES_HOST"] || defaults.host;
-  const port = env["POSTGRES_PORT"] || defaults.port;
-  const database = env["POSTGRES_DB"] || defaults.database;
-  return `postgresql://${user}:${password}@${host}:${port}/${database}`;
-}
-
-const admin = new Client({ connectionString: bootstrapConnectionString() });
+const admin = new Client({ connectionString: adminConnectionString() });
 await admin.connect();
 
 try {
   await admin.query("BEGIN");
   await admin.query(rolesSql);
 
-  for (const [role, variable] of Object.entries(ROLE_PASSWORD_VARIABLES)) {
-    const password = required(variable, defaults.roles[role]);
+  for (const role of ROLE_NAMES) {
     // Built server-side so the password is a properly quoted literal. The
     // statement is executed, never logged.
     const { rows } = await admin.query(
       "select format('alter role %I with login password %L', $1::text, $2::text) as statement",
-      [role, password],
+      [role, passwordFor(role)],
     );
     await admin.query(rows[0].statement);
   }
@@ -83,5 +69,5 @@ try {
 }
 
 console.log(
-  "bootstrap complete: roles migration_owner, app_api, app_system (login provisioned); schema app owned by migration_owner",
+  `bootstrap complete: roles ${ROLE_NAMES.join(", ")} (login provisioned); schema app owned by migration_owner`,
 );

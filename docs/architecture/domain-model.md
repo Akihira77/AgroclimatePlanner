@@ -1,6 +1,11 @@
 # Domain Model (conceptual)
 
-Status: Phase 1. Physical schema is Phase 3 (`docs/data-model/`), but the invariants here are binding on it.
+Status: Phase 1. Physical schema is Phase 3 (`docs/data-model/`, which does not
+exist yet), but the invariants here are binding on it. Exception, recorded rather
+than implied: `users`, `farms`, and `fields` were materialised early in Phase
+2.2.3 because row isolation cannot be demonstrated without real tenant-owned
+tables. Their physical columns come from §2 below and nothing else — the derived
+entities (§3–§6) remain unspecified and unmaterialised.
 
 ## 1. Aggregate map
 
@@ -28,6 +33,14 @@ erDiagram
 - `User` — id, email, password hash (argon2), locale, timezone (`Asia/Jakarta` default), role.
 - `Farm` — name, owner, region, notes. Multiple farms per user allowed (the product is one farm *at a time* in the UI, not one farm per account).
 - `Field` — the decision unit. Name, `geom` (Point or Polygon, SRID 4326), area (ha, computed from geom), elevation (m, nullable), soil type, soil pH (nullable), drainage class, irrigation availability, water source, cropping history notes.
+
+Materialised in Phase 2.2.3 as `app.users`, `app.farms`, `app.fields`. Two
+additions the conceptual model implied but did not spell out, both forced by the
+isolation design: `farms` and `fields` carry `deleted_at` (soft delete, §7), and
+`user_id` is denormalised onto `fields` with a composite foreign key
+`(farm_id, user_id) → farms (id, user_id)` so ownership cannot be reassigned by
+writing a mismatched pair. `area_ha` is a stored generated column, not an
+application-computed field.
 
 **Invariant:** every `Field` is resolvable to exactly one `OutlookCell` per provider grid. Resolution is stored, not recomputed on read, and records the served coordinate returned by the provider.
 

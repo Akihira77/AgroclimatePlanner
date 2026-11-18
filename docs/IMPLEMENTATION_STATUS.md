@@ -125,6 +125,8 @@ Phase 2 readiness: **yes, and no further architecture pass is warranted**. Remai
 | 2.2.1 PostgreSQL + PostGIS foundation | done, runtime-verified | `docker-compose.yml`, `packages/database`, `20261118000000_init_extensions` |
 | 2.2.1.x database foundation hardening | done, runtime-verified | single env source, fail-closed production, generated-client lifecycle, loopback binding, `pg_catalog` guard |
 | 2.2.2 roles and privilege boundary | done, runtime-verified | `bootstrap/roles.sql`, `db:bootstrap`, `db:verify` (61 assertions as the real roles) |
+| 2.2.2.x role boundary hardening | done, runtime-verified | per-run probe names, `db:verify:probes`, bootstrap idempotency, fresh-volume reset in an isolated Compose project (65 assertions) |
+| 2.2.3 tenant tables, RLS, `withTenant` | done, runtime-verified | `app.users`/`app.farms`/`app.fields`, 3 RLS policies, `createTenantScope`, 10 RLS tests + 9 unit tests, 118 assertions in `db:verify` |
 
 ### Phase 2.1 outcome
 
@@ -211,4 +213,52 @@ Probe objects (`app.privilege_probe`, its sequence, its function) exist only for
 
 Not verified here: `app_system` denied `SELECT geom FROM fields` and `SELECT body FROM ai_briefings`. Those tables are Phase 3. The column-level mechanism is proven against a probe table instead — one granted column readable, its neighbour denied, `SELECT *` denied, and removal of the grant taking effect immediately.
 
+### Phase 2.2.2.x outcome — role boundary hardening
+
+Four defects in the 2.2.2 verification itself, all closed and each re-measured.
+
+| Defect | Was | Evidence | Now |
+|---|---|---|---|
+| Probe fixtures had static names | `app.privilege_probe`, `_sequence`, `_function` | two concurrent runs would `drop table` each other's fixture; a real object with that name would be deleted | 12-hex token per run, `privilege_probe_{t,s,f}_<token>`; only objects this run created are dropped |
+| Cleanup could not be tested | `finally` block, untested | a failed setup was never exercised | verification is a library; `db:verify:probes` drives the failure path through an `afterProbeSetup` hook and asserts the schema is clean |
+| Direct schema grants were never normalised | only `REVOKE ALL … FROM PUBLIC` + `GRANT USAGE` | a hand-added `GRANT CREATE ON SCHEMA app` would have survived a re-bootstrap | `REVOKE ALL ON SCHEMA app FROM app_api, app_system` before granting `USAGE`, plus `REVOKE CREATE ON SCHEMA public` for both |
+| The reset path was never executed end to end | `db:reset` existed, had only ever run against the development volume | role bootstrap was added to it in 2.2.2 without a fresh-volume run | executed in an isolated Compose project (port 5542, own container name, own volume) |
+
+Bootstrap idempotency is now an assertion rather than a claim: `db:verify` plants a direct `CREATE` grant, re-runs `bootstrap.mjs` as the cluster admin, and asserts the grant is gone while `USAGE` remains. Where cluster-admin credentials are unavailable the check reports `SKIP` with its reason and is excluded from the pass count.
+
+Fresh-volume run, isolated project `agroclimate-reset-check` on port 5542: `db:reset` applied the baseline migration, `db:verify` reported 65 passes and 0 failures, `db:status` reported "Database schema is up to date!". The development container was untouched (same start timestamp, same volume, same ledger row count) and the isolated project's container, network, and volume were removed afterwards.
+
+Also fixed while doing this: connection resolution for the three scripts had drifted into three copies, and the two that loaded the root `.env` had already disagreed about its path. It is now `scripts/lib/connections.mjs`, one implementation for bootstrap, verification, and the RLS tests.
+
 Next: 2.2.3 tenant-owned tables and RLS with transaction-scoped `set_config(..., true)`, then 2.2.4 security assertions against the real domain tables.
+
+### Phase 2.2.3 outcome — tenant isolation enforced by PostgreSQL
+
+Three tables, three policies, one entry point, and ten tests that run as the roles they are about.
+
+| Decision | Effect |
+|---|---|
+| `users`, `farms`, `fields` only | `docs/data-model/` does not exist; the derived entities have columns specified as discriminated unions and creating them would invent the schema |
+| `user_id` denormalised onto `fields` | the policy compares the row's own column instead of joining through `farms` |
+| `ENABLE` + `FORCE ROW LEVEL SECURITY` | without `FORCE` the owner — `migration_owner`, i.e. the fixture and migration connection — reads every tenant's rows, and no test running as `app_api` would notice |
+| explicit `*_owner_full_access` policy per table | `FORCE` otherwise locks the owner out of its own table, which reads as a mysterious "new row violates row-level security policy" during a data migration |
+| policy `USING` **and** `WITH CHECK` | `USING` alone lets a tenant `UPDATE` a row into another tenant's ownership |
+| `NULLIF(current_setting('app.user_id', true), '')::uuid` | unset and empty both yield `NULL` and match nothing: fail-closed, not a cast error and not all rows |
+| `(farm_id, user_id) → farms (id, user_id)` | ownership travels with the reference; a mismatched pair is a `23503`, not a cross-tenant row |
+| `app_system` granted nothing | `BYPASSRLS` confers no SQL privilege, and background-processing §10 says a new tenant-owned table ships without a grant |
+| `app_api` granted nothing on `users` | email lookup is the authentication path, which runs before a tenant context exists; deferred rather than half-built |
+| `schemas = ["app"]` + `@@schema("app")` in `schema.prisma` | without it the adapter emits `public.farms` and reports a missing table |
+| `geom` and `area_ha` as `Unsupported` | both are unreadable or unwritable through the client; the alternatives are a schema file that lies or a client that writes values PostgreSQL rejects |
+
+`createTenantScope(prisma).withTenant(userId, fn)` is the only tenant entry point: `set_config(…, true)` inside a Prisma interactive transaction, through the row-returning raw API (`set_config` returns a row, and a write-path call would discard a silent failure), with the callback receiving the transaction client. Nested scopes throw — an inner scope would open an independent transaction with a different tenant, and on a single-connection pool it would deadlock behind its caller.
+
+Verified by running, not by reading:
+
+- `test:rls` — 10 tests as `app_api`/`app_system` over TCP. Fixtures from `migration_owner`; every negative assertion pinned to a SQLSTATE, so `23503` (cross-tenant FK) and `42501` (RLS/grant) are never conflated.
+- Pool reuse is forced with `poolMax: 1`: context must be gone after commit and after rollback, on the same physical connection.
+- `db:verify` — 118 assertions, including `relrowsecurity`, `relforcerowsecurity`, owner, policy `cmd`/`roles`/`qual`/`with_check`, no `PUBLIC` policy, the effective privilege matrix per table, `has_column_privilege` for `app_system` on `fields.geom`/`fields.soil_ph`, and the composite FK definition.
+- `test` — 9 unit tests, no database: UUID validation before the transaction opens, `set_config(..., true)` shape, nesting rejection, error propagation, concurrent scopes not treated as nesting.
+
+Two defects were found by running it, both in the setup rather than the design: the migration first failed with `type "geometry" does not exist` because the migration connection's `search_path` is `app`, not `public` — every PostGIS type and function in the migration is now schema-qualified; and Prisma asked for `public.farms` until the schema file declared `schemas = ["app"]`.
+
+Not verified: `app_system` reading `planting_windows`/`suitability_runs`/`ai_briefings` columns, because those tables do not exist. Not implemented: authentication lookup for `app.users`, and any `app_system` grant.

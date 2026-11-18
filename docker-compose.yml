@@ -6,7 +6,9 @@
 services:
   db:
     image: postgis/postgis:18-3.6
-    container_name: agroclimate-db
+    # Overridable so a throwaway project (see docs: fresh-volume verification) can
+    # run beside the development container instead of colliding on the name.
+    container_name: ${DB_CONTAINER_NAME:-agroclimate-db}
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-agroclimate}

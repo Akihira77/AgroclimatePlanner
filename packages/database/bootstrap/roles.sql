@@ -29,13 +29,24 @@ CREATE SCHEMA IF NOT EXISTS app AUTHORIZATION migration_owner;
 
 -- Nothing reaches the app schema by default. USAGE only: enough to resolve
 -- names, not enough to create anything.
+--
+-- Normalisation, not just initial grants: `REVOKE ALL ... FROM the role` runs on
+-- every bootstrap so a direct `GRANT CREATE` added by hand, or by an earlier
+-- bootstrap version, is removed rather than accumulating. Repeating this file
+-- converges on the same state. Verification proves that by planting a grant and
+-- re-running it.
 REVOKE ALL ON SCHEMA app FROM PUBLIC;
 REVOKE CREATE ON SCHEMA app FROM PUBLIC;
+REVOKE ALL ON SCHEMA app FROM app_api, app_system;
 GRANT USAGE ON SCHEMA app TO app_api, app_system;
 
 -- `public` holds PostGIS. Runtime roles may reference its types and functions,
--- and still may not create objects there.
+-- and still may not create objects there. `public` belongs to
+-- `pg_database_owner`, so only a cluster admin can normalise direct grants on
+-- it; USAGE stays because PostGIS types live there and `search_path` resolves
+-- through it.
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+REVOKE CREATE ON SCHEMA public FROM app_api, app_system;
 GRANT USAGE ON SCHEMA public TO app_api, app_system;
 
 -- Default privileges are creator-specific: declared for migration_owner, the only

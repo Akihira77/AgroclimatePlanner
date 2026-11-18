@@ -19,13 +19,15 @@
     "build": "prisma generate && tsc -p tsconfig.build.json",
     "typecheck": "prisma generate && tsc -p tsconfig.json --noEmit",
     "lint": "eslint src",
-    "test": "node -e \"console.log('[database] no tests in Phase 2.2.2')\"",
+    "test": "pnpm build && node --test test/unit/*.test.mjs",
     "db:generate": "prisma generate",
     "db:bootstrap": "node scripts/bootstrap.mjs",
     "db:verify": "node scripts/verify-privileges.mjs",
+    "db:verify:probes": "node scripts/verify-probe-isolation.mjs",
     "db:migrate": "prisma migrate deploy",
     "db:status": "prisma migrate status",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "test:rls": "pnpm build && node --test test/rls/*.test.mjs"
   },
   "dependencies": {
     "@prisma/adapter-pg": "7.10.1",

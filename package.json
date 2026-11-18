@@ -19,9 +19,11 @@
     "db:generate": "pnpm --filter @agroclimate/database db:generate",
     "db:bootstrap": "pnpm --filter @agroclimate/database db:bootstrap",
     "db:verify": "pnpm --filter @agroclimate/database db:verify",
+    "db:verify:probes": "pnpm --filter @agroclimate/database db:verify:probes",
     "db:status": "pnpm --filter @agroclimate/database db:status",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "test:rls": "pnpm --filter @agroclimate/database test:rls"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
