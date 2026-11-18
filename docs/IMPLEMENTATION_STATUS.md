@@ -127,7 +127,8 @@ Phase 2 readiness: **yes, and no further architecture pass is warranted**. Remai
 | 2.2.2 roles and privilege boundary | done, runtime-verified | `bootstrap/roles.sql`, `db:bootstrap`, `db:verify` (61 assertions as the real roles) |
 | 2.2.2.x role boundary hardening | done, runtime-verified | per-run probe names, `db:verify:probes`, bootstrap idempotency, fresh-volume reset in an isolated Compose project (65 assertions) |
 | 2.2.3 tenant tables, RLS, `withTenant` | done, runtime-verified | `app.users`/`app.farms`/`app.fields`, 3 RLS policies, `createTenantScope`, 10 RLS tests + 9 unit tests, 118 assertions in `db:verify` |
-| 2.3 physical data model specification | **done (specification only), approval withheld** | `docs/data-model/` (12 documents), `docs/adr/ADR-003-trusted-tenant-context.md`; no migration, no schema change |
+| 2.3 physical data model specification | **done (specification only), approval withheld** | `docs/data-model/` (16 files: 13 numbered + 2 supporting + README), `docs/adr/ADR-003-trusted-tenant-context.md`; no migration, no schema change |
+| 2.3.x documentation corrections | done, documentation-only | severity scheme reconciled (no P0), `OPEN-26` added to the blocker matrix, geometry-hash terminology corrected, `area_ha` nullability corrected to the measured DDL, cross-reference and count audit |
 
 ### Phase 2.1 outcome
 
@@ -284,12 +285,33 @@ Documentation only. No migration, no Prisma model, no policy, no grant, no runti
 | `temporal-and-weather-semantics.md` | every date/timestamp meaning, the horizon map, freshness thresholds, and five distinct missing-data representations |
 | `indexes-and-query-patterns.md` | 25 named queries and every index justified by one |
 | `lifecycle-and-retention.md` | three removal mechanisms and no others; append-and-supersede in full |
-| `open-decisions.md` | 25 decisions taken, 25 questions left open with severity and what would settle each |
+| `open-decisions.md` | 25 `D-nn` decisions taken, 29 `OPEN-nn` questions left open with severity, scope, and what would settle each; one authoritative blocker matrix (none P0) |
 | `consistency-checklist.md` | 50+ cross-document checks, three defects found in other documents, and the withheld approval |
 | `docs/adr/ADR-003-trusted-tenant-context.md` | what `app.user_id` actually guarantees, measured |
 
 The measurement that changed a claim into a fact: `app_api` can set `app.user_id` to any tenant. Transaction-scoped `set_config(..., true)` dies with the transaction (autocommit: the next statement sees nothing); a session-scoped `SET` survives it and would hand one request's tenant to the next request on a pooled connection. A `SECURITY DEFINER` helper reads the caller's setting, so it cannot validate it. No privilege mechanism exists to restrict a custom GUC — the parameter is created by whichever role first sets it and does not even appear in `pg_settings` while unset. RLS is therefore documented as containment of forgotten filters, not as protection against a holder of `app_api` credentials, and the current `withTenant` is confirmed to be on the safe side of both hazards.
 
-**Approval withheld** on `OPEN-01` (the authentication lookup cannot be built against this schema), `OPEN-17` (a `POINT` field has `area_ha = 0` and cannot satisfy `FieldSnapshotPayload.areaHa: positive()`), and `OPEN-27` (the recompute fan-out reads a tenant-owned table with a credential that has no grant on it). No answer was invented for any of the three.
+**Approval withheld** on four P1 subsystem blockers: `OPEN-01` (the authentication lookup cannot be built against this schema), `OPEN-17` (a `POINT` field has `area_ha = 0` and cannot satisfy `FieldSnapshotPayload.areaHa: positive()`; `POLYGON` fields unaffected), `OPEN-26` (no `EvidenceSegment` partition validator, so a broken window is storable once the write path exists), and `OPEN-27` (the recompute fan-out reads a tenant-owned table with a credential that has no grant on it). None is P0: every Phase 3 table, constraint, index, policy, and grant can be created today. No answer was invented for any of the four.
 
-Next: resolve `OPEN-01`, `OPEN-17`, `OPEN-27`, then Phase 3 creates the 19 specified tables as hand-written SQL applied with `prisma migrate deploy`.
+Next: resolve `OPEN-01`, `OPEN-17`, `OPEN-26`, `OPEN-27`, then Phase 3 creates the 19 specified tables as hand-written SQL applied with `prisma migrate deploy`.
+
+### Phase 2.3.x outcome — documentation corrections
+
+Correction pass over Phase 2.3, driven by the independent architecture review. Documentation only: no migration, no Prisma model, no policy, no grant, no role, no runtime change, and no database mutation.
+
+| Correction | Before | After |
+|---|---|---|
+| open-decision count | "25 questions left open" in two places (a real 25 that matched the `D-nn` count, not the `OPEN-nn` count) | **29 defined, 29 referenced, 0 dangling**; 25 of them cited outside `open-decisions.md`, and the document now says so instead of implying all are cross-referenced |
+| decision count | 25 `D-nn` | 25 `D-nn`, 12 cited outside the decision table, 0 dangling |
+| severity scheme | P0 = "blocks Phase 3 start", which was false for every item that carried it | severity is **scope**: P0 = blocks the whole phase, P1 = blocks one named subsystem, P2 = settle during implementation. **Nothing is P0**, because every table, constraint, index, policy, and grant can be created today |
+| `OPEN-17` severity | P0 in `open-decisions.md`, P1 in `spatial-model.md` | **P1 in both**, with the scope stated: only point-shaped fields are blocked; escalates to P0 if point fields become a v1 requirement |
+| `OPEN-26` visibility | P1 in the detail list, absent from the blocker summary | in the authoritative matrix as a `planting_windows` **write-path** blocker; `tables-derived.md` now states that no invalid partition may be persisted as a valid window once the writer exists |
+| geometry hash terminology | "canonical EWKB", which reads as *normalized* | "SHA-256 of the stored EWKB representation, without geometry normalization", with an explicit table of what is and is not equal. `provenance-contract.md`'s wording is left alone (out of scope) and recorded as a discrepancy |
+| `area_ha` nullability | "it is not nullable in the DDL" | measured: `is_nullable = YES`, `attnotnull = false`. Three claims separated — declared, always present, always meaningful — and the third is false for a point |
+| dangling reference | `open-decisions.md` pointed at `ADR-004`, which does not exist | says so explicitly; no ADR invented |
+
+The blocker matrix in `open-decisions.md` §1.1 is the single authoritative statement of what each blocker stops and what continues independently. `consistency-checklist.md` §8 reproduces it as scope only and points back, so the two cannot drift into two different stories.
+
+Two things the review asked for that this phase deliberately did **not** do: resolve any of the four blockers, and restate the `CREATE INDEX CONCURRENTLY` constraint as a new migration mechanism. The operational note now says a future large-table concurrent index needs a separately planned procedure; nothing about how migrations run was changed.
+
+Verification was documentation-only: identifier and severity scans over 18 files, terminology scans including multi-line phrase joins, `git diff --check`, `pnpm format:check`, `git status --short`. `docs/` is in `.prettierignore`, so Prettier passing says nothing about these files — stated in the report rather than claimed as validation.

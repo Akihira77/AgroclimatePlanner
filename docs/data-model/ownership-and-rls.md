@@ -203,7 +203,8 @@ decided here: it is a security decision with a new role in it, and the roles are
 established by a bootstrap script that a review has already approved once.
 
 Meanwhile the honest statement is: **authentication is not buildable against this
-schema as specified.** That is `OPEN-01`, P0 for Phase 3's auth slice, and it is
+schema as specified.** That is `OPEN-01` (**P1**, scope: the authentication slice
+only), and it is
 not worked around by loosening the `users` policy.
 
 ## 6. The trust boundary on `app.user_id` — see ADR-003

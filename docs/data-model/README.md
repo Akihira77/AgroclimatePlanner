@@ -32,12 +32,13 @@ Read in this order. Every later document assumes the earlier ones.
 
 Supporting:
 
-- `open-decisions.md` — everything **not** settled. `OPEN-nn` blocking items are
-  the only reason Phase 3 cannot be fully started.
-- `consistency-checklist.md` — the cross-document review, including the two
+- `open-decisions.md` — everything **not** settled: the 25 `D-nn` decisions made
+  here, the 29 `OPEN-nn` questions left open, and the blocker matrix that names
+  the subsystem each blocker stops.
+- `consistency-checklist.md` — the cross-document review, including the
   discrepancies between this specification and the implemented database.
 - `../adr/ADR-003-trusted-tenant-context.md` — the security decision that governs
-  how `app.user_id` may be trusted.
+  how `app.user_id` may be trusted (status: Proposed).
 
 ## 2. Precedence
 
@@ -57,8 +58,8 @@ When two documents disagree:
    names — the things the higher documents deliberately do not specify.
 
 If a higher document is silent and this directory had to choose, the choice is
-recorded as a `D-nn` decision in the document that makes it, and listed in
-`open-decisions.md` §3 for review. Nothing in this directory is allowed to
+recorded as a `D-nn` decision in the document that makes it, and collected in
+`open-decisions.md` §4 for review. Nothing in this directory is allowed to
 silently fill a gap in the domain model.
 
 ## 3. Decision and gap identifiers
@@ -68,8 +69,18 @@ silently fill a gap in the domain model.
 - `OPEN-nn` — an unresolved question. Each one names what it blocks and what
   information would settle it. An `OPEN` item is never implemented by guessing.
 
-Severity: **P0** blocks Phase 3 start · **P1** blocks a specific subsystem ·
-**P2** can be settled during implementation.
+Severity describes **scope**, not urgency:
+
+| Level | Means |
+|---|---|
+| **P0** | blocks Phase 3 as a whole — no part of the phase can be built |
+| **P1** | blocks one named subsystem; the rest of Phase 3 proceeds |
+| **P2** | can be settled during implementation |
+
+No `OPEN-nn` is currently P0. The authoritative blocker matrix, with the
+subsystem each P1 blocks and what continues independently, is
+`open-decisions.md` §1.1 — every other document points there instead of
+restating it.
 
 ## 4. Scope
 

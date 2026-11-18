@@ -117,7 +117,7 @@ Notes:
 | `farm_id` | `uuid` | no | — | parent farm; composite FK with `user_id` |
 | `name` | `text` | no | — | display name; `CHECK (length(btrim(name)) > 0)` |
 | `geom` | `geometry(Geometry, 4326)` | no | — | the plot; see `spatial-model.md` |
-| `area_ha` | `double precision` | yes* | generated | `GENERATED ALWAYS AS (ST_Area(geom::geography) / 10000.0) STORED` |
+| `area_ha` | `double precision` | **yes** | generated | `GENERATED ALWAYS AS (ST_Area(geom::geography) / 10000.0) STORED`; see footnote |
 | `elevation_m` | `numeric(7,2)` | yes | — | `CHECK (BETWEEN -500 AND 6000)`; unknown ≠ 0 |
 | `soil_type` | `text` | yes | — | vocabulary unsettled, `OPEN-21` |
 | `soil_ph` | `numeric(3,1)` | yes | — | `CHECK (BETWEEN 3.0 AND 10.0)`; unknown ≠ neutral |
@@ -129,8 +129,44 @@ Notes:
 | `updated_at` | `timestamptz(6)` | no | `now()` | — |
 | `deleted_at` | `timestamptz(6)` | yes | — | soft delete |
 
-\* `area_ha` is `GENERATED ALWAYS AS … STORED`: it is not nullable in the DDL, but
-it is meaningless for a `POINT` geometry and evaluates to `0` (`OPEN-17`).
+### `area_ha` nullability — what is declared and what merely follows
+
+The migration declares:
+
+```sql
+area_ha double precision GENERATED ALWAYS AS (public.ST_Area(geom::public.geography) / 10000.0) STORED
+```
+
+There is **no `NOT NULL` on this column.** Measured against the running database:
+
+```sql
+select column_name, is_nullable, is_generated, generation_expression
+from information_schema.columns
+where table_schema = 'app' and table_name = 'fields' and column_name = 'area_ha';
+-- area_ha | YES | ALWAYS | (st_area((geom)::geography) / (10000.0)::double precision)
+
+select attnotnull from pg_attribute
+where attrelid = 'app.fields'::regclass and attname = 'area_ha';
+-- f
+```
+
+Three distinct facts, which the earlier version of this document conflated:
+
+| Claim | Status |
+|---|---|
+| the column is `NOT NULL` in the DDL | **false** — `is_nullable = YES`, `attnotnull = false` |
+| a stored value is always present | **true in practice** — `geom` is `NOT NULL` and constrained valid and non-empty, and `ST_Area` of such a geometry returns a number |
+| the value is always *meaningful* | **false for a `POINT`** — it is `0`, which is exactly `OPEN-17` |
+
+The difference matters for a consumer: a client reading `area_ha` cannot treat
+"non-null" as "a real area". Nullability is a DDL property, and this column has
+none — its non-nullness is a consequence of its input, not a constraint.
+
+Note also that PostgreSQL stores the parsed expression without schema
+qualification (`st_area((geom)::geography)`), even though the migration **must**
+write `public.ST_Area` / `public.geometry` because the migration connection's
+`search_path` is `app` (`spatial-model.md` §1). The qualification is a migration
+requirement, not a stored property.
 
 Constraints:
 

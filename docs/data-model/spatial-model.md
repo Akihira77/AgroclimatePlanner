@@ -65,15 +65,22 @@ area_ha double precision
 - Divided by `10 000` → hectares, one definition, not re-rounded anywhere
   (`physical-model.md` §4).
 - The application never writes it. A raw `INSERT` that names it is an error.
+- The column declares **no `NOT NULL`**: it is nullable in the DDL and is non-null
+  only because `geom` is `NOT NULL` and valid. `tables-identity.md` §3 separates
+  the three claims (declared, always present, always meaningful) with the
+  measurement behind them.
 
 **A `POINT` field has `area_ha = 0`.** PostGIS returns 0 for the area of a point,
 and the generated column faithfully stores 0. `FieldSnapshotPayload.areaHa` is
-`z.number().positive()`, so a point field cannot produce a valid field snapshot at
-all — the contract rejects it. That is `OPEN-17`, P1: either point fields are
-disallowed (and the `GeometryType` check drops `POINT`), or `areaHa` becomes
-nullable for them, or a point gets an assumed area from a declared radius. **No
-option is chosen here.** Until it is, the schema accepts a field shape the
-provenance contract cannot describe, which is a defect in one of the two.
+`z.number().positive()`, so a point-shaped field cannot produce a valid field
+snapshot at all — the contract rejects it. That is `OPEN-17` (**P1**, and P0 if
+point fields become a v1 requirement; scope in
+`open-decisions.md` §1.1): either point fields are disallowed (and the
+`GeometryType` check drops `POINT`), or `areaHa` becomes nullable for them, or a
+point gets an assumed area from a declared radius. **No option is chosen here,
+and no estimated area is assumed.** Until it is, the schema accepts a field shape
+the provenance contract cannot describe, which is a defect in one of the two.
+A `POLYGON`/`MULTIPOLYGON` field is unaffected: its area is positive.
 
 ## 3. Indexes
 
@@ -147,8 +154,10 @@ required — the resolution row alone cannot describe it).
 
 ## 6. Geometry change invalidates artifacts
 
-`FieldSnapshotPayload.geometryHash` is **`sha256` of the geometry in canonical
-EWKB** (`provenance-contract.md` §4). Concretely:
+`FieldSnapshotPayload.geometryHash` is **SHA-256 of the stored EWKB
+representation, without geometry normalization** (`provenance-contract.md` §4
+states the preimage as "geometry in canonical EWKB"; this directory specifies
+what "canonical" can only mean here — see the note below). Concretely:
 
 ```sql
 SELECT encode(sha256(public.ST_AsEWKB(geom)), 'hex') FROM app.fields WHERE id = $1;
@@ -157,7 +166,8 @@ SELECT encode(sha256(public.ST_AsEWKB(geom)), 'hex') FROM app.fields WHERE id = 
 (`sha256(bytea)` is PostgreSQL 18's built-in; the hex encoding is lowercase and
 matches the `^[0-9a-f]{64}$` check every hash column carries.)
 
-Consequences that are decisions:
+**"Without normalization" is the load-bearing part, and it means the hash is not
+a topological identity.** Consequences that are decisions:
 
 1. **The hash is over the stored geometry as PostGIS serialises it**, not over a
    re-normalised form. `ST_AsEWKB` preserves ring orientation and vertex order,
@@ -176,6 +186,25 @@ Consequences that are decisions:
 4. Phase 3 must expose `geometryHash` computation from the database, not from the
    application: the application holding a copy of the polygon would be a second
    representation that can disagree with the stored one.
+
+### On the word "canonical"
+
+`provenance-contract.md` §4 writes the preimage as "geometry in canonical EWKB".
+That phrase is preserved there (the document is out of scope for this correction
+pass) but it is easy to misread as "normalized", which the design does **not** do.
+Precisely:
+
+| Claim | True? |
+|---|---|
+| the preimage is deterministic for one stored row | **yes** — `ST_AsEWKB` on the same stored geometry returns the same bytes |
+| the preimage is the same for two topologically equivalent polygons | **no** |
+| the preimage is the same for the same polygon with reversed ring orientation | **no** |
+| the preimage is the same for the same ring with a rotated vertex start | **no** |
+| the hash therefore identifies a *representation*, not a shape | **yes** |
+
+Recorded as a documentation discrepancy in `consistency-checklist.md` item 6.5
+rather than by editing `provenance-contract.md`, because a normative architecture
+document is not corrected by a data-model pass.
 
 ## 7. What is deliberately absent
 

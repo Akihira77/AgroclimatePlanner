@@ -165,7 +165,7 @@ input_snapshot_hash text NOT NULL CHECK (input_snapshot_hash ~ '^[0-9a-f]{64}$')
 | `field_snapshot_hash` | `SHA256(canonicalJson(FieldSnapshotPayload))` — payload excludes the hash | 3 tables |
 | `ingestion_version` | `sha256(adapter_version, normalizer_version, target_selector_hash)` | `ingestion_runs` |
 | `target_selector_hash` | hash of the requested cells/variables | `ingestion_runs` |
-| `geometryHash` | `sha256` of geometry in canonical EWKB | inside `field_snapshot` |
+| `geometryHash` | SHA-256 of the stored EWKB representation, **without geometry normalization** | inside `field_snapshot` |
 | `recordSetHash` | hash over the record set a ref consumed | inside `input_refs` |
 | `baselineHash` | hash over the stored normals for the exact `cellKeys` consumed | inside `input_refs` |
 

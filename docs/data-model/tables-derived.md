@@ -169,9 +169,17 @@ specification will not pretend otherwise.
 The six checks that must exist (no overlap, no gap, full span, internal
 contiguity, reason presence, coverage reconciliation) live in a domain validator
 that **does not exist yet** — `provenance-contract.md` §4 says so explicitly.
-Until it does, nothing prevents an invalid partition from being stored, and
-`OPEN-26` tracks it as a Phase 3 blocker for the write path rather than a schema
-change.
+`jsonb_typeof(evidence_segments) = 'array'` is the only thing the schema checks,
+and it says nothing about interval algebra. `OPEN-26` tracks this as a
+`planting_windows` **write-path** blocker (P1, scope in `open-decisions.md` §1.1),
+not a schema change, and it is not implemented in this phase.
+
+The requirement that follows, stated so it cannot be softened later: **once the
+write path exists, no invalid partition may be persisted as a valid planting
+window.** Not "should be validated on read", not "the UI hides it" — a window
+whose segments and missing ranges do not exactly cover the span once is not
+storable. That is a property of the writer, and the table is where it has to be
+true.
 
 What the database does enforce is the part it can: the window is non-empty
 (`span_check`), the documents are arrays, and a climatology-critical window cannot

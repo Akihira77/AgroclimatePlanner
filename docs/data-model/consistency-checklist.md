@@ -22,7 +22,7 @@ compared against the decisions taken here.
 | 1.5 | index names and definitions | **match** (`farms_user_id_idx`, `fields_user_id_idx`, `fields_farm_id_idx`, `fields_geom_gist_idx`) |
 | 1.6 | policy names and predicates | **match** (`users_self_only`, `farms_tenant_isolation`, `fields_tenant_isolation`, plus the three `*_owner_full_access` policies) |
 | 1.7 | `timestamptz` vs `timestamptz(6)` | **cosmetic difference only**: the DDL writes `timestamptz`, this spec writes `timestamptz(6)`. PostgreSQL's default precision is 6, so the types are identical. Recorded, not changed — the explicit form survives a future server default change, and `pg_dump` will emit `timestamp(6) with time zone` for a new column either way |
-| 1.8 | `area_ha` generated expression | **match**, including the `public.ST_Area(…::public.geography)` qualification |
+| 1.8 | `area_ha` generated expression | **match in the migration text**, including the `public.ST_Area(…::public.geography)` qualification. PostgreSQL stores the *parsed* expression unqualified (`st_area((geom)::geography) / 10000.0`), which is why the qualification is a migration requirement rather than a stored property — `tables-identity.md` §3 |
 | 1.9 | grants on `farms`/`fields` (`app_api` RW) and absence on `users` | **match** |
 
 No migration edit was made, and none should be: `prisma migrate deploy` does not
@@ -83,7 +83,7 @@ rather than the values re-listed. Re-listing is how the two drift.
 | 4.10 | `provenance-contract.md` §4 rule 4 | `profileVersionId` mandatory on windows | match — `NOT NULL` + FK |
 | 4.11 | `provenance-contract.md` §5 | freshness thresholds 6 h / 12 h / 48 h / 35 d / 13 months | match — `temporal-and-weather-semantics.md` §5 |
 | 4.12 | `provenance-contract.md` §5 rule 1 | climatology contributes nothing to `oldestInputInitializedAt` | match — no stored freshness column at all |
-| 4.13 | `provenance-contract.md` §4 | `geometryHash` = `sha256` of canonical EWKB | match — `spatial-model.md` §6 gives the SQL |
+| 4.13 | `provenance-contract.md` §4 | `geometryHash` preimage is "geometry in canonical EWKB" | **terminology differs, not semantics** — the contract's word "canonical" does not mean *normalized*. `spatial-model.md` §6 states the implemented rule (SHA-256 of the stored EWKB representation, no normalization), lists what is and is not equal, and records the source wording as item 6.5 rather than editing it |
 | 4.14 | `data-flow.md` §1 | upsert key `(forecastRunId, cell, variable, validAt, member)` | match — `weather_records_live_key`, plus `NULLS NOT DISTINCT` (`D18`) which the prose does not mention |
 | 4.15 | `data-flow.md` §8 | a null value past the horizon is not the same as an absent row | match — `temporal-and-weather-semantics.md` §6 |
 | 4.16 | `api-conventions.md` §5 | briefing cached per `inputSnapshotHash` | match — `ai_briefings_cache_key` |
@@ -96,11 +96,16 @@ rather than the values re-listed. Re-listing is how the two drift.
 | 5.1 | every entity in `entity-catalog.md` has a table in one of the four `tables-*.md` | 22/22 |
 | 5.2 | every FK in `relationships.md` appears in its table's constraint list | yes |
 | 5.3 | every index in `indexes-and-query-patterns.md` appears in its table's index list | yes |
-| 5.4 | every `OPEN-nn` referenced anywhere is defined in `open-decisions.md` | 25 referenced, 25 defined, no gaps in the numbering |
-| 5.5 | every `D-nn` referenced anywhere is defined in `open-decisions.md` §4 | 25 defined, contiguous |
-| 5.6 | `README.md` §1 document list matches the files on disk | yes, after this checklist was added |
+| 5.4 | every `OPEN-nn` referenced anywhere is defined in `open-decisions.md` | **29 defined, 0 dangling**; 25 are cited by a document other than `open-decisions.md` itself. The four that are defined and cited only inside it are `02`, `03`, `18`, `20`. Definition ≠ reference: the 29 are not all cross-referenced, and this document does not claim they are (measured in §9) |
+| 5.5 | every `D-nn` referenced anywhere is defined in `open-decisions.md` §4 | **25 defined, 0 dangling**; 12 are cited by another document, 13 are defined and cited only in the decision table (`03`, `04`, `08`–`11`, `15`–`17`, `19`–`22`). That is expected: a convention does not need a citation at every use site |
+| 5.6 | `README.md` §1 document list matches the files on disk | yes — 16 files (13 numbered + 2 supporting + the README) |
 | 5.7 | no document states a threshold value | confirmed — every agronomic number is a *column*, and the values live in `docs/research/agronomic-reference-matrix.md` |
 | 5.8 | no document presents a 12-month outlook as a daily forecast | confirmed — `temporal-and-weather-semantics.md` §3 makes months 8–12 climatology |
+| 5.9 | every `OPEN-nn` carries one canonical severity, and no document states a different one | one mismatch existed: `OPEN-17` was phase-wide in `open-decisions.md` and subsystem-scoped in `spatial-model.md`. Reconciled to **P1 with explicit scope** — see §8 — and 0 mismatches remain |
+| 5.10 | no document claims the database enforces an application-level invariant | checked: the partition invariant, freshness, and `inputRefs` referential integrity are all stated as *not* database-enforced (`provenance-storage.md` §2, §4, §5) |
+| 5.11 | no document references a nonexistent file as a valid destination | one existed: `open-decisions.md` pointed at `ADR-004`, which does not exist. **Fixed** — it now says the ADR does not exist and is not written |
+| 5.12 | no ADR status changed silently | `ADR-003` is **Proposed**, matching `ADR-001`/`ADR-002`. It has been Proposed since it was written; nothing was promoted or demoted |
+| 5.13 | no document claims implemented code where only a specification exists | checked: every spec table is marked `spec` in `entity-catalog.md`, and only `users`/`farms`/`fields` are marked `impl` |
 
 ## §6 — Defects found in *other* documents (not fixed here)
 
@@ -109,37 +114,97 @@ rather than the values re-listed. Re-listing is how the two drift.
 | 6.1 | `migrations/20261118020000_tenant_tables/migration.sql` (closing comment) | references `docs/architecture/auth-deferred.md`, which **does not exist** | the migration is immutable; `ownership-and-rls.md` §5 is the current home of that analysis, and Phase 3 should add the pointer file or amend the reference where it can still be amended |
 | 6.2 | `database-foundation.md` §"2.2.3 notes" | the same `auth-deferred` reference; the notes also justify materialising only three tables because "`docs/data-model/` does not exist" | that justification is now **satisfied** — this directory is the missing artefact. It should be annotated, not rewritten, so the Phase 2.2.3 record stays true of its own moment |
 | 6.3 | `ADR-002` D3 | geometry type narrower than the implementation | §2 above |
-| 6.4 | `docs/IMPLEMENTATION_STATUS.md` | stops at Phase 2.2.3 | updated in this phase (documentation row only) |
+| 6.4 | `docs/IMPLEMENTATION_STATUS.md` | stopped at Phase 2.2.3, and its 2.3 section reported "25 decisions taken, 25 questions left open" | updated in 2.3 (documentation row) and corrected in 2.3.x to the measured counts (25 `D-nn`, 29 `OPEN-nn`) |
+| 6.5 | `provenance-contract.md` §4 (line ~283) | `geometryHash` preimage is written "sha256 of geometry in canonical EWKB" — the word "canonical" reads as *normalized*, which the design does not do | **not edited** (a normative architecture document is out of scope for a data-model pass). `spatial-model.md` §6 states the implemented rule, enumerates what is and is not equal, and this row is the pointer. If the wording is to change, it changes with a provenance-contract revision, not here |
+| 6.6 | `ADR-002` D3 | see §2 — the ADR's geometry type is narrower than the implementation | annotate, do not rewrite: an accepted decision record is not corrected by editing it to match the code |
 
-## §7 — Operational constraint discovered during design
+## §7 — Operational constraint: concurrent index on a live table
 
-`prisma migrate deploy` runs each migration inside a transaction, and
-`CREATE INDEX CONCURRENTLY` cannot run inside one. Phase 3's tables are empty at
-creation, so a plain `CREATE INDEX` takes no lock that matters — but the **first
-index added to `weather_records` after it holds data** cannot use the normal
-migration path. Options at that time: a migration with a documented
-`-- prisma:disable-transactions`-style escape (if the bundled Prisma version
-supports it), a separate DBA-run script recorded as an applied migration, or
-accepting the lock.
+`prisma migrate deploy` runs each migration inside a transaction in the current
+setup, and PostgreSQL does not permit `CREATE INDEX CONCURRENTLY` inside a
+transaction block. This is a property of the current setup, not a guarantee of the
+tool.
 
-Not a defect now. Recorded because it will be a surprise at exactly the wrong
-moment — during a production index addition on the largest table in the model.
+Phase 3's tables are empty at creation, so a plain `CREATE INDEX` takes no lock
+that matters **then**. The constraint bites later, on `weather_records` — the one
+table that grows without bound (`OPEN-16`) — where a first index addition after
+the table holds data would block writes for the duration of the build.
 
-## §8 — Verdict
+What that requires, stated plainly: **a separately planned operational procedure,
+not a normal migration.** The candidate shapes are a migration runner that does
+not wrap this statement in a transaction (if the bundled Prisma version supports
+that escape), a DBA-executed script recorded out-of-band as an applied migration,
+or an accepted lock during a maintenance window. Each has a different failure mode
+and none is chosen here.
+
+Two things this phase deliberately does **not** do: change how migrations are
+executed, and introduce a second migration mechanism. The note exists so that the
+decision is made deliberately at that moment rather than discovered mid-deploy.
+
+Not a defect now. Recorded because it will surface at the worst possible moment —
+during a production index addition on the largest table in the model.
+
+## §8 — Blocker matrix and verdict
 
 **Phase 2.3 specification: complete.** Every table, relationship, index, policy,
 and contract-storage decision that could be derived from the existing normative
 documents has been derived and written down.
 
-**Phase 2.3 approval: withheld**, on two P0 items and one effective-P0:
+**Phase 2.3 approval: withheld**, on four P1 subsystem blockers. **No item is
+P0**, because Phase 3's deliverables — tables, constraints, indexes, policies,
+grants — can all be created today. Widening a subsystem blocker to a phase-wide
+stop would overstate it.
 
-| Item | Blocks |
+The authoritative matrix (what is unresolved, which subsystem is blocked, what
+continues, what must be decided) is `open-decisions.md` §1.1. It is reproduced
+here only as scope, and the two must not diverge:
+
+| ID | Severity | Blocked subsystem | Blocked path | Cannot proceed until |
+|---|---|---|---|---|
+| `OPEN-01` | P1 | authentication | login and session issuance, therefore every authenticated request | a decision on how a credential is read before a tenant context exists (`ownership-and-rls.md` §5). Escalates to phase-wide only if the phase is redefined to include auth |
+| `OPEN-17` | P1 | field snapshots for `POINT` geometry | snapshot creation for a point-shaped field and every artifact derived from one | a decision on `areaHa` for a point. `POLYGON` and `MULTIPOLYGON` fields are unaffected. Escalates to phase-wide if point fields become a v1 requirement |
+| `OPEN-26` | P1 | `planting_windows` write path | persisting a window | the six-check partition validator; the table and all read paths are unaffected |
+| `OPEN-27` | P1 | `recompute.windows` worker | fan-out to affected fields | a decision on the narrowest read shape for a tenant-owned table (`indexes-and-query-patterns.md` §5) |
+
+What can proceed now, unaffected by all four: the 19 specified tables, the catalog
+seed, ingestion, aggregation, the weather plane, `suitability_runs`,
+`ai_briefings`, and every policy and grant.
+
+No answer to these was invented and none is marked accepted. This document is the
+record of exactly where the boundary is.
+
+## §9 — How the counts above were measured
+
+A throwaway Node script read every `.md` under `docs/data-model/`, plus
+`docs/adr/ADR-003-trusted-tenant-context.md` and `docs/IMPLEMENTATION_STATUS.md`,
+and reported:
+
+| Measure | Result |
 |---|---|
-| `OPEN-01` — the authentication lookup | the auth slice, and therefore every request path |
-| `OPEN-17` — `area_ha` for a `POINT` field | field creation for a point-shaped field, and every artifact derived from one |
-| `OPEN-27` — the recompute fan-out cannot read tenant rows | `recompute.windows`, the job that delivers a new forecast to a dashboard |
+| `OPEN-nn` definitions | 29, each with exactly one detail entry (14 section headings + 15 rows in the §3 table). The four blockers additionally appear in the §1.1 summary matrix, which is a summary and not a second definition — its severities agree with the detail entries |
+| `OPEN-nn` IDs referenced anywhere | 29 |
+| `OPEN-nn` referenced outside `open-decisions.md` | 25 — the four cited only inside it are `02`, `03`, `18`, `20` |
+| `OPEN-nn` referenced but undefined | 0 |
+| `D-nn` definitions | 25, no id defined twice |
+| `D-nn` referenced outside `open-decisions.md` | 12 |
+| `D-nn` referenced but undefined | 0 |
+| canonical severities in `open-decisions.md` | 4 in the §1.1 matrix, 14 stated in headings/rows, all agreeing |
+| severity mismatches between a document and `open-decisions.md` | 1 before correction (`OPEN-17`), **0 after** |
+| occurrences of the exact phrase "sha256 of geometry in canonical EWKB" | **3**: once in `provenance-contract.md` (the source, out of scope), once in §6.5 as a quotation being corrected, and once in this row while naming the phrase. None is an assertion |
+| occurrences of "canonical EWKB" used as an assertion in `docs/data-model/` | **0**. The two in `spatial-model.md` and the four in this document all either quote the source or state what the phrase must not be read to mean |
 
-No answer to these was invented. Phase 3 can begin on the parts that do not
-depend on them — the global weather plane, the catalog, and the tenant tables
-that have no snapshot — and this document is the record of exactly where the
-boundary is.
+Two limitations, stated because the alternative is a false assurance:
+
+1. **A grep finds the phrasings someone thought of.** The first pass scanned line
+   by line and missed the `spatial-model.md` occurrence because the phrase was
+   broken across two lines; the second pass scans the joined text. A third
+   phrasing nobody imagined would still survive.
+2. **The audit can count itself.** An enumeration of the uncited ids is itself a
+   citation of those ids, so the script's "referenced outside" figure rises if the
+   audit lists ids in the `OPEN-nn` form. The counts above therefore omit the
+   bare-id enumerations in §5.4, §5.5 and this table — the figures are of the
+   specification, not of the report about it.
+
+Neither check verifies SQL, schema, or runtime behaviour. They verify that a set
+of Markdown files agree with each other about identifiers, severities, and
+phrasing.

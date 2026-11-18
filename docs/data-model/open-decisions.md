@@ -3,16 +3,56 @@
 Everything this specification **did not settle**, with what it blocks and what
 information would settle it. An `OPEN` item is never implemented by guessing.
 
-Severity: **P0** blocks Phase 3 from starting · **P1** blocks a specific
-subsystem · **P2** can be settled during implementation.
+Severity describes **scope**, not urgency:
+
+| Level | Means | Evidence required to assign it |
+|---|---|---|
+| **P0** | blocks Phase 3 as a whole — no part of the phase can be built | the blocking object is `app` itself: a migration that cannot apply, a role that cannot connect |
+| **P1** | blocks one named subsystem, deliberately named; the rest of Phase 3 proceeds | a specific write path, job, or slice that cannot be written or cannot be correct |
+| **P2** | can be settled during implementation of the item that needs it | the affected code is not on the Phase 3 path |
+
+**No item in this list is currently P0.** Phase 3's deliverables are tables,
+constraints, indexes, policies, and grants; all of them can be created today,
+which is exactly why the severity of every blocker below is P1 with a named
+subsystem rather than a phase-wide stop. A blocker is never widened to P0 to
+signal that it matters — `OPEN-01` matters a great deal and still does not stop
+a migration from applying.
 
 Nothing in this list is a design preference. Each one is a question where a
 plausible answer exists and choosing it silently would put an unapproved decision
 into a normative schema.
 
-## 1. Blocking Phase 3
+## 1. The four subsystem blockers
 
-### `OPEN-01` — the authentication lookup — **P0**
+### 1.1 Matrix (authoritative)
+
+This table is the single source for "what is blocked and by what". Every other
+document that mentions a blocker points here rather than restating it.
+
+| ID | Severity | What is unresolved | Blocked | Can proceed independently |
+|---|---|---|---|---|
+| `OPEN-01` | **P1** | how a credential is read before a tenant context exists | the authentication slice — login, session issuance, and therefore every authenticated request | table creation, catalog, weather plane, all RLS policies and grants |
+| `OPEN-17` | **P1** | what `areaHa` means for a `POINT`-shaped field | field snapshots for **point-shaped** fields, and every artifact derived from one | table creation; `POLYGON`/`MULTIPOLYGON` fields end to end |
+| `OPEN-26` | **P1** | the six-check `EvidenceSegment` partition validator | the `planting_windows` **write** path only | table creation, the index, every read path, `suitability_runs`, `ai_briefings` |
+| `OPEN-27` | **P1** | how the worker learns which fields a cell serves | `recompute.windows` — the job that delivers a new forecast to a dashboard | table creation, ingestion, aggregation, the catalog, per-tenant recompute triggered from the request path |
+
+Reading the matrix:
+
+- **`OPEN-01` does not block Phase 3**, because Phase 3 ships no authentication.
+  It blocks the first authenticated request in Phase 3's *auth slice*, and it is
+  the reason that slice cannot be started.
+- **`OPEN-17` is narrower than it first appears.** Only a point-shaped field has
+  `area_ha = 0`; a polygon field is unaffected. It escalates to **P0** if the
+  product makes point-shaped fields a v1 requirement, because then field
+  creation itself — the first thing every user does — is on the critical path.
+- **`OPEN-26` is a write-path blocker, not a read or schema blocker.** The
+  database cannot express the partition invariant, so it is enforced nowhere
+  until the validator exists; the table, its columns, and its checks are
+  unaffected.
+- **`OPEN-27` is a worker blocker.** The table and its index are correct; the
+  credential that would query them is not.
+
+### 1.2 `OPEN-01` — the authentication lookup — **P1**
 
 The read that happens before a tenant context exists. `app_api` has no grant on
 `app.users`; the table has `FORCE` RLS; `app.user_id` is only set inside
@@ -23,28 +63,36 @@ Options and their costs are in `ownership-and-rls.md` §5 (dedicated `auth` role
 `SECURITY DEFINER` function · column grant + second GUC). The first is
 recommended, none is chosen.
 
-**Blocks:** the entire auth slice of Phase 3. **Would be settled by:** a decision
+**Blocks:** the authentication slice — login, session issuance, and therefore
+every authenticated request. It does **not** block table creation, the catalog,
+the weather plane, or any RLS policy.
+**Would be settled by:** a decision
 on whether to add a fourth role, which is a bootstrap-script change requiring
 review of its own.
 
-### `OPEN-17` — `area_ha` for a `POINT` field — **P0**
+### 1.3 `OPEN-17` — `area_ha` for a `POINT` field — **P1**
 
-`fields.area_ha` is `GENERATED ALWAYS AS ST_Area(geom::geography)/10000.0`, which
-is **`0`** for a point. `FieldSnapshotPayload.areaHa` is
-`z.number().positive()`. A point field therefore cannot produce a valid field
-snapshot, and every artifact derived from it is impossible to create.
+`fields.area_ha` is a stored generated column
+`ST_Area(geom::geography) / 10000.0`, which is **`0`** for a point.
+`FieldSnapshotPayload.areaHa` is `z.number().positive()`. A point-shaped field
+therefore cannot produce a valid field snapshot, and every artifact derived from
+it is impossible to create. A polygon field is unaffected.
 
 Three options: (a) disallow `POINT` — drop it from `fields_geom_type_check`;
 (b) make `areaHa` nullable for point fields — a contract change, so an ADR;
 (c) derive an assumed area from a declared radius — invents a number the user did
-not supply.
+not supply. **None is chosen, and no estimated area is assumed for a point.**
 
-**Blocks:** field creation for any point-shaped field, and therefore the
-resolution, snapshot, and every derived artifact for it.
+**Blocks:** field snapshot creation for a point-shaped field, and therefore every
+artifact derived from one. It does **not** block table creation, a polygon field,
+or any subsystem that never handles a `POINT`.
+**Severity note:** P1 while point fields are optional; **P0 if the product
+requires them**, because then the first action a user takes is on the critical
+path. Nothing in the current documents establishes that requirement.
 **Would be settled by:** whether the product supports "I do not know my plot
 boundary" as a first-class case.
 
-### `OPEN-27` — the recompute fan-out cannot query tenant rows — **P1** (effective P0 for recompute)
+### 1.4 `OPEN-27` — the recompute fan-out cannot query tenant rows — **P1**
 
 Q18 ("which fields does this cell serve?") reads `field_outlook_cells`, which is
 tenant-owned and RLS-protected, while the job that needs the answer runs as
@@ -57,21 +105,24 @@ global "cell → interested field" projection table (duplicates state, can drift
 
 **Blocks:** `recompute.windows`, i.e. the one job that makes a new forecast reach
 a user's dashboard. **Would be settled by:** a decision on the narrowest
-acceptable shape, in `ADR-004`.
+acceptable shape, in a follow-up ADR that does not yet exist (an earlier draft of
+this document pointed at `ADR-004`; no such file exists and none is written).
 
-### `OPEN-26` — no `evidence_segments` partition validator — **P1**
+### 1.5 `OPEN-26` — no `evidence_segments` partition validator — **P1**
 
 Six interval checks (no overlap, no gap, full span, internal contiguity, reason
 presence, coverage reconciliation) have no implementation. The database cannot
 enforce them (`provenance-storage.md` §4), and `provenance-contract.md` §4 states
-the validator does not exist.
+the validator does not exist. `jsonb_typeof(evidence_segments) = 'array'` is the
+only check the schema performs, and it says nothing about interval algebra.
 
 **Blocks:** the `planting_windows` write path. A window with a broken partition
-is currently storable and would be served as a valid recommendation.
+is currently storable, and once the write path exists it must be impossible for
+an invalid partition to be persisted as a valid recommendation.
 **Would be settled by:** writing the validator, which belongs with the engine that
-produces segments, not with the schema.
+produces segments, not with the schema. Not implemented in this phase.
 
-## 2. Blocking a subsystem
+## 2. Other subsystem-scoped open items
 
 ### `OPEN-21` — field vocabularies and the `irrigationAvailable` mapping — **P1**
 
