@@ -111,7 +111,7 @@ then makes it idempotent, and the read that follows uses the `SELECT` grant.
 
 ## 3. Policy shape
 
-Every one of the ten tenant tables carries exactly these three statements:
+Every one of the ten tenant tables carries the following RLS configuration:
 
 ```sql
 ALTER TABLE app.<t> ENABLE ROW LEVEL SECURITY;
