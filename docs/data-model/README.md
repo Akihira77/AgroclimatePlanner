@@ -77,10 +77,12 @@ Severity describes **scope**, not urgency:
 | **P1** | blocks one named subsystem; the rest of Phase 3 proceeds |
 | **P2** | can be settled during implementation |
 
-No `OPEN-nn` is currently P0. The authoritative blocker matrix, with the
-subsystem each P1 blocks and what continues independently, is
-`open-decisions.md` §1.1 — every other document points there instead of
-restating it.
+No `OPEN-nn` is currently P0. The register is **29 items: 14 P1, 15 P2**.
+`open-decisions.md` §1.1 classifies **all 14 P1 items** — what each blocks, what
+continues independently, and whether it changes the Phase 3 DDL or a later slice.
+Exactly one (`OPEN-09`) changes the Phase 3 DDL; twelve block a slice built on top
+of it; one (`OPEN-02`) blocks nothing because a labelled fallback ships. Every
+other document points at that matrix instead of restating it.
 
 ## 4. Scope
 

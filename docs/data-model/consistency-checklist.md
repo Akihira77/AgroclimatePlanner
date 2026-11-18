@@ -96,7 +96,7 @@ rather than the values re-listed. Re-listing is how the two drift.
 | 5.1 | every entity in `entity-catalog.md` has a table in one of the four `tables-*.md` | 22/22 |
 | 5.2 | every FK in `relationships.md` appears in its table's constraint list | yes |
 | 5.3 | every index in `indexes-and-query-patterns.md` appears in its table's index list | yes |
-| 5.4 | every `OPEN-nn` referenced anywhere is defined in `open-decisions.md` | **29 defined, 0 dangling**; 25 are cited by a document other than `open-decisions.md` itself. The four that are defined and cited only inside it are `02`, `03`, `18`, `20`. Definition ≠ reference: the 29 are not all cross-referenced, and this document does not claim they are (measured in §9) |
+| 5.4 | every `OPEN-nn` referenced anywhere is defined in `open-decisions.md` | **29 defined, 0 dangling**. The 29 are not all cross-referenced and this document does not claim they are; citation counts are quoted in §9 with the caveat that naming an id in order to count it creates the citation |
 | 5.5 | every `D-nn` referenced anywhere is defined in `open-decisions.md` §4 | **25 defined, 0 dangling**; 12 are cited by another document, 13 are defined and cited only in the decision table (`03`, `04`, `08`–`11`, `15`–`17`, `19`–`22`). That is expected: a convention does not need a citation at every use site |
 | 5.6 | `README.md` §1 document list matches the files on disk | yes — 16 files (13 numbered + 2 supporting + the README) |
 | 5.7 | no document states a threshold value | confirmed — every agronomic number is a *column*, and the values live in `docs/research/agronomic-reference-matrix.md` |
@@ -150,25 +150,37 @@ during a production index addition on the largest table in the model.
 and contract-storage decision that could be derived from the existing normative
 documents has been derived and written down.
 
-**Phase 2.3 approval: withheld**, on four P1 subsystem blockers. **No item is
-P0**, because Phase 3's deliverables — tables, constraints, indexes, policies,
-grants — can all be created today. Widening a subsystem blocker to a phase-wide
-stop would overstate it.
+**Phase 2.3 approval: withheld.** The register is **29 open items: 14 P1, 15 P2**,
+and **no item is P0**, because Phase 3's deliverables — 19 tables, their
+constraints and indexes, the policies, the grants — can all be created today, with
+exactly one exception: `OPEN-09` decides whether `plantings` ships a status default
+and the partial index that names it. Widening a subsystem blocker to a phase-wide
+stop would overstate it; narrowing this one to nothing would be dishonest.
 
-The authoritative matrix (what is unresolved, which subsystem is blocked, what
-continues, what must be decided) is `open-decisions.md` §1.1. It is reproduced
-here only as scope, and the two must not diverge:
+The authoritative matrix is `open-decisions.md` §1.1: all 14 P1 items, each with
+what it blocks, what continues, and whether it applies to the Phase 3 DDL or to a
+later slice. It is **not** reproduced here, because two copies of a matrix drift;
+what follows is the one thing this checklist needs to say about it.
 
-| ID | Severity | Blocked subsystem | Blocked path | Cannot proceed until |
-|---|---|---|---|---|
-| `OPEN-01` | P1 | authentication | login and session issuance, therefore every authenticated request | a decision on how a credential is read before a tenant context exists (`ownership-and-rls.md` §5). Escalates to phase-wide only if the phase is redefined to include auth |
-| `OPEN-17` | P1 | field snapshots for `POINT` geometry | snapshot creation for a point-shaped field and every artifact derived from one | a decision on `areaHa` for a point. `POLYGON` and `MULTIPOLYGON` fields are unaffected. Escalates to phase-wide if point fields become a v1 requirement |
-| `OPEN-26` | P1 | `planting_windows` write path | persisting a window | the six-check partition validator; the table and all read paths are unaffected |
-| `OPEN-27` | P1 | `recompute.windows` worker | fan-out to affected fields | a decision on the narrowest read shape for a tenant-owned table (`indexes-and-query-patterns.md` §5) |
+| Category | Count | Items | Meaning for Phase 3 |
+|---|---|---|---|
+| `Phase 3 DDL` | **1** | `OPEN-09` | the migration's `plantings.status` default and `plantings_active_idx` predicate would encode an undecided vocabulary; omit them, or decide it |
+| `after Phase 3` | **12** | `OPEN-01`, `-13` (auth) · `OPEN-17`, `-21` (snapshot) · `OPEN-18` (ingest/resolution) · `OPEN-26` (window write) · `OPEN-27` (worker) · `OPEN-11` (AI) · `OPEN-04` (lifecycle) · `OPEN-03`, `-05` (deployment/retention) · `OPEN-28` (hardening) | none changes the Phase 3 DDL; each stops the first slice that consumes it |
+| `not blocking` | **1** | `OPEN-02` | the 0–3 d BMKG band has a labelled Open-Meteo fallback that already ships |
 
-What can proceed now, unaffected by all four: the 19 specified tables, the catalog
-seed, ingestion, aggregation, the weather plane, `suitability_runs`,
-`ai_briefings`, and every policy and grant.
+The four items an earlier version of this section listed as *the* blockers —
+`OPEN-01`, `OPEN-17`, `OPEN-26`, `OPEN-27` — are four of those twelve. They remain
+the first four slices to be blocked, and they remain P1. What changed is that the
+section no longer implies they are the whole register: of the ten items it had
+omitted, `OPEN-09` stops a Phase 3 deliverable, eight stop a named slice, and
+`OPEN-02` stops nothing.
+
+What can proceed now, unaffected by every one of the 14: the 19 specified tables,
+their constraints, indexes, policies and grants, the catalog seed, and every read
+path over data that exists. **What cannot** — stated because the earlier version of
+this paragraph claimed it could: ingestion and aggregation, since writing a cell
+identity needs the `cell_key` rule (`OPEN-18`), and no model's rule is written
+down.
 
 No answer to these was invented and none is marked accepted. This document is the
 record of exactly where the boundary is.
@@ -181,9 +193,11 @@ and reported:
 
 | Measure | Result |
 |---|---|
-| `OPEN-nn` definitions | 29, each with exactly one detail entry (14 section headings + 15 rows in the §3 table). The four blockers additionally appear in the §1.1 summary matrix, which is a summary and not a second definition — its severities agree with the detail entries |
+| `OPEN-nn` definitions | 29, each with exactly one detail entry (14 section headings + 15 rows in the §3 table). All 14 P1 items also appear in the §1.1 matrix, which is a summary and not a second definition — its severities agree with the detail entries |
+| `OPEN-nn` by severity | **14 P1** (`§1.1`: 1 `Phase 3 DDL`, 12 `after Phase 3`, 1 `not blocking`) and **15 P2** (§3 table) — 29 |
 | `OPEN-nn` IDs referenced anywhere | 29 |
-| `OPEN-nn` referenced outside `open-decisions.md` | 25 — the four cited only inside it are `02`, `03`, `18`, `20` |
+| `OPEN-nn` cited outside `open-decisions.md` | **28 of 29** as measured; the remaining one is cited only within the same file. Before 2.3.x.1 the figure was 25 — it rose because §8 now names the ten ids it classifies. This row's own wording can move it, which is why it is a measurement note and not a finding |
+| `OPEN-nn` in the §1.1 matrix | 14 of 14 — no P1 item missing, no non-P1 item present, verified in both directions |
 | `OPEN-nn` referenced but undefined | 0 |
 | `D-nn` definitions | 25, no id defined twice |
 | `D-nn` referenced outside `open-decisions.md` | 12 |

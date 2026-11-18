@@ -129,6 +129,7 @@ Phase 2 readiness: **yes, and no further architecture pass is warranted**. Remai
 | 2.2.3 tenant tables, RLS, `withTenant` | done, runtime-verified | `app.users`/`app.farms`/`app.fields`, 3 RLS policies, `createTenantScope`, 10 RLS tests + 9 unit tests, 118 assertions in `db:verify` |
 | 2.3 physical data model specification | **done (specification only), approval withheld** | `docs/data-model/` (16 files: 13 numbered + 2 supporting + README), `docs/adr/ADR-003-trusted-tenant-context.md`; no migration, no schema change |
 | 2.3.x documentation corrections | done, documentation-only | severity scheme reconciled (no P0), `OPEN-26` added to the blocker matrix, geometry-hash terminology corrected, `area_ha` nullability corrected to the measured DDL, cross-reference and count audit |
+| 2.3.x.1 blocker classification | done, documentation-only | all 14 P1 items classified in one matrix: 1 `Phase 3 DDL` (`OPEN-09`), 12 `after Phase 3`, 1 `not blocking`; `OPEN-09`'s DDL dependency found and recorded; "ingestion can proceed" corrected |
 
 ### Phase 2.1 outcome
 
@@ -291,9 +292,9 @@ Documentation only. No migration, no Prisma model, no policy, no grant, no runti
 
 The measurement that changed a claim into a fact: `app_api` can set `app.user_id` to any tenant. Transaction-scoped `set_config(..., true)` dies with the transaction (autocommit: the next statement sees nothing); a session-scoped `SET` survives it and would hand one request's tenant to the next request on a pooled connection. A `SECURITY DEFINER` helper reads the caller's setting, so it cannot validate it. No privilege mechanism exists to restrict a custom GUC — the parameter is created by whichever role first sets it and does not even appear in `pg_settings` while unset. RLS is therefore documented as containment of forgotten filters, not as protection against a holder of `app_api` credentials, and the current `withTenant` is confirmed to be on the safe side of both hazards.
 
-**Approval withheld** on four P1 subsystem blockers: `OPEN-01` (the authentication lookup cannot be built against this schema), `OPEN-17` (a `POINT` field has `area_ha = 0` and cannot satisfy `FieldSnapshotPayload.areaHa: positive()`; `POLYGON` fields unaffected), `OPEN-26` (no `EvidenceSegment` partition validator, so a broken window is storable once the write path exists), and `OPEN-27` (the recompute fan-out reads a tenant-owned table with a credential that has no grant on it). None is P0: every Phase 3 table, constraint, index, policy, and grant can be created today. No answer was invented for any of the four.
+**Approval withheld.** The register is 14 P1 + 15 P2, no P0. Four P1 items block the first slice that consumes a Phase 3 table: `OPEN-01` (the authentication lookup cannot be built against this schema), `OPEN-17` (a `POINT` field has `area_ha = 0` and cannot satisfy `FieldSnapshotPayload.areaHa: positive()`; `POLYGON` fields unaffected), `OPEN-26` (no `EvidenceSegment` partition validator, so a broken window is storable once the write path exists), and `OPEN-27` (the recompute fan-out reads a tenant-owned table with a credential that has no grant on it). Ten further P1 items complete the register — `OPEN-09`, `-11`, `-13`, `-18`, `-21`, `-02`, `-03`, `-04`, `-05`, `-28` — of which `OPEN-09` is the only one that changes a Phase 3 migration (`plantings.status DEFAULT 'active'` and `plantings_active_idx` would encode an undecided vocabulary) and `OPEN-02` blocks nothing at all (BMKG falls back to labelled Open-Meteo). No answer was invented for any of them. The classification, with what continues independently, is `docs/data-model/open-decisions.md` §1.1.
 
-Next: resolve `OPEN-01`, `OPEN-17`, `OPEN-26`, `OPEN-27`, then Phase 3 creates the 19 specified tables as hand-written SQL applied with `prisma migrate deploy`.
+Next: decide `OPEN-09` (or ship `plantings` without the default and the index), then Phase 3 creates the 19 specified tables as hand-written SQL applied with `prisma migrate deploy`. The other 13 P1 items do not gate the DDL: twelve block a slice that lands after it, and `OPEN-02` blocks nothing because the labelled fallback ships.
 
 ### Phase 2.3.x outcome — documentation corrections
 
@@ -310,8 +311,29 @@ Correction pass over Phase 2.3, driven by the independent architecture review. D
 | `area_ha` nullability | "it is not nullable in the DDL" | measured: `is_nullable = YES`, `attnotnull = false`. Three claims separated — declared, always present, always meaningful — and the third is false for a point |
 | dangling reference | `open-decisions.md` pointed at `ADR-004`, which does not exist | says so explicitly; no ADR invented |
 
-The blocker matrix in `open-decisions.md` §1.1 is the single authoritative statement of what each blocker stops and what continues independently. `consistency-checklist.md` §8 reproduces it as scope only and points back, so the two cannot drift into two different stories.
+The blocker matrix in `open-decisions.md` §1.1 is the single authoritative statement of what each blocker stops and what continues independently. `consistency-checklist.md` §8 then reproduced it as scope only and pointed back, so the two could not drift into two different stories. *(Amended in 2.3.x.1: §8 now summarises the same matrix by category — one `Phase 3 DDL`, twelve `after Phase 3`, one `not blocking` — because reproducing four of fourteen rows was itself the drift.)*
 
-Two things the review asked for that this phase deliberately did **not** do: resolve any of the four blockers, and restate the `CREATE INDEX CONCURRENTLY` constraint as a new migration mechanism. The operational note now says a future large-table concurrent index needs a separately planned procedure; nothing about how migrations run was changed.
+Two things the review asked for that this phase deliberately did **not** do: resolve any of the four blockers it had named, and restate the `CREATE INDEX CONCURRENTLY` constraint as a new migration mechanism. The operational note now says a future large-table concurrent index needs a separately planned procedure; nothing about how migrations run was changed.
 
 Verification was documentation-only: identifier and severity scans over 18 files, terminology scans including multi-line phrase joins, `git diff --check`, `pnpm format:check`, `git status --short`. `docs/` is in `.prettierignore`, so Prettier passing says nothing about these files — stated in the report rather than claimed as validation.
+
+### Phase 2.3.x.1 outcome — blocker classification
+
+Second documentation-only correction pass, driven by a review of the §1.1 matrix. No migration, Prisma model, role, grant, policy, or runtime change; no database mutation.
+
+The defect: `open-decisions.md` §1.1 presented four P1 items as *the* blocker matrix, the register actually held fourteen, and nothing said what the other ten stopped. A reader could not tell whether the matrix was a selection or the whole set — which is the one thing a blocker summary must never leave ambiguous.
+
+| Correction | Before | After |
+|---|---|---|
+| matrix scope | four rows, no statement of what was excluded | **one matrix, all 14 P1 items**, with an `Applies` column that separates "changes the Phase 3 DDL" from "blocks a later slice" from "blocks nothing" |
+| classification of the other ten P1 | each had a `Blocks:` line, none said *when* | every one is a matrix row: `OPEN-09` and `OPEN-21` (catalog/vocabulary), `OPEN-11` (AI), `OPEN-13` (auth with `OPEN-01`), `OPEN-18` (cell resolution and ingest), `OPEN-02`/`-03`/`-05` (provider, deployment, retention), `OPEN-04` (lifecycle), `OPEN-28` (hardening) |
+| **`OPEN-09`** | P1, described as blocking "the partial index" | the **only Phase 3 DDL blocker** — `plantings.status DEFAULT 'active'` and `plantings_active_idx WHERE status = 'active'` both spell a value whose vocabulary is undecided. Creating either would implement `OPEN-09` by guessing |
+| **`OPEN-18`** | "Phase 3's write path needs it" | Phase 3 is DDL only, so it does not. It blocks the first **ingest**, because a cell identity needs a key — which also means the earlier claim that "ingestion and aggregation can proceed" was wrong, and is corrected |
+| `OPEN-11` | "the table can be created; the row cannot be validated" | the three states named separately: table createable, row unvalidatable, subsystem unimplementable |
+| `OPEN-04` | "blocks the `users` unique index design" | also states that `users` is already implemented, so any option amends an applied table through a later migration rather than changing Phase 3 |
+| `OPEN-02` | P1 alongside blockers | P1 by severity, **blocking by nothing** — the labelled fallback ships. Kept in the register rather than dropped |
+| counts | 14 P1 stated nowhere | **29 = 14 P1 + 15 P2**, published in `README.md`, the register, the checklist and here |
+
+Four things this phase deliberately did **not** do: resolve any `OPEN-nn`, invent a classification where the documents did not support one, renumber an id, or soften `OPEN-17`'s escalation clause. `OPEN-09` appears in the matrix as a finding, not as a decision — `plantings.status` has no vocabulary today and this phase did not choose one.
+
+Verification was documentation-only: one script over 18 files checking definition uniqueness, matrix coverage in both directions, severity agreement, reference integrity and exhaustive-sounding phrasing, plus `git diff --check` and `git status --short`. `docs/` is in `.prettierignore`, so `pnpm format:check` says nothing about these files.
