@@ -37,6 +37,15 @@ accepted" before S3. §18's Track 3 `IG` gates stay exactly where that row puts 
 S7 and S8 — and none of them moves into Track 2. §3.2's "PROPOSED — not applied"
 status remains accurate: this note records documents, not schema.
 
+**Corrected 2026-11-18 after the ADR review.** The sentence above over-coupled the two
+tracks: reading it as "both ADRs before S3" makes a decision about a session table gate
+work that never mentions a session, which is not what §18's own per-step table says.
+The gate follows the object each step builds — `ADR-004` before **S3**, `ADR-005`
+before **S5** — and §18's rows are unchanged by this reading. The correction lives in
+`phase-3.2.3-authentication-database-boundary.md` §13.2 and in the owner record's
+dependency table, which is where an implementer looks before starting a step. The `IG`
+gates still block only S7 and S8.
+
 Repository state reviewed: `master` at `bf0e593`, reviewed again at round 2. Files
 inspected: the Phase 3.2 brief; `packages/database` (`bootstrap/roles.sql`,
 `bootstrap.mjs`, `scripts/lib/{connections,privilege-verification}.mjs`,

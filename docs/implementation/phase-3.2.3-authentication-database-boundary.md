@@ -29,7 +29,7 @@ Four steps, in a fixed order:
 
 | Step | Deliverable | Why it must come here |
 |---|---|---|
-| **S3** | `app_auth` role in bootstrap, its DSN in the process, a second Prisma client | a policy cannot name a role that does not exist (`42704`) |
+| **S3** | `app_auth` role in bootstrap, its DSN validated at boot, `AuthDatabaseModule` created but **not imported** — the client is instantiated at S7 | a policy cannot name a role that does not exist (`42704`) |
 | **S4** | migration `auth_boundary`: 2 policies + 2 column grants on `app.users` | registration and login are impossible until a credential can read `password_hash` before a tenant context exists |
 | **S5** | migration `sessions`: table, grants, policies, GC function | session rows are written by the credential S3 creates |
 | **S6** | `db:verify` rows, `auth-boundary` suite, conformance additions | a boundary nobody measured is a claim, not a control |
@@ -44,7 +44,7 @@ plan: `docs/adr/ADR-004-authentication-database-boundary.md` formalises `AG-1` a
 because approval of a decision and acceptance of its record are different acts. This
 plan links to them and does not restate them (§4).
 
-## 1.1 What the independent review changed
+## 1.1 What the first independent review changed
 
 Four corrections, each of which would have produced a wrong implementation:
 
@@ -54,6 +54,17 @@ Four corrections, each of which would have produced a wrong implementation:
 | 2 | the S3 probe expected `42501` from `app.sessions` before the table exists — that statement returns `42P01`, so the check would have failed or been "fixed" by weakening it | §5.6, §8.0: relation **existence** is asserted with `to_regclass`, and denial only ever at `42501` |
 | 3 | the gate matrix contradicted itself: the owner record listed the `IG` gates as blockers before S3, while this plan assigned them to S7/S8 | §13: architecture decision, ADR acceptance, implementation gate, milestone, and register item are now five separate states, and the owner record's header row is corrected |
 | 4 | the Prisma `Session` model was left as "a relation, maybe", and the `User` model has no reciprocal field | §7.5: the relation is declared on both sides (matching `User`/`Farm`); §6.5 records that `User`'s literal defaults plus `@updatedAt` make `prisma.user.create/update` unusable under the grant, so registration is explicit-column SQL |
+
+## 1.2 What the second review changed
+
+Four more, all of them contradictions or unenforced claims rather than missing features:
+
+| # | Finding | Correction |
+|---|---|---|
+| 1 | `app_auth` holds the `INSERT` grant, so it chooses `absolute_expires_at` — and nothing constrained it to 90 days. The 90-day rule was a sentence, not a schema | §7.1 proposes `CHECK (absolute_expires_at <= created_at + INTERVAL '90 days')`, flagged for S5 review. §7.3 states that `LEAST()` bounds one statement, not the column, and that the 30-day sliding window stays an application invariant because no constraint can express it |
+| 2 | S3 was listed as delivering "a second Prisma client", while §5.5 said the module is not imported until S7 | §5.5, §14: the module and its lifecycle provider are written at S3 and proven by a module-assembly test, but `AppModule` does not import them until S7, so no pool is opened for a credential nothing uses. Validation of the DSN still happens at boot |
+| 3 | requiring **both** ADRs before S3 coupled S3 to a decision about a table it does not create | §13.2: independent gates — `ADR-004` before S3, `ADR-005` before S5 — restoring the original track granularity without weakening either |
+| 4 | the GC job was called "Phase 5" in three places; `background-processing.md` says implementation is Phase 4 | corrected in this plan (§3.3, §13.3) and in ADR-005 |
 
 The honest one-line summary of the security model being built: **`app_auth` can read
 every email and every password hash, and can mint a session for any `user_id`. That
@@ -167,7 +178,7 @@ Nothing. No table, no model, no grant, no job. `entity-catalog.md:89` lists
 server-side sessions in PostgreSQL and rejected JWT with refresh rotation; Redis is
 documented and **not provisioned** (one compose service, zero `ioredis`/`bullmq`
 resolvable from the workspace). The `maintenance` queue that would schedule the GC
-job exists only in `background-processing.md:20`, Phase 5 work.
+job exists only in `background-processing.md:20`, Phase 4 work.
 
 ### 3.4 The API process today
 
@@ -343,6 +354,14 @@ constructs environment records and will fail until fixtures include the new fiel
 That edit is required by S3 and must be authorised explicitly in the implementation
 task; it is not a change to what the tests assert about the tenant credential.
 
+**Parse at boot, connect at S7.** `RuntimeConfig` is built once at startup and every
+field is validated then, so `authDatabaseUrl` is parsed and asserted at S3 — a missing
+or swapped credential still fails the boot, exactly as the table above requires. What
+S3 does **not** do is open a connection pool: the client is created by the provider in
+`AuthDatabaseModule`, and that provider is only instantiated when a module that needs
+it is in the graph. At S3 nothing is, so the process holds a validated string and no
+socket (§5.5).
+
 ### 5.5 The second client lives in its own module
 
 The existing `DatabaseModule` is `@Global()` and exports `DATABASE_CLIENT` and
@@ -368,7 +387,22 @@ AppModule
 | `src/database/database.module.ts` | **unchanged**; stays `@Global`, keeps one provider and one lifecycle, and must not export the auth token |
 | `src/database/auth-database.module.ts` | new, **not** `@Global`; owns `AUTH_DATABASE_CLIENT` and `AuthDatabaseLifecycle` |
 | `src/auth/auth.module.ts` | new at S7; the only module that imports `AuthDatabaseModule` |
-| `src/app.module.ts` | imports `AuthDatabaseModule` only if authentication needs it at boot — it does not, so the import lands with `AuthenticationModule` at S7 rather than at S3 |
+| `src/app.module.ts` | **unchanged at S3**; gains `AuthenticationModule` at S7, and with it `AuthDatabaseModule` |
+
+**Milestone boundary, decided: the module is written at S3, the client is instantiated
+at S7.** This resolves what the previous revision left ambiguous — S3 was described as
+delivering a second Prisma client while the same section said the module is not in the
+graph until S7. Both cannot be true, and the second is the one to keep:
+
+| Option | Verdict |
+|---|---|
+| **A** — instantiate at S3, i.e. import `AuthDatabaseModule` into `AppModule` immediately | rejected: it opens a `pg` pool for a credential no code reads, adds one connection's worth of failure surface to `/health/ready` semantics that do not probe it, and makes S7 look like no change when it is the milestone that introduces authentication |
+| **B** — module and provider written at S3, not imported until S7 | **chosen**: a provider that is never in the graph is never instantiated, so the pool is created exactly when the first consumer arrives. Configuration is still validated at boot (§5.4), the boundary is still proven by tests at S3, and no dead connection exists in between |
+
+The concrete consequence for S3's deliverable list: `auth-database.module.ts` and the
+`AUTH_DATABASE_CLIENT` symbol are created and tested; `app.module.ts` is untouched.
+Reading `AppModule` at S3 tells you nothing about the auth client, which is the point —
+the module cannot be reached without editing the module that owns authentication.
 
 Four consequences worth stating, because each is a way this is usually done wrong:
 
@@ -403,15 +437,24 @@ Two further rules:
 - Failure handling when the credential is absent: the process does not start
   (production) or derives the development URL (development). There is **no** fallback
   to `app_api` and no lazy "create it when needed" path — a client created on first use
-  turns a configuration error into a 500 at the worst moment.
+  turns a configuration error into a 500 at the worst moment. This is unaffected by the
+  deferred instantiation: the failure is a *configuration* failure and happens at boot,
+  long before a provider would be constructed.
 
-**How the boundary is tested later** (S7, needs `IG-11`; not part of S3):
-a Nest testing-module assembly that imports `AuthDatabaseModule` and asserts
-`AUTH_DATABASE_CLIENT` resolves; a second that imports `DatabaseModule` alone and
-asserts `AUTH_DATABASE_CLIENT` does **not** resolve; and a shutdown test asserting both
-clients receive exactly one `$disconnect()`. The `DatabaseClientFactory` double already
-exists for this (`AppDependencies.createDatabaseClient`), so no live PostgreSQL is
-needed.
+**How the boundary is tested at S3** (needs `IG-11`, which is already decided — this is
+not deferred to S7, because an unproven boundary is exactly what the earlier revision
+lacked):
+
+| Test | Asserts |
+|---|---|
+| assembly A — `Test.createTestingModule({ imports: [AuthDatabaseModule.register(config, factory)] })` | `AUTH_DATABASE_CLIENT` resolves to exactly one instance, and `factory` was called once with **`config.authDatabaseUrl`**, not the tenant URL |
+| assembly B — a module importing only `DatabaseModule` | `AUTH_DATABASE_CLIENT` does **not** resolve — the token is not global |
+| assembly C — both modules, then `module.close()` | each client receives exactly one `$disconnect()`; the tenant client and the auth client are distinct objects |
+
+The `DatabaseClientFactory` double already exists for this
+(`AppDependencies.createDatabaseClient`), so all three run without a live PostgreSQL.
+An additional S7 test asserts that `AuthenticationModule` is the module that imports
+`AuthDatabaseModule`, so the graph does not drift.
 
 ### 5.6 Least-privilege check for S3 in isolation
 
@@ -565,7 +608,10 @@ CREATE TABLE app.sessions (
   CONSTRAINT sessions_expiry_order_check
     CHECK (absolute_expires_at >= expires_at AND expires_at > created_at),
   -- Not in the review's DDL. Flagged for S5 review: see §7.3
-  CONSTRAINT sessions_token_hash_shape_check CHECK (token_hash ~ '^[0-9a-f]{64}$')
+  CONSTRAINT sessions_token_hash_shape_check CHECK (token_hash ~ '^[0-9a-f]{64}$'),
+  -- Not in the review's DDL either; the cap AG-2 describes, made checkable.
+  CONSTRAINT sessions_absolute_expiry_cap_check
+    CHECK (absolute_expires_at <= created_at + INTERVAL '90 days')
 );
 
 -- Also not in the review's DDL; same flag (§7.3).
@@ -575,6 +621,25 @@ CREATE INDEX sessions_absolute_expires_at_idx ON app.sessions (absolute_expires_
 
 Ownership: created by the migration connection, so the table and both indexes are
 owned by `migration_owner` along with every other object in `app`.
+
+**The cap constraint changes how the insert must be written, and that is the point.**
+`created_at` defaults to the statement's `now()`, which is the transaction timestamp and
+is stable within the statement. If the application computes a deadline in JavaScript,
+`Date.now() + 90 days` is already later than `created_at + 90 days` by the request's
+latency, and the insert fails `23514`. Both timestamps must therefore come from the same
+SQL clock:
+
+```sql
+-- What the application must run instead of binding two JS timestamps.
+INSERT INTO app.sessions (user_id, token_hash, expires_at, absolute_expires_at)
+VALUES ($1, $2, now() + INTERVAL '30 days', now() + INTERVAL '90 days')
+RETURNING id;
+```
+
+This is a consequence of the constraint, not a preference: it is what makes "90 days
+from creation" mean the same instant on both sides. `now()` is `transaction_timestamp()`,
+so all three timestamps agree exactly, including when the insert runs inside the
+request's transaction.
 
 ### 7.2 Why user-scoped, not tenant-scoped
 
@@ -595,12 +660,38 @@ So `sessions_auth_all … USING (true)` is chosen, with the consequences stated:
   it holds **no grant at all**, and `FORCE` means a mistaken grant returns zero rows.
 - `ENABLE` + `FORCE` remain correct for the same reason as on `users`.
 
-### 7.3 Two additions to the approved DDL, both flagged
+### 7.3 Three additions to the approved DDL, all flagged
 
-Neither is in the design review's proposed DDL, and neither is approved by `AG-2`.
-They are proposals for S5 review, not security controls this plan may award itself.
+None is in the design review's proposed DDL, and none is approved by `AG-2`. They are
+proposals for S5 review, not security controls this plan may award itself.
 
-**1. `sessions_token_hash_shape_check`.** `AG-2` says "only `sha256(token)` stored",
+**1. `sessions_absolute_expiry_cap_check`.** This is the one that changes what the
+database can promise. `app_auth` holds `INSERT (user_id, token_hash, expires_at,
+absolute_expires_at)`, so it **chooses** the absolute deadline. Without a constraint,
+`AG-2`'s "absolute 90 days" is a property of the code path that happens to write the
+row — and a single statement can insert a session valid for a decade, which is a valid
+row under `absolute_expires_at >= expires_at`.
+
+- `CHECK (absolute_expires_at <= created_at + INTERVAL '90 days')` makes the approved
+  maximum checkable. It encodes a number the owner already decided; it does not add,
+  loosen, or reinterpret a rule.
+- It is a **ceiling, not an equality**. A session created 1 day long passes. A short
+  session is a usability bug the user fixes by logging in again; a long one is a
+  credential that outlives its decision, which is why only this direction is
+  constrained.
+- **What it does not do:** it cannot force the application to choose 90 days, and it
+  cannot see intent. It also cannot express the *sliding* 30-day rule (below).
+- **Why it cannot be gamed by backdating:** `created_at` is not in the `INSERT` grant
+  (`GRANT INSERT (user_id, token_hash, expires_at, absolute_expires_at)`), so the
+  application cannot move the anchor backwards to fit a longer deadline. It is also
+  absent from the `UPDATE` grant, so it cannot be moved afterwards either.
+- **Cost to the application:** the insert must derive both deadlines from SQL `now()`
+  (§7.1), not from a JavaScript clock, or it fails `23514` by the request's latency.
+- If the owner declines it, the gap must move into the limitations list rather than
+  disappear: `app_auth` would be able to insert any lifetime it likes, and the 90-day
+  bound would be application-only.
+
+**2. `sessions_token_hash_shape_check`.** `AG-2` says "only `sha256(token)` stored",
 and nothing in the schema currently distinguishes a hash from a raw token: a bug that
 wrote the base64url token into `token_hash` would be silently accepted and would still
 authenticate.
@@ -613,7 +704,7 @@ authenticate.
 - It does not make the raw-token rule enforceable in general (an application could hash
   twice and still pass); it catches the one realistic error.
 
-**2. `sessions_user_id_idx` and `sessions_absolute_expires_at_idx`.** The review's DDL
+**3. `sessions_user_id_idx` and `sessions_absolute_expires_at_idx`.** The review's DDL
 declares `token_hash UNIQUE` and no other index. Two scans then have no index:
 revoke-all-sessions-for-a-user (`WHERE user_id = $1`) and the GC sweep
 (`WHERE absolute_expires_at < now()`). Both are rare and both are sequential scans over
@@ -625,7 +716,19 @@ a table that grows to 90 days of every user's sessions, on the hour, forever.
   rejected: revoking all of a user's sessions must also find already-revoked rows if it
   is ever used to audit, and the table is small enough that the distinction is noise.
 
-Both additions are cheap to reverse before S5 ships — the constraint and an index are
+**What stays application-level, deliberately.** The sliding window is not constrained,
+and `LEAST(now() + INTERVAL '30 days', absolute_expires_at)` is an expression in one
+statement, not a rule about the column: a caller that skips it and writes any
+`expires_at <= absolute_expires_at` succeeds. Three candidates were considered and
+rejected, so the choice is not an oversight:
+
+| Candidate | Why not |
+|---|---|
+| `expires_at <= created_at + INTERVAL '30 days'` | **wrong**, not merely weak: a legitimate extension at day 40 lands at day 70, beyond `created_at + 30 days`. It would break the approved sliding behaviour |
+| `expires_at <= last_seen_at + INTERVAL '30 days'` | constrains two values the application writes in the same statement; it catches a typo and enforces nothing against a caller that controls both. It also couples `last_seen_at` to extension, which the design does not require |
+| A trigger recomputing the deadline | application logic in the database, with a definer-style surface and no gain over the absolute cap. `SECURITY DEFINER` scope discipline (ADR-005, *Garbage collection*) applies |
+
+All three additions are cheap to reverse before S5 ships — a constraint and an index are
 one `ALTER`/`DROP` each in the *same* migration, not a later one, because nothing has
 been applied yet. After it applies, they are immutable like everything else.
 
@@ -836,7 +939,11 @@ connection — never a fixed id, never `DROP ROLE`, never a `TRUNCATE`.
 | `set_config('app.user_id', <other tenant>, true); select … from app.farms` | `42501` — the "permitted but useless" claim, tested rather than asserted |
 | `create table app.probe_…` | `42501` |
 | any of the 21 existing tables other than `users`, `select` | `42501`, enumerated over the table list, not sampled |
-| `insert into app.sessions (user_id, token_hash, expires_at, absolute_expires_at)` | succeeds |
+| `insert into app.sessions (user_id, token_hash, expires_at, absolute_expires_at)` with `now() + 30d` / `now() + 90d` in SQL | succeeds |
+| the same insert with `absolute_expires_at = now() + INTERVAL '91 days'` | `23514` — constraint, **not** a denial; asserted separately from every `42501` row |
+| the same insert with `expires_at > absolute_expires_at` | `23514` |
+| the same insert with `expires_at <= created_at` | `23514` |
+| the same insert binding a JavaScript `Date.now() + 90d` value | `23514` — the documented consequence of §7.1, asserted so the raw-SQL requirement is not a comment nobody tests |
 | `select … from app.sessions where token_hash = $1` | 1 row |
 | `update app.sessions set revoked_at = now()` | succeeds |
 | `update app.sessions set token_hash = …` / `user_id = …` / `created_at = …` / `absolute_expires_at = …` | `42501` |
@@ -853,8 +960,9 @@ And as the other roles: `app_api`/`app_system` `42501` on every `sessions` verb;
 
 ### 8.4 `test/schema/schema-conformance.test.mjs`
 
-Structural rows, no behaviour: `sessions` exists with the eight columns, both CHECK
-constraints, the unique constraint, the two indexes, `ENABLE`+`FORCE`, two policies
+Structural rows, no behaviour: `sessions` exists with the eight columns, all three
+CHECK constraints (expiry order, hash shape, absolute cap), the unique constraint, the
+two indexes, `ENABLE`+`FORCE`, two policies
 (`sessions_auth_all TO app_auth FOR ALL`, `sessions_owner_full_access TO
 migration_owner`), and the exact grant lists via `has_column_privilege`. The existing
 12 conformance checks and 39 isolation tests must pass **unchanged** — a changed
@@ -908,6 +1016,9 @@ of those, and "RLS protects it" is never claimed where a role can set its own co
 | Cross-user session access | application | `WHERE token_hash = $1`; the table policy is `USING (true)`, so RLS does **not** isolate users from the auth credential | accepted (`AG-2` S-4); must be stated in the query's comment |
 | Session token theft | deployment + application | opaque bearer token; only its hash stored; TLS termination and cookie attributes are `IG-8`/`IG-9`, unset | not addressed by S3–S6 |
 | Session fixation | application | a token is only ever minted server-side by `crypto.randomBytes`; there is no path that accepts a caller-supplied token | S8 must not add one |
+| A session with an unbounded lifetime | PostgreSQL, **if** the cap CHECK is accepted | the insert names `absolute_expires_at` and `app_auth` chooses it, so the choice is bounded only by `created_at + 90 days`. Without the CHECK the bound is application-only and a single statement can mint a decade-long session | if declined, this line moves to the limitations instead of disappearing |
+| A session extended past its deadline | PostgreSQL | `expires_at <= absolute_expires_at` is a CHECK, and `UPDATE` cannot reach `absolute_expires_at` at all | none at this layer |
+| A session extended by more than 30 days | **nobody** | `LEAST()` is an expression in one statement, not a column rule; `expires_at - last_seen_at` is not constrained. The 30-day window is application intent | disclosed; no constraint can express it (§7.3) |
 | Replay of revoked/expired session | application | every validation must check `revoked_at IS NULL AND expires_at > now() AND absolute_expires_at > now()`; the database provides the columns, not the predicate | the predicate is code; the suite must test each of the three conditions separately |
 | Raw token logged or stored | application + one DB CHECK | `sessions_token_hash_shape_check` rejects a stored non-hash; log hygiene is existing practice (`c762171`) and must extend to the auth path | double-hashing would pass the CHECK |
 | Privilege escalation via membership | PostgreSQL | `NOINHERIT`, zero memberships, asserted in both directions; no role may `SET ROLE` another | none at this layer |
@@ -920,6 +1031,46 @@ of those, and "RLS protects it" is never claimed where a role can set its own co
 table against the auth credential, and that the fourth role protects anything if the
 process is compromised. Both would be false, and item 15 of the review's Definition
 of Done exists to catch exactly that kind of sentence.
+
+### 10.1 What a compromised `app_auth` can and cannot enforce
+
+Written as a list of capabilities rather than prose, because this is the paragraph a
+future reader will quote:
+
+| Capability | Possible? | Bound |
+|---|---|---|
+| Read every `users` row (email, hash, role, locale, timezone) | yes | column grant; `USING (true)` adds no filter |
+| Insert a user outside the registration flow | yes | `INSERT (email, password_hash)` only |
+| Change a user's password, email, or role | **no** | no `UPDATE` grant on `users` |
+| Read every session row | yes | accepted (`AG-2` S-4) |
+| Insert a session for **any** `user_id` | yes | this is impersonation, and no grant prevents it |
+| Choose a session lifetime up to 90 days | yes | the cap CHECK, if accepted |
+| Choose a session lifetime **beyond** 90 days | **no — if the cap CHECK is accepted**; yes otherwise | the one place where a schema constraint changes the answer |
+| Move an existing session's absolute deadline | **no** | `absolute_expires_at` is outside the `UPDATE` grant |
+| Re-point a session at another user | **no** | `user_id` is outside the `UPDATE` grant |
+| Revoke a session | yes | `UPDATE (revoked_at)` |
+| Un-revoke a session it revoked | yes | same grant, no direction |
+| Delete a session | **no** | no `DELETE` grant; only the GC function deletes, as the owner |
+| Extend a session by more than 30 days | yes | no constraint exists; only the application's `LEAST()` and its 5-minute rule |
+| Reach a tenant, catalog, or weather row | **no** | `42501` on all 21, enumerated |
+| Create or alter schema objects | **no** | no `CREATE` on `app` |
+| Become another role | **no** | `NOINHERIT`, zero memberships, `SET ROLE` refused |
+
+Three conclusions that follow directly, and that no wording elsewhere in this plan may
+contradict:
+
+1. **The credential cannot be constrained to *intent*, only to *shape*.** Every "no"
+   above is a privilege or a constraint; every "yes" is a capability the approved
+   design grants deliberately. The 90-day cap is the only lifetime property that moved
+   from "the code promises" to "the database refuses".
+2. **The 30-day sliding rule is application-only, permanently.** It is relative to the
+   moment of extension, and the table does not record that moment. A constraint here
+   would either break legitimate extensions or constrain two values the same statement
+   writes.
+3. **Impersonation is not a lifetime problem.** `INSERT (user_id, …)` means the
+   credential can mint a session for any user regardless of any expiry rule; the cap
+   limits how long that session lives, not whether it exists. Bounding it is ADR-004's
+   credential boundary, not ADR-005's table.
 
 ---
 
@@ -1012,16 +1163,35 @@ of them into "done" or "blocked".
 | `IG-12` | decided | Zod-only validation, bound per parameter; in use |
 | `IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10` | **3 — open** | block **S7**, not S3–S6 |
 | `IG-8`, `IG-9` | **3 — open** | block **S8**, not S3–S6 |
-| S3–S6 | **4 — not started** | gates satisfied once the two ADRs are accepted; no other owner answer owed |
+| S3 | **4 — not started** | gate: accepted `ADR-004` |
+| S4 | **4 — not started** | gate: S3 (the role must exist before a policy names it) |
+| S5 | **4 — not started** | gate: accepted `ADR-005` **and** S4 |
+| S6 | **4 — not started** | gate: the stages whose rows it verifies — S3/S4 for the `users` half, plus S5 for the session half |
 | `OPEN-01` | **5 — unresolved** | needs accepted `ADR-004` + migration + `db:verify` |
 | `OPEN-13` | **5 — unresolved** | needs accepted `ADR-005` + migration + session suite |
 
-The one correction this table exists to make: **no `IG` gate blocks S3, S4, S5, or
+**Two things this table exists to fix.** First: **no `IG` gate blocks S3, S4, S5, or
 S6.** They are endpoint-behaviour decisions — email normalisation, duplicate
 registration, auto-login, password policy, hashing parameters, rate limiting, email
 verification, cookie naming, CSRF — and none of them can change a role, a grant, a
 policy, or a table's shape. The owner record previously listed them in a row labelled
 "blockers before `S3`"; that row is corrected in the record itself, not only here.
+
+Second: **the ADR gates are independent.** A previous revision made acceptance of both
+ADRs a prerequisite for all of S3–S6. That over-couples them: `ADR-004` is about a role
+and two grants on `app.users`; `ADR-005` is about a table that does not exist until S5.
+Requiring `ADR-005` before S3 means a decision about a session table can block work that
+never mentions a session. The gates that follow the object being built are:
+
+```text
+ADR-004 accepted ──► S3 ──► S4 ──┐
+                                  ├──► S6
+ADR-005 accepted ─────────► S5 ───┘
+```
+
+This is not a relaxation. Nothing is applied without an accepted ADR covering it, S4
+still cannot precede S3, and S6 still cannot precede the stages it measures. It only
+stops one track's paperwork from gating the other's code.
 
 ### 13.3 Unblocked by what already exists
 
@@ -1043,7 +1213,7 @@ open, and none may be "settled by the first implementer".
 ### Still blocking S8 — session guard, `/me`, logout
 
 `IG-8` (cookie name and `__Host-` prefix), `IG-9` (CSRF mechanics). Plus the
-`maintenance` queue that would schedule the purge job, which is Phase 5 work: S8 can
+`maintenance` queue that would schedule the purge job, which is Phase 4 work: S8 can
 *call* the function, and nothing can *schedule* it yet.
 
 ### Non-blocking gaps this plan records rather than fixes
@@ -1077,48 +1247,58 @@ Each row names the evidence, not the intent.
    be recorded as one.
 5. The API boots with `APP_AUTH_DATABASE_URL`, refuses a URL naming `app_api`, and
    fails to boot in production without it — config tests plus one negative boot.
-6. Two distinct clients exist in two modules — `AUTH_DATABASE_CLIENT` resolves inside
-   `AuthDatabaseModule` and does **not** resolve from a module that imports only the
-   global `DatabaseModule`; each client receives exactly one `$disconnect()` on
-   shutdown — module-assembly test and lifecycle test.
+6. `AuthDatabaseModule` is written and tests prove the boundary — `AUTH_DATABASE_CLIENT`
+   resolves inside it and does **not** resolve from a module importing only the global
+   `DatabaseModule`; with both modules assembled, the tenant client and the auth client
+   are distinct objects and each receives exactly one `$disconnect()`.
+7. At S3 the client is **not** instantiated in the running application: `AppModule`
+   does not import `AuthDatabaseModule`, and `createClient` is never called for
+   `authDatabaseUrl` during boot. The DSN is nevertheless parsed and asserted, so a
+   missing or swapped credential still fails the boot.
 
 ### S4
 
-7. `app_auth` `SELECT` succeeds on the six granted columns and fails `42501` on
+8. `app_auth` `SELECT` succeeds on the six granted columns and fails `42501` on
    `created_at` and `updated_at`.
-8. `INSERT (email, password_hash)` succeeds; any other column fails `42501`;
+9. `INSERT (email, password_hash)` succeeds; any other column fails `42501`;
    `UPDATE` and `DELETE` fail `42501`.
-9. `app_api` still holds no privilege on `app.users`; `users_self_only` unchanged;
+10. `app_api` still holds no privilege on `app.users`; `users_self_only` unchanged;
    `FORCE` still set.
-10. The migration names no other table and grants nothing to `PUBLIC`.
-11. 39 tenant-isolation and 12 conformance assertions pass unchanged.
+11. The migration names no other table and grants nothing to `PUBLIC`.
+12. 39 tenant-isolation and 12 conformance assertions pass unchanged.
 
 ### S5
 
-12. `sessions` exists with the eight columns, both CHECKs, unique `token_hash`, two
-    indexes, `ENABLE`+`FORCE`, and both policies.
-13. `app_api` and `app_system` fail `42501` on all four verbs; `app_auth` has exactly
+13. `sessions` exists with the eight columns, all three CHECKs (expiry order, hash
+    shape, absolute cap), unique `token_hash`, two indexes, `ENABLE`+`FORCE`, and both
+    policies.
+14. `app_api` and `app_system` fail `42501` on all four verbs; `app_auth` has exactly
     the column privileges in §7.4 and no `DELETE`.
-14. `purge_expired_sessions()` is `prosecdef`, owned by `migration_owner`, `search_path`
+15. `purge_expired_sessions()` is `prosecdef`, owned by `migration_owner`, `search_path`
     pinned, executable by `app_system` only, and returns a count (0 is valid).
-15. A session whose `absolute_expires_at < now()` is deleted by one call; a live row
+16. A session whose `absolute_expires_at < now()` is deleted by one call; a live row
     survives; a row expired only on `expires_at` is **not** deleted.
-16. A sliding extension at day 70 of 90 lands on `absolute_expires_at`, satisfies
+17. A sliding extension at day 70 of 90 lands on `absolute_expires_at`, satisfies
     `sessions_expiry_order_check`, and does not exceed the absolute deadline.
-17. Updating `token_hash`, `user_id`, `created_at`, or `absolute_expires_at` as
+18. Updating `token_hash`, `user_id`, `created_at`, or `absolute_expires_at` as
     `app_auth` fails `42501` — the last one is what makes "a session cannot outlive its
     absolute expiration" a database property rather than a promise.
+19. An insert at `created_at + INTERVAL '91 days'` fails `23514`; an insert at
+    `now() + INTERVAL '90 days'` succeeds; an insert binding a JavaScript-computed
+    90-day deadline fails `23514` (the §7.1 consequence, asserted). If the cap CHECK is
+    declined by the owner, this criterion is deleted from the list rather than relaxed,
+    and the gap is recorded as a limitation.
 
 ### S6 and cross-cutting
 
-18. `db:verify` green with the new rows; assertion count recorded with the exact
+20. `db:verify` green with the new rows; assertion count recorded with the exact
     number, not "more than before". Every denial is `42501`; no `42P01` appears in a
     denial log, because a missing relation would be a defect in the stage, not a pass.
-19. `test/rls/auth-boundary.test.mjs` green; existing suites unchanged in count.
-20. Both migrations apply to a fresh isolated volume in order.
-21. No `OPEN-01`/`OPEN-13` disposition changed by the implementation. Their flip is a
+21. `test/rls/auth-boundary.test.mjs` green; existing suites unchanged in count.
+22. Both migrations apply to a fresh isolated volume in order.
+23. No `OPEN-01`/`OPEN-13` disposition changed by the implementation. Their flip is a
     separate action requiring accepted `ADR-004`/`ADR-005` plus this evidence.
-22. `pnpm build`, `typecheck`, `lint`, `test`, `prettier --check .`, `git diff --check`
+24. `pnpm build`, `typecheck`, `lint`, `test`, `prettier --check .`, `git diff --check`
     all exit 0.
 
 ---
@@ -1130,7 +1310,7 @@ the next.
 
 | # | Commit | Contents | Must be green before the next |
 |---|---|---|---|
-| **0** | `docs(adr): record the authentication database boundary and session storage` | `ADR-004`, `ADR-005`, this plan, the owner-record gate correction | owner acceptance of both ADRs — **this commit is the gate, so it precedes all code** |
+| **0** | `docs(adr): record the authentication database boundary and session storage` | `ADR-004`, `ADR-005`, this plan, the owner-record gate correction | `ADR-004` accepted before commit 1; `ADR-005` accepted before commit 4. The two are independent, and no code waits on both |
 | 1 | `feat(database): provision the app_auth role` | `roles.sql`, `bootstrap.mjs`, `connections.mjs`, `database.defaults.json`, `.env.example` names, `db:verify` attribute/membership rows | `db:bootstrap` + `db:verify` |
 | 2 | `feat(api): hold a second, validated database credential` | `runtime-config.ts` (+fixtures), `tokens.ts`, new `auth-database.module.ts`; **`database.module.ts` untouched** | build, typecheck, api tests, module-assembly + lifecycle test |
 | 3 | `feat(database): grant the auth boundary on app.users` | migration `20261118040000_auth_boundary`, users-half verification | `db:verify`, auth-boundary users half |
@@ -1148,13 +1328,15 @@ the session table in the diff.
 
 **GO when all of the following hold:**
 
-1. The owner has **accepted** `ADR-004` and `ADR-005`. Both are written and
-   **Proposed**; acceptance adds a date and an approver to each, and is the owner's act,
-   not an implementer's assertion. Note what this does *not* mean: `AG-1` and `AG-2` are
-   already decided (2026-11-18), so acceptance is a statement that the records are
-   faithful — not a fresh architecture decision, and not a re-vote.
+1. The owner has **accepted `ADR-004`** (§13.2: it gates S3). `ADR-005` is written
+   and `Proposed` too, and gates **S5** — not S3. Both are records; acceptance adds a
+   date and an approver to each, and is the owner's act, not an implementer's
+   assertion. Note what this does *not* mean: `AG-1` and `AG-2` are already decided
+   (2026-11-18), so acceptance is a statement that the records are faithful — not a
+   fresh architecture decision, and not a re-vote.
 2. `master` is at or after `75607d8` with a clean tree, and the S2 checks are green —
-   the baseline this work builds on.
+   the baseline this work builds on. `ADR-005` acceptance is required before the S5
+   commit, not before S3.
 3. A cluster-admin path for bootstrap exists for every environment in scope
    (`BOOTSTRAP_DATABASE_URL` outside development) **or** the work is explicitly
    confined to development.
@@ -1175,10 +1357,11 @@ the session table in the diff.
    seven `IG` gates that block S7 are unanswered, and a planned endpoint that invents
    a password policy or an email-normalisation rule puts an unapproved decision into
    production.
-6. The `sessions_token_hash_shape_check` addition (§7.3) is neither accepted nor
-   removed — an unreviewed schema constraint must not ship by default. The same applies
-   to the two supporting indexes (ADR-005, *Implementation details still requiring
-   review*).
+6. Any of the **three** additions in §7.3 is neither accepted nor removed — the
+   absolute-expiry cap CHECK, the `token_hash` shape CHECK, and the two supporting
+   indexes (ADR-005, *Implementation details still requiring review*). An unreviewed
+   schema constraint must not ship by default; neither must a missing one be described
+   as a database-enforced property.
 7. A privilege test is "fixed" by accepting a SQLSTATE other than `42501` as a denial,
    or by querying `app.sessions` before S5 and calling the `42P01` a pass. Both turn a
    missing object into false evidence.

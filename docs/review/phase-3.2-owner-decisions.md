@@ -10,7 +10,7 @@
 | Decision approval status | **Complete** — every gate this file asked for is answered |
 | Implementation status | **`S1` and `S2` implemented, `S3` onward not started** — contracts at `c44cf5b`/`0bb9792`, plumbing at `ad6235b`, remediation at `6d36741`, details and path hardening at `c762171`, shared path grammar at `38486fd`, parser and numeric-segment correctness at `75607d8` |
 | Verification status | **Green at `75607d8`, reviewed** — build, typecheck, test, lint, prettier, `git diff --check` all exit `0`; api 76, contracts 187, database 9, 0 failing |
-| Remaining blockers before `S3` | **ADR acceptance only** — `ADR-004` and `ADR-005` are written and `Proposed`; `S3`–`S6` owe no other owner answer. The `IG` gates block **S7** (`IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10`) and **S8** (`IG-8`, `IG-9`), not the database boundary |
+| Remaining blockers before `S3` | **`ADR-004` acceptance only** — written and `Proposed`; `ADR-005` gates `S5`, not `S3` (see the dependency table below). `S3`–`S6` owe no other owner answer. The `IG` gates block **S7** (`IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10`) and **S8** (`IG-8`, `IG-9`), not the database boundary |
 | ADR status | `ADR-004` and `ADR-005` **written, `Proposed`, not accepted** — they formalise `AG-1`/`AG-2` and add no decision of their own. `AG-1`/`AG-2` are **not** re-opened and are not asked for again |
 | `OPEN-nn` dispositions changed | **No** — `OPEN-01` and `OPEN-13` remain unresolved |
 
@@ -1025,12 +1025,12 @@ satisfied — not that the step is complete.
 | S0b | Answer `IG-5`, `IG-11` | — | this document |
 | S1 | Contracts: response/error envelope, error-code enum, `requestId` | `IG-5`, `IG-11` | `IG-5` + `IG-11` |
 | S2 | API plumbing: `/v1` prefix, `ZodValidationPipe` per parameter (`IG-12`), exception filter, request-id, cookie parser, helmet, trust-proxy, CORS, database client | `IG-11`, `IG-12` | `IG-11`, `IG-12` (filter needs `IG-5`) |
-| S3 | Bootstrap `app_auth`: role, secret map, `connections.mjs`, `.env.example` | `AG-1` | `AG-1` |
-| S4 | Migration `auth_boundary`: 2 policies, 2 column grants | S3 | `AG-1` + S3 |
-| S5 | Migration `sessions` + policies + grants + purge function | `AG-2`, S4 | `AG-2` + S4 |
+| S3 | Bootstrap `app_auth`: role, secret map, `connections.mjs`, env-template names; `AuthDatabaseModule` written but not imported | `AG-1` + accepted `ADR-004` | `AG-1` + `ADR-004` |
+| S4 | Migration `auth_boundary`: 2 policies, 2 column grants | S3 | `AG-1` + `ADR-004` + S3 |
+| S5 | Migration `sessions` + policies + grants + purge function | `AG-2` + accepted `ADR-005`, S4 | `AG-2` + `ADR-005` + S4 |
 | S6 | `privilege-verification.mjs` `EXPECTED` + `has_column_privilege` probes; `auth-boundary` suite | S4 (and S5) | S4 |
 | S7 | Register + login: schemas, Argon2id, dummy hash, rate limit before lookup, generic failures | S1, S2, S4, `IG-1/2/3/4/6/7/10` | **not** unblocked by these four alone |
-| S8 | Session guard, `/me`, logout, sliding expiry, purge wiring | S5, S6, `IG-8/9` | **not** unblocked by these four alone |
+| S8 | Session guard, `/me`, logout, sliding expiry, purge function call | S5, S6, `IG-8/9` | **not** unblocked by these four alone; the `maintenance` queue that would schedule the purge is Phase 4 (`background-processing.md`) |
 | S9 | Docs reconciliation: `entity-catalog` `sessions` in widened `identity`, `api-conventions` amendments, `auth-deferred.md` pointer, `IMPLEMENTATION_STATUS` (`ADR-004`/`ADR-005` are written; see the ADR status row) | everything above | — |
 
 **Implementation status of this sequence (verified 2026-11-18).** Two steps are built;
