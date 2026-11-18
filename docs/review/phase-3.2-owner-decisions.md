@@ -80,15 +80,34 @@ before the account has a session, hence before any tenant context. The existing
 
 ## 1.4 Recommended option
 
-`[P]` **Option A.** A fourth role `app_auth`:
+`[P]` **Option A.** A fourth role `app_auth`, provisioned by the same two-step
+mechanism the three existing runtime roles already use.
 
-- `NOLOGIN` at SQL role level (`[O]` the application-facing DSN is supplied
-  separately, exactly as for `app_api` — the role's SQL attribute is not the
-  connection mechanism).
-- `NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`, `NOREPLICATION`, `NOBYPASSRLS`,
-  `NOINHERIT`.
-- Zero memberships in either direction: not a member of `app_api`/`app_system`, and
-  neither of them a member of `app_auth`.
+**`NOLOGIN` is the bootstrap state, not the running state.** The repository creates
+roles `NOLOGIN` in SQL and enables login in a separate provisioning step, so
+describing the provisioned role as `NOLOGIN` would be wrong — and `db:verify` already
+asserts the opposite (`privilege-verification.mjs:176`: `rolcanlogin === true` for
+every role in `ROLE_NAMES`). The same distinction settles how the application
+authenticates: it connects **directly** as `app_auth`, with its own connection string
+and its own independently supplied secret. No second login role, no role membership,
+no `SET ROLE`.
+
+| State | Repository mechanism | `app_auth` |
+|---|---|---|
+| **Bootstrap SQL** | `bootstrap/roles.sql:12` (array member) and `:22-24` (`ALTER ROLE … NOLOGIN …`), executed by `bootstrap.mjs` as superuser | created `NOLOGIN` |
+| **Provisioned runtime** | `scripts/bootstrap.mjs:53-60`: `select format('alter role %I with login password %L', …)`, password from the environment, statement executed and never logged | `LOGIN`, `rolcanlogin = true` |
+
+Security attributes, identical in both states and unaffected by the login step:
+`NOSUPERUSER`, `NOCREATEDB`, `NOCREATEROLE`, `NOREPLICATION`, `NOBYPASSRLS`,
+`NOINHERIT`, and zero memberships in either direction — not a member of
+`app_api`/`app_system`, and neither of them a member of `app_auth`.
+
+The credential reaches the process the way it already does for the other three:
+`connections.mjs:26-30` maps a role name to a URL variable and a password variable
+(`app_api` → `APP_API_DATABASE_URL` / `APP_API_PASSWORD`), and `ROLE_NAMES` is derived
+from that map — which is why the provisioning loop applies `LOGIN` to every listed
+role without a per-role edit. Adding `app_auth` to that map is what makes it
+provisionable; it is not a separate code path. `[V]` mechanism, `[P]` the fourth entry.
 
 Proposed privileges, complete:
 
@@ -183,8 +202,20 @@ the purpose of recording them is that item 15 of the review's Definition of Done
 
 Consequences if approved:
 
-1. Bootstrap change: `roles.sql:12` array member, an `ALTER ROLE` line, `bootstrap.mjs`
-   secret map, `connections.mjs` role map, `.env.example`. Outside the migration ledger.
+1. Bootstrap change, outside the migration ledger and outside any transaction that
+   touches the schema:
+   - `bootstrap/roles.sql:12` — array member;
+   - `bootstrap/roles.sql:22-24` — the `NOLOGIN NOSUPERUSER … NOINHERIT` line;
+   - `scripts/lib/connections.mjs:26-30` — `ROLE_CONNECTIONS` entry carrying a URL
+     variable and a password variable for `app_auth`;
+   - `scripts/bootstrap.mjs:30-34` — `ROLE_PASSWORD_VARIABLES` entry;
+   - `database.defaults.json` — a development password under `roles`, alongside the
+     existing three;
+   - the root env example file gains the two new variable names.
+
+   The loop at `bootstrap.mjs:53-60` then provisions `LOGIN` with no further change,
+   because it iterates `ROLE_NAMES`, which is derived from that map. The final role
+   must report `rolcanlogin = true`.
 2. One additive migration, `auth_boundary`: two `GRANT` statements and two
    `CREATE POLICY` statements. No `ALTER TABLE`, no column change, no rewrite.
    The role must exist first or the policy fails with `42704`.
@@ -204,19 +235,24 @@ thing `OPEN-01` declines.
 `[O]` The decision is correctly implemented when all of the following hold, each
 with the named evidence:
 
-1. `app_auth` exists, is `NOINHERIT`, `NOBYPASSRLS`, with zero memberships —
-   `db:verify` row.
-2. `app_auth` `SELECT` on `users` is column-limited to the six named columns —
+1. `app_auth` exists, is `NOINHERIT`, `NOBYPASSRLS`, and has zero memberships in
+   either direction — `db:verify` rows.
+2. After provisioning, `app_auth` has `rolcanlogin = true`, and the process connects
+   as `app_auth` with no `SET ROLE` anywhere in the path — asserted the way `db:verify`
+   already asserts it for the other three roles
+   (`privilege-verification.mjs:176`), plus a `current_user` check on a live
+   connection.
+3. `app_auth` `SELECT` on `users` is column-limited to the six named columns —
    `has_column_privilege`, plus a `SELECT` of a non-granted column failing with `42501`.
-3. `app_auth` `INSERT` on `users` succeeds for `(email, password_hash)` and fails
+4. `app_auth` `INSERT` on `users` succeeds for `(email, password_hash)` and fails
    for any other column.
-4. `app_auth` `UPDATE`/`DELETE` on `users` fails with `42501`.
-5. `app_auth` holds no privilege on any tenant, weather, or catalog table — enumerated,
+5. `app_auth` `UPDATE`/`DELETE` on `users` fails with `42501`.
+6. `app_auth` holds no privilege on any tenant, weather, or catalog table — enumerated,
    not sampled.
-6. `app_api` still holds no privilege on `users`.
-7. The 39 tenant-isolation tests and 12 conformance tests pass unchanged.
-8. The migration applies to a fresh volume, in one transaction, with the role present.
-9. `db:verify` is green with the new rows included.
+7. `app_api` still holds no privilege on `users`.
+8. The 39 tenant-isolation tests and 12 conformance tests pass unchanged.
+9. The migration applies to a fresh volume, in one transaction, with the role present.
+10. `db:verify` is green with the new rows included.
 
 ## 1.10 Owner decision
 
@@ -361,7 +397,8 @@ logout return `503`, never anonymous access, never a second store used as a fall
 | S-3 | A GC job that does not exist yet | Accepted; scheduled in `maintenance` |
 | S-4 | Session rows are readable by the auth credential without any tenant context | Accepted, by design |
 | S-5 | Un-revocation cannot be prevented by a grant | Accepted, disclosed |
-| S-6 | If `AG-2` selects Redis: `ADR-002` D5 must be amended in the same change, a compose service must be added, and the store becomes an authentication authority | Not applicable unless selected |
+| S-6 | If option **B** is explicitly selected: `ADR-002` D5 must be amended in the same change, a compose service must be added, and the store becomes an authentication authority | Not applicable unless B is approved |
+| S-7 | If **both** options are rejected: `OPEN-13` stays unresolved, `S5`/`S8` stay blocked, and no session storage exists | A recorded outcome (§2.8), not a step toward either option |
 
 ## 2.8 Dependencies and implementation consequences
 
@@ -376,15 +413,30 @@ any grant on `app.sessions`. Approving `AG-2` as a table does **not** approve
 leaves the other decision meaningful — an owner may reasonably want the credential
 boundary without a new table, or the table while deferring the fourth role.
 
-Consequences if approved: one additive migration (`sessions` table, two policies,
+**Four outcomes, and only one of them selects a store.** Rejecting A is not a vote for
+B; the forms are separate for exactly that reason.
+
+| Owner action | Interpretation | Consequence |
+|---|---|---|
+| **Approve A** | PostgreSQL `app.sessions` is selected. `ADR-002` D5 is preserved and needs no amendment | the migration, two policies, column grants, purge function, GC job, `ADR-005` |
+| **Approve B** | Redis is **explicitly** selected | `ADR-002` D5 must be amended in the same change; a compose service, a store credential, and a new availability story are added; `app_auth` holds no `sessions` privilege because no table exists |
+| **Reject both** | neither architecture is approved | **`OPEN-13` stays unresolved; `S5` and `S8` stay blocked; no session-storage implementation of any kind may begin.** This is a legitimate outcome, not a deferred one — it says the owner has not accepted either set of trade-offs |
+| **No decision** | status stays `Pending` | nothing is implied and nothing may proceed |
+
+Consequences if A is approved: one additive migration (`sessions` table, two policies,
 column grants, the purge function), a `schema.prisma` model for representation
 only, `entity-catalog.md` gains `sessions` in the **widened `identity`** class (not
 a sixth class), a GC job in the `maintenance` queue, `ADR-005` written and accepted,
 and new `db:verify` rows including `app_api` denials by SQLSTATE.
 
-Consequences if rejected: sessions live in the Redis store, and the whole external
-service, credential, availability, and D5-amendment set comes with that. There is no
-"decide later" path — `S8` cannot be written without knowing where the session is.
+Consequences if B is approved: the opposite trade — no new table, no GC job, TTL and
+revocation handled by the store, and in exchange an external service, a second
+credential whose compromise mints sessions for anyone, a D5 amendment, and a store
+whose unavailability takes login down. `S8` is written against that store instead.
+
+Consequences if both are rejected: the work stops here. There is no third architecture
+proposed, and none should be inferred — picking one is the owner's decision, not an
+implementer's fallback.
 
 ## 2.9 Acceptance criteria
 
@@ -417,9 +469,14 @@ service, credential, availability, and D5-amendment set comes with that. There i
 | Accepted residual risks | ____________________ |
 
 ```
-Approve:  ☐ A — PostgreSQL table   ☐ B — Redis (requires ADR-002 D5 amendment)      Reject: ☐
+Approve A (PostgreSQL table):  ☐
+Approve B (Redis, requires ADR-002 D5 amendment in the same change):  ☐
+Reject both (OPEN-13 stays unresolved; no session storage may be implemented):  ☐
 Approved by: ____________________   Date: __________
 ```
+
+An unsigned form is **no decision**, not a rejection. Exactly one box may be marked;
+marking two leaves the decision unmade.
 
 ---
 
