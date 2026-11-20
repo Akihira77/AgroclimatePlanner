@@ -11,7 +11,7 @@
 | Implementation status | **Snapshot at 2026-11-18; live status is `docs/IMPLEMENTATION_STATUS.md`** — `S1` and `S2` implemented at that date, `S3` onward not started then (now `S3` and `S4` are implemented) — contracts at `c44cf5b`/`0bb9792`, plumbing at `ad6235b`, remediation at `6d36741`, details and path hardening at `c762171`, shared path grammar at `38486fd`, parser and numeric-segment correctness at `75607d8` |
 | Verification status | **Green at `75607d8`, reviewed** — build, typecheck, test, lint, prettier, `git diff --check` all exit `0`; api 76, contracts 187, database 9, 0 failing |
 | Remaining blockers before `S3` | **None documentation-wise** — `ADR-004` was accepted on 2026-11-18 (see the ADR status row). `S3` may begin subject to its own implementation prerequisites (§16 of the plan: test-file authorization, a cluster-admin bootstrap path, an isolated compose project). `ADR-005` gates `S5`, not `S3`. The `IG` gates block **S7** (`IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10`) and **S8** (`IG-8`, `IG-9`), not the database boundary |
-| ADR status | `ADR-004` **Accepted** 2026-11-18 (approver: Akihira77) — formalises `AG-1`. `ADR-005` **written, `Proposed`, not accepted** — formalises `AG-2` and gates `S5`; the three schema details it needed are decided as `D-1`–`D-3` in §2.11 (2026-11-20). Neither ADR invents a decision beyond its approval, and `AG-1`/`AG-2` are **not** re-opened or asked for again |
+| ADR status | `ADR-004` **Accepted** 2026-11-18 and `ADR-005` **Accepted** 2026-11-20 (approver: Akihira77) — they formalise `AG-1` and `AG-2`; `ADR-005` gates `S5`, and the three schema details it needed are decided as `D-1`–`D-3` in §2.11 (2026-11-20). Neither ADR invents a decision beyond its approval, and `AG-1`/`AG-2` are **not** re-opened or asked for again |
 | `OPEN-nn` dispositions changed | **No** — `OPEN-01` and `OPEN-13` remain unresolved |
 
 This record exists so the owner can decide without reading 1,100 lines of review. It
@@ -1089,7 +1089,7 @@ satisfied — not that the step is complete.
 | S6 | `privilege-verification.mjs` `EXPECTED` + `has_column_privilege` probes; `auth-boundary` suite | S4 (and S5) | S4 |
 | S7 | Register + login: schemas, Argon2id, dummy hash, rate limit before lookup, generic failures | S1, S2, S4, `IG-1/2/3/4/6/7/10` | **not** unblocked by these four alone |
 | S8 | Session guard, `/me`, logout, sliding expiry, purge function call | S5, S6, `IG-8/9` | **not** unblocked by these four alone; the `maintenance` queue that would schedule the purge is Phase 4 (`background-processing.md`) |
-| S9 | Docs reconciliation: `entity-catalog` `sessions` in widened `identity`, `api-conventions` amendments, `auth-deferred.md` pointer, `IMPLEMENTATION_STATUS` (`ADR-004`/`ADR-005` are written; see the ADR status row) | everything above | — |
+| S9 | Docs reconciliation: `entity-catalog` `sessions` in widened `identity`, `api-conventions` amendments, `auth-deferred.md` pointer, `IMPLEMENTATION_STATUS` (`ADR-004`/`ADR-005` are accepted; see the ADR status row) | everything above | — |
 
 **Implementation status of this sequence (verified 2026-11-18).** Two steps are built;
 the rest are not.
@@ -1099,7 +1099,7 @@ the rest are not.
 | S1 | **implemented** | `c44cf5b` — response and error envelopes, error-code set, `requestId`; `0bb9792` — branded `NotFoundErrorCode`; `38486fd` — encoded path grammar enforced by `validationIssueSchema`, with the producer importing the same identifier rule; `75607d8` — explicit parser states and canonical numeric segments |
 | S2 | **implemented and remediated** | `ad6235b` — prefix, filter, request id, cookies, helmet, trust proxy, CORS, database client, health probes; `6d36741` — credential boundary, log sanitisation, 405/406/415 documentation, `statement_timeout` readiness, `IG-5-A1`, `IG-12`; `c762171` — `details` trust boundary, path sanitisation in the pipe, log category, readiness budget, S2 commit history; `38486fd` — shared path grammar, producer reuse, segment-boundary truncation; `75607d8` — parser state machine, canonical numeric guard |
 | S3–S8 | **not started** | no `app_auth` role, no migration, no auth endpoint |
-| S9 (partial) | **`ADR-004` accepted; `ADR-005` written** | `docs/adr/ADR-004-authentication-database-boundary.md` — **Accepted** 2026-11-18 (Akihira77); `docs/adr/ADR-005-session-storage.md` — `Proposed`, awaiting acceptance before `S5`; every other S9 item is still absent |
+| S9 (partial) | **`ADR-004` and `ADR-005` accepted** | `docs/adr/ADR-004-authentication-database-boundary.md` — **Accepted** 2026-11-18 (Akihira77); `docs/adr/ADR-005-session-storage.md` — **Accepted** 2026-11-20 (Akihira77); `S5` has not started, and every other S9 item is still absent |
 
 So the honest statement of what these four decisions buy: **Track 1 can start**
 (contracts and plumbing), and **Track 2 can start** (the database boundary and

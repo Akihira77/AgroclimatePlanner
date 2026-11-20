@@ -36,10 +36,11 @@ Four steps, in a fixed order:
 | **S6** | `db:verify` rows, `auth-boundary` suite, conformance additions | a boundary nobody measured is a claim, not a control |
 
 Status, as of 2026-11-18: **S3 and S4 are implemented, verified in isolated projects,
-and pushed** (`b9a27c6`, `cf0d1c2`). `S5` is blocked on `ADR-005` acceptance; `S6`'s
-session half waits for `S5`, and its `users` half is what the corrective pass just
-hardened; the canonical database application is the owner's and is not evidenced
-anywhere in this repository.
+and pushed** (`b9a27c6`, `cf0d1c2`). `S5`'s gate is now satisfied — `ADR-005` was
+accepted on 2026-11-20 and S4 is complete — but S5 has **not started**; `S6`'s session
+half waits for `S5`, and its `users` half is what the corrective pass just hardened; the
+canonical database application is the owner's and is not evidenced anywhere in this
+repository.
 
 What this does **not** produce: a register endpoint, a login endpoint, a session
 guard, `/me`, `/logout`, password hashing, rate limiting, or a GC job. Those are S7
@@ -48,7 +49,7 @@ and S8 and remain blocked on gates this plan does not answer (§13).
 The architecture half is now written down where it belongs rather than only in this
 plan: `docs/adr/ADR-004-authentication-database-boundary.md` formalises `AG-1` and
 `docs/adr/ADR-005-session-storage.md` formalises `AG-2`. `ADR-004` was **accepted on
-2026-11-18**; `ADR-005` is still **Proposed**, because approval of a decision and
+2026-11-18** and `ADR-005` on **2026-11-20**, because approval of a decision and
 acceptance of its record are different acts. This plan links to them and does not
 restate them (§4).
 
@@ -280,7 +281,7 @@ Three artefacts, three different meanings, and none of them substitutes for anot
 |---|---|---|
 | `phase-3.2-owner-decisions.md` §1.10, §2.10 | the owner **approved** `AG-1`/`AG-2` on 2026-11-18 | approved |
 | `phase-3.2-owner-decisions.md` §2.11 | the owner **accepted** the three schema details `D-1`–`D-3` on 2026-11-20 (hash-shape CHECK, 90-day cap CHECK, two indexes) | approved; supplements `AG-2`, does not amend it |
-| `ADR-004`, `ADR-005` | the durable formal record of those approvals | `ADR-004` **Accepted** 2026-11-18; `ADR-005` **Proposed** |
+| `ADR-004`, `ADR-005` | the durable formal record of those approvals | `ADR-004` **Accepted** 2026-11-18; `ADR-005` **Accepted** 2026-11-20 |
 | this plan | how the approved architecture becomes schema and evidence | `S3`/`S4` implemented; the rest is still plan |
 
 Approval is not acceptance of a document, and neither is implementation. Nothing here
@@ -1308,7 +1309,7 @@ of them into "done" or "blocked".
 | `AG-1` | **1 — decided** 2026-11-18 | owner record §1.10, Option A |
 | `AG-2` | **1 — decided** 2026-11-18 | owner record §2.10, Option A |
 | `ADR-004` | **accepted 2026-11-18** (Akihira77) — left state 2 | `docs/adr/ADR-004-authentication-database-boundary.md`; formalises `AG-1`, not implemented |
-| `ADR-005` | **2 — written, not accepted** | `docs/adr/ADR-005-session-storage.md`; formalises `AG-2`; its three schema details are decided as `D-1`–`D-3` (2026-11-20) |
+| `ADR-005` | **accepted 2026-11-20** (Akihira77) — left state 2 | `docs/adr/ADR-005-session-storage.md`; formalises `AG-2`; its three schema details are decided as `D-1`–`D-3` (2026-11-20) |
 | `D-1`–`D-3` | **1 — decided** 2026-11-20 | owner record §2.11; they supplement `AG-2` |
 | `IG-5`, `IG-5-A1` | decided, implemented | S1/S2 shipped against them |
 | `IG-11` | decided | `node:test` for `apps/api`; already in use |
@@ -1317,7 +1318,7 @@ of them into "done" or "blocked".
 | `IG-8`, `IG-9` | **3 — open** | block **S8**, not S3–S6 |
 | S3 | **4 — implemented** | gate: accepted `ADR-004`; `db:verify` 387 assertions at the time |
 | S4 | **4 — implemented and pushed** | gate: S3 (the role must exist before a policy names it); `db:verify` 419 assertions after the corrective pass |
-| S5 | **4 — not started** | gate: accepted `ADR-005` **and** S4 |
+| S5 | **4 — not started** | gate: accepted `ADR-005` **and** S4 — both satisfied 2026-11-20, nothing applied |
 | S6 | **4 — not started** | gate: the stages whose rows it verifies — S3/S4 for the `users` half, plus S5 for the session half |
 | `OPEN-01` | **5 — unresolved** | needs accepted `ADR-004` + migration + `db:verify` |
 | `OPEN-13` | **5 — unresolved** | needs accepted `ADR-005` + migration + session suite |
@@ -1482,11 +1483,11 @@ the session table in the diff.
 **GO when all of the following hold:**
 
 1. The owner has **accepted `ADR-004`** — the only ADR gate that precedes S3 (§13.2).
-   `ADR-005` is written and `Proposed` as well, and gates **S5**; S3 does not wait on
-   it. Acceptance adds a date and an approver to the record and is the owner's act, not
-   an implementer's assertion. Note what this does *not* mean: `AG-1` and `AG-2` are
-   already decided (2026-11-18), so acceptance is a statement that the record is
-   faithful — not a fresh architecture decision, and not a re-vote.
+   `ADR-005` is written and **accepted** (2026-11-20) as well, and gates **S5**; S3
+   does not wait on it. Acceptance adds a date and an approver to the record and is the
+   owner's act, not an implementer's assertion. Note what this does *not* mean: `AG-1`
+   and `AG-2` are already decided (2026-11-18), so acceptance is a statement that the
+   record is faithful — not a fresh architecture decision, and not a re-vote.
 2. `master` is at or after `75607d8` with a clean tree, and the S2 checks are green —
    the baseline this work builds on. `ADR-005` acceptance is required before the S5
    commit, not before S3.

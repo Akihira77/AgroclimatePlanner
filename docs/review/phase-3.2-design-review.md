@@ -31,10 +31,11 @@ this note exists only to keep the chronology complete: `bf0e593` (reviewed) →
 The snapshot below is still the object of this review and has not been rewritten.
 
 **Reconciled 2026-11-18 after the plan-review remediation.** One track definition was
-clarified, not changed. `ADR-004` and `ADR-005` now exist as `Proposed` records of
-`AG-1`/`AG-2`, and the reading recorded at this point was that §18's Track 2 gate became
-"`AG-1`/`AG-2` approved **and** their ADRs accepted" before S3 — **superseded by the
-correction immediately below.** §18's Track 3 `IG` gates stay exactly where that row
+clarified, not changed. At that date `ADR-004` and `ADR-005` existed as `Proposed`
+records of `AG-1`/`AG-2`; both have since been accepted, `ADR-004` on 2026-11-18 and
+`ADR-005` on 2026-11-20. The reading recorded at this point was that §18's Track 2 gate
+became "`AG-1`/`AG-2` approved **and** their ADRs accepted" before S3 — **superseded by
+the correction immediately below.** §18's Track 3 `IG` gates stay exactly where that row
 puts them — S7 and S8 — and none of them moves into Track 2. §3.2's "PROPOSED — not
 applied" status remains accurate: this note records documents, not schema.
 

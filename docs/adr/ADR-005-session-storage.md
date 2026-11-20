@@ -1,11 +1,16 @@
 # ADR-005 — PostgreSQL Session Storage
 
-- Status: **Proposed** — formalises decision `AG-2` recorded by the repository owner
-  on 2026-11-18 in `docs/review/phase-3.2-owner-decisions.md` §2.10, plus the three
-  schema decisions `D-1`–`D-3` the owner accepted on 2026-11-20 (§2.11). That approval
-  is the decision; this document is its durable record. Acceptance of *this document*
-  is the owner's, not the author's, and is a separate act from the approvals it records.
-- Date: 2026-11-18 (decision date), schema decisions 2026-11-20, recorded here 2026-11-20
+- Status: **Accepted** — approved by **Akihira77 on 2026-11-20**. This ADR formalises
+  decision `AG-2`, recorded by the repository owner on 2026-11-18 in
+  `docs/review/phase-3.2-owner-decisions.md` §2.10, plus the three schema decisions
+  `D-1`–`D-3` the owner accepted on 2026-11-20 (§2.11). That approval is the decision;
+  this document is its durable record, and acceptance of it is the owner's act, separate
+  from the approvals it records. Acceptance is a **documentation gate, not
+  implementation**: `S5` and `S6` have not started, `app.sessions` does not exist, and
+  `OPEN-13` stays unresolved until the owner applies the migration to the canonical
+  database and the session suite is green there.
+- Date: 2026-11-18 (decision date), schema decisions 2026-11-20, accepted 2026-11-20,
+  recorded here 2026-11-20
 - Depends on: ADR-002 (D5), ADR-003, ADR-004, `docs/review/phase-3.2-design-review.md`
   §4.3, §6, §12.2, §17
 - Supersedes: none

@@ -455,11 +455,11 @@ approvals, one amendment `IG-5-A1`, one later gate `IG-12`).
 | S2 — API plumbing | **implemented and remediated** | `ad6235b`, `6d36741`, `c762171`, `38486fd`, `75607d8` | `/v1` prefix, request-id middleware, exception filter, `ZodValidationPipe` bound per parameter, `cookie-parser`, helmet, explicit CORS allowlist, explicit trust proxy, database client + lifecycle, `/health` and `/health/ready` |
 | S3 — `app_auth` bootstrap | **implemented** | `70a614f`, `d9d774e`, `f5e4d1c`, `a4f1fa0` | fourth role with zero memberships and no `BYPASSRLS`; `APP_AUTH_DATABASE_URL` parsed and role-validated at boot (dev default, production must state it); non-global `AuthDatabaseModule` + `AuthDatabaseLifecycle`, proven by module-assembly tests, not yet imported by `AppModule`; `db:verify` 387 assertions |
 | S4 — `auth_boundary` migration | **committed and pushed** | `b9a27c6`, `cf0d1c2` | `20261118040000_auth_boundary`: two column grants and two policies on `app.users`; `db:verify` 419 assertions, 0 FAIL, 0 SKIP after the corrective pass |
-| S5 — `sessions` migration | not started | — | gated on `ADR-005` acceptance; the three schema details it needs are decided as `D-1`–`D-3` (2026-11-20) |
+| S5 — `sessions` migration | not started | — | gate satisfied: `ADR-005` accepted 2026-11-20; the schema details are decided as `D-1`–`D-3` |
 | S6 — privilege verification | not started | — | — |
 | S7 — register + login | blocked | — | needs `IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10` |
 | S8 — session guard, `/me`, logout | blocked | — | needs `IG-8`, `IG-9` |
-| S9 — docs reconciliation | not started | — | `ADR-004`/`ADR-005` are written (`ADR-004` accepted, `ADR-005` proposed); the reconciliation changes are pending |
+| S9 — docs reconciliation | not started | — | `ADR-004` and `ADR-005` are accepted; the reconciliation changes are pending |
 
 Gates this phase answered: `AG-1`, `AG-2`, `IG-5`, `IG-11`, plus `IG-5-A1` and
 `IG-12`. Gates it did not answer: `IG-1`–`IG-4`, `IG-6`–`IG-10`.
@@ -467,7 +467,7 @@ Gates this phase answered: `AG-1`, `AG-2`, `IG-5`, `IG-11`, plus `IG-5-A1` and
 What S2 deliberately does not contain: an auth endpoint, session issuance, an
 `app_auth` role, a grant, a policy, or a migration. `OPEN-01` and `OPEN-13` remain
 unresolved — an acceptance and an implementation are not a migration applied to the
-canonical database, and `ADR-005` is still `Proposed`.
+canonical database; `ADR-005` is accepted (2026-11-20), and that applies nothing.
 
 Verification history, by commit, because the four commits fixed different things:
 
