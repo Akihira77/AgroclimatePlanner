@@ -3,10 +3,11 @@
 Status: **PLAN ONLY — nothing in this document is applied.**
 Prepared 2026-11-18 against `master` at `75607d8`; revised after independent review.
 Architecture records: `ADR-004` (`app_auth` boundary) and `ADR-005` (session storage),
-both **Proposed**, formalising the owner decisions `AG-1`/`AG-2` of 2026-11-18.
-Approval still needed, per gate: **`ADR-004` before S3**; **`ADR-005` before S5**. The
-two are independent — a decision about a session table does not gate the role bootstrap
-(§13.2, §16). `AG-1` and `AG-2` are **not** re-opened here and are not asked for again.
+formalising the owner decisions `AG-1`/`AG-2` of 2026-11-18. **`ADR-004` was accepted on
+2026-11-18 and `ADR-005` on 2026-11-20**, so both ADR gates are satisfied; neither
+acceptance applies any schema. The two gates are independent — a decision about a session
+table did not gate the role bootstrap (§13.2, §16). `AG-1` and `AG-2` are **not**
+re-opened here and are not asked for again.
 
 **Document location.** This is the first file under `docs/implementation/`. The
 existing directories each answer a different question — `adr/` records accepted
@@ -285,10 +286,12 @@ Three artefacts, three different meanings, and none of them substitutes for anot
 | this plan | how the approved architecture becomes schema and evidence | `S3`/`S4` implemented; the rest is still plan |
 
 Approval is not acceptance of a document, and neither is implementation. Nothing here
-asks the owner to decide `AG-1`/`AG-2` a second time; the open question is whether each
-ADR faithfully records what was approved, and that is the only thing its milestone waits
-on beyond this plan. `D-1`–`D-3` are decided, so the S5 migration is no longer waiting
-on a schema question — only on `ADR-005` being accepted as a record.
+asks the owner to decide `AG-1`/`AG-2` a second time: acceptance was a statement that each
+ADR faithfully records what was approved. Both are now accepted — `ADR-004` on
+2026-11-18, `ADR-005` on 2026-11-20 — so every approval gate this plan names is
+satisfied, and `D-1`–`D-3` settled the remaining schema questions. S5's gate is therefore
+satisfied as well; the milestone itself is still **not started**, because a satisfied gate
+authorises work rather than performing it.
 
 The gates are per-milestone, not per-phase:
 
@@ -1489,8 +1492,8 @@ the session table in the diff.
    and `AG-2` are already decided (2026-11-18), so acceptance is a statement that the
    record is faithful — not a fresh architecture decision, and not a re-vote.
 2. `master` is at or after `75607d8` with a clean tree, and the S2 checks are green —
-   the baseline this work builds on. `ADR-005` acceptance is required before the S5
-   commit, not before S3.
+   the baseline this work builds on. `ADR-005` acceptance was required before the S5
+   commit, not before S3; it was given on 2026-11-20.
 3. A cluster-admin path for bootstrap exists for every environment in scope
    (`BOOTSTRAP_DATABASE_URL` outside development) **or** the work is explicitly
    confined to development.
