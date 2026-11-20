@@ -197,8 +197,8 @@ Rules:
 ## 6. Endpoint surface (v1)
 
 ```
-POST   /v1/auth/register
-POST   /v1/auth/login | /logout | GET /v1/auth/me
+POST   /v1/auth/register                    (S7)
+POST   /v1/auth/login | /logout | GET /v1/auth/me   (S8)
 
 GET    /v1/farms                       POST /v1/farms
 GET    /v1/farms/:id                   PATCH /v1/farms/:id
@@ -243,41 +243,50 @@ GET    /health  |  /health/ready
 
 ## 8. Auth and authorization
 
-- Session cookie (`HttpOnly`, `Secure`, `SameSite=Lax`), server-side session table, sliding expiry 30 d, absolute 90 d.
-- CSRF: double-submit token on non-GET.
+- Session cookie (`HttpOnly`, `Secure`, `SameSite=Lax`), server-side session table, sliding expiry 30 d, absolute 90 d. Delivered in S8; the table exists since S5.
+- CSRF: double-submit token on non-GET. S8.
 - Authorization: ownership checked at the controller boundary, mirrored by Postgres RLS. A `404` is returned for another user's resource — never `403`, which leaks existence.
 - Roles: `owner` (everything on own data), `admin` (catalog and profile publishing, read-only on other users' farms). No per-field granularity in v1.
 
-### 8.1 Registration and login (S7)
+### 8.1 Registration and credential verification (S7)
 
-`POST /v1/auth/register` and `POST /v1/auth/login` are the only endpoints that run before
-a tenant context exists. Neither opens a tenant transaction and neither sets
-`app.user_id`; both use the dedicated `app_auth` credential.
+`POST /v1/auth/register` runs before a tenant context exists. It does not open a tenant
+transaction and does not set `app.user_id`; it uses the dedicated `app_auth` credential.
+The same is true of the login endpoint, which is S8.
 
 Registration:
 
 - Body is `{ email, password }` and nothing else; unknown keys are a `400`.
-- Email is trimmed and lowercased by one shared function, used by both endpoints. The
+- Email is trimmed and lowercased by one shared function, also used by login in S8. The
   unique constraint stays case-sensitive, so normalisation is an application invariant.
-- Password: at least 12 characters, at most 1024 UTF-8 bytes, printable ASCII only
-  (U+0020–U+007E), no composition rules, no trimming, no Unicode normalisation.
+- Password: 12 to 1024 **characters**, printable ASCII only (U+0020–U+007E) — letters,
+  digits, spaces, punctuation, and standard symbols. Emoji and any character outside that
+  range are a `400`. No composition rules, no trimming, no Unicode normalisation. Because
+  the charset is ASCII, the character count and the UTF-8 byte count are the same number;
+  the boundary enforces `Buffer.byteLength(password, "utf8") <= 1024`.
 - `201` with the safe user representation `{ id, email, role, locale, timezone }`.
   `createdAt` is **not** returned: the auth credential has no `SELECT` privilege on
   `created_at`.
 - A duplicate address is `409` with code `CONFLICT` and no `details`. That discloses
   existence; the disclosure is accepted and recorded in
   `docs/review/phase-3.2-s7-owner-decisions.md`.
-- No session, no token, no `Set-Cookie`. Session issuance belongs to login only.
+- No session, no token, no `Set-Cookie`. Registration never authenticates the caller.
 
-Login:
+Credential verification (S7, internal — no route):
 
-- Body is `{ email, password }`; the same normalisation function runs first.
-- Rate limiting runs **before** the database lookup and before hashing.
-- Every failure is identical: `401` with code `UNAUTHENTICATED`, no `details`, no field
-  that distinguishes an unknown address from a wrong password. Unknown addresses are
-  verified against a fixed dummy hash so the cost does not differ.
-- Success returns the same safe representation. The session token exists only in the
-  `Set-Cookie` header that S8 defines; it is never in the body.
+- Given an email and a password, it runs the same normalisation, looks the user up through
+  `app_auth`, and compares the password against the stored Argon2id hash.
+- Unknown address and wrong password are indistinguishable: both verify against a fixed
+  dummy hash so the cost matches, and both return the same uniform failure.
+- It returns either the safe user representation or that failure. It **issues nothing** —
+  no session row, no token. Session issuance is S8's, and this function is the only place
+  a password is compared.
+
+`POST /v1/auth/login` and everything that makes a session usable are **S8**: token
+generation and SHA-256 storage, the session cookie, CSRF, the guard, `/me`, and logout.
+Until S8 ships, no account has a usable authenticated session. The login contract, when
+it exists, is: rate limit before the lookup, the same normalisation, uniform `401`
+`UNAUTHENTICATED` on failure, and the token only in the cookie — never in the body.
 
 Passwords are hashed with Argon2id (`IG-6`); parameters are provisional until the
 deployment-host benchmark is recorded. Email verification is deferred (`IG-10`), so an
@@ -285,7 +294,7 @@ address is not proven to belong to the registrant.
 
 ## 9. Rate limiting
 
-- Public/auth endpoints: 30 req/min/IP.
+- Public/auth endpoints: 30 req/min/IP — registration in S7, login in S8.
 - The v1 limiter is process-local: quotas do not aggregate across replicas, and
   distributed credential stuffing is an accepted gap (`IG-7`).
 - Read endpoints: 300 req/min/user.

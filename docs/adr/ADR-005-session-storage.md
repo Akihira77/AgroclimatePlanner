@@ -196,7 +196,7 @@ This ADR deliberately does not solve that, and says so rather than implying a so
 - The **atomic update or row-locking strategy** — a conditional `UPDATE` whose predicate
   re-checks the window, a `SELECT … FOR UPDATE` around the read-modify-write, or an
   advisory lock per session — is a decision for the authentication workflow milestone
-  **S7**, where the request path and its transaction boundaries exist and can be tested
+  **S8**, where the request path and its transaction boundaries exist and can be tested
   under concurrency.
 - **S5 must not claim to have solved it.** S5 creates no request path, runs no
   concurrency test, and ships no procedure. A verifier row that asserted "extension
@@ -402,7 +402,7 @@ see what remains undecided:
 | `sessions_auth_all FOR ALL TO app_auth USING (true) WITH CHECK (true)` + owner policy | `AG-2` §2.4/§2.7, accepted |
 | `app.purge_expired_sessions()` definer shape, `EXECUTE` to `app_system` | `AG-2` §2.9, accepted |
 | Column-grant list, function body, policy names, index names | engineering detail, constrained by the rows above |
-| Throttle enforcement mechanism under concurrency | **undecided**, owned by S7 |
+| Throttle enforcement mechanism under concurrency | **mechanism decided** by `IG-7` — in-process, per-client-IP fixed window (`LIMITER-MECHANISM` still needs the owner's word). Enforcement lands in S7 for registration and S8 for login |
 | `sessions.user_id` FK action under account deletion | the proposed S5 FK names no action, so PostgreSQL's default `NO ACTION` would apply if that DDL is applied; it is not an owner decision, and the lifecycle policy remains **undecided**, blocked by `OPEN-04` |
 
 ## Security properties
@@ -454,8 +454,8 @@ see what remains undecided:
     compromised `app_auth` inserts a session for any `user_id` and may shorten a session
     it should not touch — bounded only by the statement's own columns, not by intent.
 11. **The throttle is not enforced by any database object.** Concurrent extensions are
-    bounded in result by the clamp but not prevented; enforcement is S7's, as stated
-    under *Concurrency*.
+    bounded in result by the clamp but not prevented; enforcement is S8's (login), as
+    stated under *Concurrency*.
 
 ## Availability and failure behaviour
 
@@ -581,6 +581,8 @@ closed.
   development database (`127.0.0.1:5442`, 5/5), and `test/rls/auth-boundary.test.mjs` is
   green there (49 cases). `OPEN-01` and `OPEN-04` remain open and are unaffected: the
   store exists, the request path that uses it does not.
-- **`IG-8`** (cookie name and `__Host-` prefix), **`IG-9`** (CSRF), **`IG-6`**
-  (password hashing parameters) — unanswered, and they block S8/S7 rather than this
-  store.
+- **`IG-8`** (cookie name and `__Host-` prefix) and **`IG-9`** (CSRF) — unanswered, and
+  they block S8 rather than this store. **`IG-6`** (password hashing) is answered
+  conditionally as of 2026-11-20 (`docs/review/phase-3.2-s7-owner-decisions.md`): Argon2id
+  with provisional parameters, final only after the deployment-host benchmark. It blocks
+  S7, not this store.

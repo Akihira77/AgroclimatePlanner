@@ -142,6 +142,10 @@ this review.
 | F18 | Medium | `apps/api` has no test runner — its `test` script prints a string. The repository already carries two runners: `node:test` in `packages/database`, vitest in `packages/contracts` | `[V]` `apps/api/package.json:11`; `packages/contracts/package.json` `"test": "vitest run"`; `packages/database/package.json:28-30` |
 | F19 | Low | `app.user_id` is an ordinary GUC: **any** role can set it, `app_auth` included. No grant is implied by that, which is the only thing that keeps it harmless | `[V]` `ADR-003:19-24,104-115`; `ownership-and-rls.md` §6 |
 
+**Status note, 2026-11-20.** These are findings as of the review date. `F14` is closed:
+`api-conventions.md` lists `POST /v1/auth/register` and documents it in §8.1. `F5` (no
+session table) was closed by S5 and `F15` by S6. The other rows stand as written.
+
 ### 1.1 Why the brief's own premises need correcting
 
 Three claims in the brief are contradicted by the repository. They are not
@@ -645,6 +649,14 @@ never change what a farmer was told. The same sentence governs identity. `[V]`
 
 Ordering is the security content. Each step names the transaction it runs in.
 
+**Milestone split, 2026-11-20.** The sequences below are the plan as reviewed; the
+applied boundary is narrower and is recorded in
+`docs/review/phase-3.2-s7-owner-decisions.md`. §7.1 steps 1–6 (parse, normalise, password
+policy, hash, insert, duplicate) plus credential verification are **S7** and issue no
+session. §7.1 step 7's session branch, all of §7.2, and §7.3–§7.4 are **S8**. One
+correction follows from the credential boundary: step 8 returns the safe representation
+**without** `createdAt`, because `app_auth` holds no `SELECT` privilege on `created_at`.
+
 ### 7.1 Register — `POST /v1/auth/register`
 
 1. Body parsed; `registerRequestSchema` rejects unknown keys (mass assignment). In
@@ -706,7 +718,7 @@ until step 9 succeeds, and no tenant transaction is opened anywhere in this hand
 |---|---|---|
 | Controls in v1 | a single per-IP token bucket on `POST /v1/auth/login` and `POST /v1/auth/register`, plus the Argon2id cost as the only per-account brake | **proposed** — no limiter dependency exists in the repository today (F17) |
 | Per-IP, per-account, or both | **per-IP in v1.** Per-account is *specified* here and *deferred* (`IG-7`): it requires a store that survives process restarts and replication, and no such store is approved | per-IP proposed; per-account deferred |
-| Added dependency | yes — `@nestjs/throttler` (or an equivalent) is a new dependency, which the repository's dependency rule requires to be justified rather than assumed. Its default store is **in-process**, so N replicas behind Caddy enforce roughly N× the configured limit | **must be approved** |
+| Added dependency | no — the mechanism is a `LIMITER-MECHANISM` decision, not a dependency approval. The recommendation (`docs/review/phase-3.2-s7-dependency-options.md`) is an in-process fixed-window guard with no package added. If `@nestjs/throttler` (or an equivalent) is chosen instead, it is a new dependency that the repository's dependency rule requires to be justified rather than assumed. Either way the store is **in-process**, so N replicas behind Caddy enforce roughly N× the configured limit | **mechanism decision outstanding** |
 | Limiter store unavailable | in-process store: nothing to be unavailable, and the limiter cannot fail open because it is local state. If a shared store is later introduced (Redis), the policy is §6.3: fail closed, `503`, never "allow because the limiter is down" | design rule |
 | Trust proxy | `app.set('trust proxy', 1)` is required or `req.ip` is Caddy's address and every user shares one bucket | **proposed**; absent today |
 | What remains absent with per-account deferred | distributed credential stuffing against one account (one attempt per IP across many IPs); account lockout; any delay that escalates across attempts. The only remaining brake is Argon2id cost per attempt, which is real but linear and parallelisable | **deferred, stated** |
@@ -1049,6 +1061,15 @@ the boundary, the contracts, or the API plumbing.
 `IG-11` is not in the round-2 list; it is required by F18 and would otherwise be
 decided by whoever writes the first `package.json` line.
 
+**Update, 2026-11-20.** All seven `IG` gates in this table are now answered in
+`docs/review/phase-3.2-s7-owner-decisions.md`. Where the *Recommended* column above
+disagrees with that record, the record is authoritative. Three points are worth naming:
+`IG-1` uses one shared application function (trim + lowercase), not a `lower(email)`
+index; `IG-4` is 12–1024 **characters** of printable ASCII (`U+0020`–`U+007E`), with no
+composition rules — the byte cap is equivalent because no allowed character exceeds one
+byte. `IG-7` is split by milestone: registration in S7, login in S8. The rest of this
+section is the plan as reviewed and is left as written.
+
 **Not gates:** `OPEN-04` (deletion — untouched, no endpoint, no column) and
 `OPEN-28` (signed context — `DEFERRED`; 3.2 neither worsens nor fixes it).
 
@@ -1126,11 +1147,17 @@ migrations, or the tenant path.
 
 ### Track 3 — authentication endpoints (**gated**)
 
+**Clarification, 2026-11-20.** The rows below are the plan as reviewed. The boundary was
+later restated in `docs/review/phase-3.2-s7-owner-decisions.md`: **S7** is registration
+and credential verification (no session, no login endpoint); **S8** is the login endpoint
+plus session issuance, the cookie, CSRF, the guard, `/me`, and logout. Nothing else in
+this table changes.
+
 | Step | Work | Gate |
 |---|---|---|
-| S7 | Register + login: schemas, Argon2id, dummy-hash verification, rate limiting before lookup, generic failures | S1, S2, S4, `IG-1/2/3/4/6/7/10` |
-| S8 | Sessions: guard, `/me`, `/logout`, sliding expiry, purge job wiring | S5, S6, `IG-8/9` |
-| S9 | Docs: ADR-004/005 accepted, `entity-catalog` gains `sessions` in the widened `identity` class, `api-conventions` amendments (`/v1/auth/register`, the 403/404 contradiction), `auth-deferred.md` pointer resolved, `IMPLEMENTATION_STATUS` | everything above |
+| S7 | Register + credential verification: schemas, Argon2id, dummy-hash verification, rate limiting before lookup, generic failures | S1, S2, S4, `IG-1/2/3/4/6/7/10` |
+| S8 | Login endpoint and session flow: token generation and SHA-256 storage, cookie, CSRF, guard, `/me`, `/logout`, sliding expiry, purge job wiring | S5, S6, S7, `IG-8/9` |
+| S9 | Docs: ADR-004/005 accepted, `entity-catalog` gains `sessions` in the widened `identity` class, `api-conventions` amendments (`/v1/auth/register` added 2026-11-20; the 403/404 contradiction is still open), `auth-deferred.md` pointer resolved, `IMPLEMENTATION_STATUS` | everything above |
 
 Dependency rules preserved: role before policy; grants before endpoints; store
 before validation; subject before tenant context; `withTenant` unchanged throughout.

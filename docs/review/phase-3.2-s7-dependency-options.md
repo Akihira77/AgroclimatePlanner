@@ -2,9 +2,9 @@
 
 | Field | Value |
 |---|---|
-| Status | **PROPOSED — no dependency approved, none installed.** Two approvals are outstanding in `docs/review/phase-3.2-s7-owner-decisions.md` |
+| Status | **PROPOSED — no dependency approved, none installed.** One dependency approval (`ARGON2ID-LIB`) and one mechanism decision (`LIMITER-MECHANISM`) are outstanding in `docs/review/phase-3.2-s7-owner-decisions.md` |
 | Prepared | 2026-11-20, from `0a2e6a2` |
-| Scope | `IG-6` library selection, `IG-7` limiter mechanism. Parameters and limits were already decided; this document chooses only the implementations |
+| Scope | `IG-6` library selection, `IG-7` limiter mechanism in S7 (registration). Parameters and limits were already decided; this document chooses only the implementations. Login-side enforcement lands in S8 |
 | Constraints inherited | no dependency without approval; no S8 work; no database change |
 
 Both sections below separate **registry facts** (checked against npm on 2026-11-20) from
@@ -157,9 +157,10 @@ Judgement:
 
 ### Proposed approval wording — `LIMITER-MECHANISM`
 
-> S7 rate-limits `POST /v1/auth/login` and `POST /v1/auth/register` with an in-process,
-> per-client-IP fixed-window counter implemented in `apps/api`, using `req.ip` under the
-> existing trust-proxy configuration. No runtime dependency is added for S7. Headers
+> S7 rate-limits `POST /v1/auth/register` with an in-process, per-client-IP fixed-window
+> counter implemented in `apps/api`, using `req.ip` under the existing trust-proxy
+> configuration. The same guard applies to `POST /v1/auth/login` when S8 adds it. No
+> runtime dependency is added. Headers
 > follow `api-conventions.md` §9 exactly: `RateLimit-Limit`, `RateLimit-Remaining`,
 > `RateLimit-Reset`, plus `Retry-After` on `429 RATE_LIMITED`. Replacing it with a shared
 > store requires a new approval and must fail closed.

@@ -46,8 +46,10 @@ verified in isolated projects, and pushed** (`b9a27c6`, `cf0d1c2`). Since then `
 project reproducing the same numbers from an empty volume (§8.5).
 
 What this does **not** produce: a register endpoint, a login endpoint, a session
-guard, `/me`, `/logout`, password hashing, rate limiting, or a GC job. Those are S7
-and S8 and remain blocked on gates this plan does not answer (§13).
+guard, `/me`, `/logout`, password hashing, rate limiting, or a GC job. Registration and
+credential verification are S7; the login endpoint, session issuance, cookie, CSRF,
+guard, `/me`, and logout are S8. Both remain blocked on gates this plan does not
+answer (§13).
 
 The architecture half is now written down where it belongs rather than only in this
 plan: `docs/adr/ADR-004-authentication-database-boundary.md` formalises `AG-1` and
@@ -470,7 +472,7 @@ Two further rules:
 
 - `/health/ready` keeps probing the **tenant** client only. Adding an auth probe would
   change the meaning of a 503 already documented in `api-conventions.md` §12; auth
-  readiness is an S7 concern with the fail-closed outage policy.
+  readiness is an S7/S8 concern with the fail-closed outage policy.
 - Failure handling when the credential is absent: the process does not start
   (production) or derives the development URL (development). There is **no** fallback
   to `app_api` and no lazy "create it when needed" path — a client created on first use
@@ -668,8 +670,9 @@ recorded in `docs/data-model/open-decisions.md` §5 as its own act, and it resol
 storage question only: `OPEN-01` (the request path) and `OPEN-04` (account deletion)
 remain open.
 
-Everything from §7.5 onward that describes the request path is still S7's: S5 ships no
-endpoint, no token generation, and no throttle.
+Everything from §7.5 onward that describes the request path is still S8's: S5 ships no
+endpoint, no token generation, and no throttle. S7's half — registration and credential
+verification — is described in `api-conventions.md` §8.1.
 
 One consequence worth stating: `db:verify` now asserts session storage as **required**
 state, so a database that stops at S4 fails it by design rather than reporting a skip.
@@ -1246,7 +1249,7 @@ of those, and "RLS protects it" is never claimed where a role can set its own co
 | Privilege escalation via membership | PostgreSQL | `NOINHERIT`, zero memberships, asserted in both directions; no role may `SET ROLE` another | none at this layer |
 | `SECURITY DEFINER` misuse | PostgreSQL + review | one function, owner `migration_owner`, `search_path` pinned, `EXECUTE` to `app_system` only, returns a count. It cannot be repurposed to read anything | a future definer function is a fresh review, not covered by this one |
 | RLS bypass | PostgreSQL | `app_auth` is `NOBYPASSRLS`; `FORCE` keeps the owner policed; the policies for the auth role are deliberately `USING (true)` so nothing is silently filtered | `app_system` keeps `BYPASSRLS`, which is irrelevant here because it holds no table grant |
-| Enumeration through login | application | identical status/code/body and a dummy hash for unknown emails (`IG-2`, S7) | not implemented by this plan |
+| Enumeration through login | application | identical status/code/body and a dummy hash for unknown emails (`IG-2`; verification built in S7, endpoint in S8) | not implemented by this plan |
 | Un-revocation | PostgreSQL cannot | `UPDATE (revoked_at)` has no direction; `app_auth` can clear a revocation it set | accepted, owner record R-4/S-5, disclosed |
 
 **Two claims this plan explicitly refuses to make:** that RLS protects the session
@@ -1384,7 +1387,7 @@ of them into "done" or "blocked".
 | `IG-5`, `IG-5-A1` | decided, implemented | S1/S2 shipped against them |
 | `IG-11` | decided | `node:test` for `apps/api`; already in use |
 | `IG-12` | decided | Zod-only validation, bound per parameter; in use |
-| `IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10` | **answered 2026-11-20** — `docs/review/phase-3.2-s7-owner-decisions.md`; two dependency approvals and the benchmark remain before implementation | S7 only, not S3–S6 |
+| `IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10` | **answered 2026-11-20** — `docs/review/phase-3.2-s7-owner-decisions.md`; one dependency approval (`ARGON2ID-LIB`), one mechanism decision (`LIMITER-MECHANISM`), and the benchmark remain before implementation | S7 only, not S3–S6 |
 | `IG-8`, `IG-9` | **3 — open** | block **S8**, not S3–S6 |
 | S3 | **4 — implemented** | gate: accepted `ADR-004`; `db:verify` 387 assertions at the time |
 | S4 | **4 — implemented and pushed** | gate: S3 (the role must exist before a policy names it); `db:verify` 419 assertions after the corrective pass |
@@ -1436,16 +1439,20 @@ parameters, measured on the host), `IG-7` (per-account brute-force control), and
 
 Three things still gate the implementation, and none of them is a design question:
 
-1. Argon2id **library** selection and dependency approval.
-2. Rate-limiter **dependency** approval.
+1. Argon2id **library** selection and dependency approval (`ARGON2ID-LIB`).
+2. The `LIMITER-MECHANISM` decision — the recommendation is an in-process guard with no
+   dependency, so this is a mechanism choice rather than a dependency approval.
 3. The deployment-host **benchmark**, without which the parameters stay provisional.
 
 `IG-10`'s answer is to defer, so email ownership remains unproven and is recorded as a
 blocker for public deployment rather than a detail for later.
 
-### Still blocking S8 — session guard, `/me`, logout
+### Still blocking S8 — login, session flow, guard, `/me`, logout
 
-`IG-8` (cookie name and `__Host-` prefix), `IG-9` (CSRF mechanics). Plus the
+The login endpoint itself, session token generation and storage, the session cookie,
+CSRF, the authentication guard, `/me`, logout, and login-side rate limiting. On the
+decision side: `IG-8` (cookie name and `__Host-` prefix) and `IG-9` (CSRF mechanics).
+Plus the
 `maintenance` queue that would schedule the purge job, which is Phase 4 work: S8 can
 *call* the function, and nothing can *schedule* it yet.
 
@@ -1609,8 +1616,9 @@ the session table in the diff.
    any `sessions` privilege.
 4. `migrate dev`, a migration rewrite, a reset, or a `DROP ROLE` is proposed as
    "cleanup". All four are prohibited.
-5. Bundling S7 (register/login) into this phase because the tables "look ready". The
-   seven `IG` gates that block S7 are unanswered, and a planned endpoint that invents
+5. Bundling S7 (registration and credential verification) or S8 (login and session flow)
+   into this phase because the tables "look ready". The `IG` gates that block them are
+   not this plan's to answer, and a planned endpoint that invents
    a password policy or an email-normalisation rule puts an unapproved decision into
    production.
 6. Any of the **three** additions in §7.3 is absent from the `sessions` migration or

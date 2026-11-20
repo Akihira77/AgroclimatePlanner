@@ -133,7 +133,8 @@ is not buildable from the current schema.
 2026-11-18 (`ADR-004`), and S3/S4/S6 built and verified it: column grants on
 `app.users`, two policies, `db:verify` 499 assertions, the `auth-boundary` suite at 49
 real-role cases. What remains open is the **request path** — no endpoint reads a
-credential through that boundary yet — which is S7's, and S7's decisions are recorded in
+credential through that boundary yet. Registration and credential verification are S7;
+the login endpoint is S8. Both are recorded in
 `docs/review/phase-3.2-s7-owner-decisions.md` without being implemented.
 
 **Blocks:** the authentication slice — login, session issuance, and therefore
@@ -286,8 +287,9 @@ cases, including the `app_auth` column boundary on `sessions`, the `23514` const
 behaviour at the 90-day cap, and the GC split between `app_api` and `app_system`.
 
 **Does not resolve `OPEN-01`, and does not resolve `OPEN-04`.** The store is decided,
-applied, and proven; the login, issuance, and request-path code that will use it is S7
-and does not exist. `sessions.user_id` keeps PostgreSQL's default `NO ACTION`, so account
+applied, and proven; the login, issuance, and request-path code that will use it is S8
+and does not exist. (S7's registration path uses the `app_auth` credential but writes no
+session row.) `sessions.user_id` keeps PostgreSQL's default `NO ACTION`, so account
 deletion still has no policy (`D16` forbids the cascade).
 
 ### `OPEN-04` — account deletion — **P1**

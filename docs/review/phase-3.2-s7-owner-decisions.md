@@ -1,13 +1,13 @@
-# Phase 3.2 — S7 Owner Decision Record: Registration and Login
+# Phase 3.2 — S7 Owner Decision Record: Registration and Credential Verification
 
 | Field | Value |
 |---|---|
-| Status | **OWNER DECISIONS RECORDED — 2026-11-20.** The seven `IG` gates that blocked S7 are answered. Two dependency approvals and one benchmark remain, listed under *Implementation gate* |
+| Status | **OWNER DECISIONS RECORDED — 2026-11-20.** The seven `IG` gates that blocked S7 are answered. One dependency approval (`ARGON2ID-LIB`), one mechanism decision (`LIMITER-MECHANISM`), and one benchmark remain, listed under *Implementation gate* |
 | Approver | Akihira77 (repository owner) |
-| Scope | S7 only — `POST /v1/auth/register`, `POST /v1/auth/login`. Not S8 (cookie, CSRF, guard, `/me`, logout) |
+| Scope | S7 — `POST /v1/auth/register`, email normalisation, password policy, Argon2id hashing, user persistence, duplicate handling, credential verification, rate limiting on registration. **Not** the login endpoint, session issuance, session token, cookie, CSRF, guard, `/me`, or logout — those are S8 |
 | Prepared from | `0a2e6a2` — the S7 readiness assessment returned `S7 READINESS REVIEW COMPLETE WITH BLOCKERS` |
 | Supersedes | nothing; the answers below replace the *recommended* column of the assessment, which was never an approval |
-| `OPEN-nn` dispositions changed | **None.** `OPEN-01` stays unresolved: the boundary exists, but no login path reads a credential through it yet. `OPEN-13` was already resolved on 2026-11-20 |
+| `OPEN-nn` dispositions changed | **None.** `OPEN-01` stays unresolved: the boundary is built and S7's credential verification will read through it, but no login endpoint or session issuance path exists yet. `OPEN-13` was already resolved on 2026-11-20 |
 | Implementation authorised | **No.** See *Implementation gate* — the record is necessary, not sufficient |
 
 This document records the owner's answers and nothing else. A recommendation that
@@ -22,10 +22,31 @@ with this file.
 | `IG-1` | Email normalisation | **A** — one shared function in `packages/contracts` | 2026-11-20 |
 | `IG-2` | Duplicate registration | **A** — `409 CONFLICT`, disclosure accepted | 2026-11-20 |
 | `IG-3` | Registration session behaviour | **A** — no session; login is the only issuance path | 2026-11-20 |
-| `IG-4` | Password policy | **A** — ≥ 12 characters, ≤ 1024 UTF-8 bytes, no composition rules | 2026-11-20 |
+| `IG-4` | Password policy | **A** — 12–1024 characters, printable ASCII only, no composition rules | 2026-11-20 |
 | `IG-6` | Password hashing | **A, conditional** — Argon2id, provisional parameters, benchmark required | 2026-11-20 |
 | `IG-7` | Brute-force protection | **A, conditional** — in-process per-IP limiter, 30 req/min | 2026-11-20 |
 | `IG-10` | Email verification | **A** — deferred, excluded from S7 | 2026-11-20 |
+
+### Milestone mapping — S7 vs S8
+
+The seven decisions below are answered once and applied across two milestones. Splitting
+them does not change any decision; it fixes where each half is built.
+
+| Built in S7 | Built in S8 |
+|---|---|
+| Registration endpoint and request contract | Login endpoint |
+| Email normalisation (shared function) | Session token generation, SHA-256 hashing, storage |
+| Password policy and Argon2id hashing | Session cookie and its attributes |
+| User persistence through the existing `app_auth` grants | CSRF protection on non-GET requests |
+| Duplicate handling (`409 CONFLICT`, no session) | Authentication guard |
+| Credential verification: uniform failure, dummy hash for unknown addresses | `GET /v1/auth/me` |
+| Per-IP rate limiting on registration | Logout and session invalidation, plus rate limiting on login |
+
+Credential verification is the part that is easy to confuse with login. S7 answers
+"do these email and password bytes match a stored hash?" and returns either the safe user
+representation or a uniform failure. It issues **nothing**: no session row, no token, no
+cookie. Until S8 ships, no account has a usable authenticated session, and no endpoint
+behaves as if one existed.
 
 ---
 
@@ -38,8 +59,8 @@ Rules:
 
 - Trim surrounding whitespace.
 - Lowercase with `toLowerCase()`.
-- Registration and login call the same function. Two copies is how one endpoint starts
-  accepting variants the other rejects.
+- Registration and login call the same function — registration in S7, login in S8. Two
+  copies is how one endpoint starts accepting variants the other rejects.
 - `users_email_key` stays case-sensitive.
 - No database index, no column type change, no `citext`.
 - No NFC/NFKC normalisation: the bytes the user typed (after trim and lowercase) are the
@@ -69,13 +90,15 @@ Registration creates the user record and nothing else.
 
 - No session row, no token, no `Set-Cookie`.
 - Response is `201` with the safe user representation.
-- Session issuance happens exclusively through login, which keeps exactly one issuance
-  path to audit.
+- Session issuance happens exclusively through the login endpoint, which is S8, so the
+  repository keeps exactly one issuance path to audit.
 
 ## IG-4 — Password policy — **A**
 
 - Minimum: **12 characters**.
-- Maximum: **1024 UTF-8 bytes**, measured with `Buffer.byteLength(password, "utf8")`.
+- Maximum: **1024 characters**, enforced as `Buffer.byteLength(password, "utf8") <= 1024`.
+  The approved charset is ASCII, so the character count and the UTF-8 byte count are the
+  same number; the byte check is the form the boundary code uses.
 - No composition requirements.
 - No trimming, no Unicode normalisation; the password is hashed exactly as supplied.
 - Leaked-password checking is **deferred** and recorded as a gap (see *Accepted gaps*).
@@ -91,7 +114,8 @@ mangled. Passwords are never transliterated. Space (U+0020) is permitted, so pas
 work.
 
 Because the charset is ASCII, `password.length` and the character count agree; the
-minimum is checked with `password.length >= 12` and the maximum with `byteLength`.
+minimum is checked with `password.length >= 12` and the maximum with `byteLength`. The
+two agree by construction: no allowed character is longer than one byte.
 A rejected password produces no partial state.
 
 ## IG-6 — Password hashing — **A, conditional**
@@ -129,13 +153,16 @@ Benchmark acceptance, reproducible and recorded in the repository:
 In-process, per-client-IP rate limiting.
 
 - 30 requests per minute per IP.
-- Applied to `POST /v1/auth/register` and `POST /v1/auth/login`.
+- Applied to `POST /v1/auth/register` in S7 and to `POST /v1/auth/login` when S8 adds that
+  endpoint. One decision, applied at the milestone that owns each endpoint.
 - Executed before any database lookup and before any password hashing.
 - Rejection is `429` with code `RATE_LIMITED`, plus `Retry-After` and the `RateLimit-*`
   headers specified in `api-conventions.md` §9.
 - Per-account throttling is deferred.
-- Redis and shared distributed rate limiting are **out of scope** for S7.
-- The rate-limiter dependency requires explicit approval and is **not** granted here.
+- Redis and shared distributed rate limiting are **out of scope** for S7 and S8.
+- The mechanism is a separate decision, `LIMITER-MECHANISM`, recorded in
+  `docs/review/phase-3.2-s7-dependency-options.md`. The recommendation is an in-process
+  guard with no dependency, so this gate is not a dependency approval.
 
 Limitations, recorded rather than implied:
 
@@ -169,8 +196,8 @@ blocker for it, not a detail to be discovered later.
 3. Real-database integration tests run as the `app_auth` role.
 4. `password_hash`, plaintext passwords, and session tokens never appear in a response or
    a log.
-5. No cookie handling, CSRF protection, authentication guard, `/me`, or logout in S7.
-   Those are S8.
+5. No cookie handling, CSRF protection, authentication guard, `/me`, or logout in S7, and
+   no login endpoint either. Those are S8.
 6. `docs/architecture/api-conventions.md` documents registration.
 7. Every accepted security gap is recorded explicitly — see below.
 
@@ -194,9 +221,9 @@ S7 implementation may begin after **all** of:
 2. The Argon2id library is selected and approved as a dependency. **Outstanding** —
    options and a recommendation are in `docs/review/phase-3.2-s7-dependency-options.md`
    (`@node-rs/argon2` 2.2.2 proposed).
-3. The rate-limiter dependency is selected and approved. **Outstanding** — the same
-   document recommends no dependency at all (an in-process guard), which needs its own
-   approval because it replaces the assumption behind this row.
+3. The `LIMITER-MECHANISM` decision is recorded. **Outstanding** — the same document
+   recommends no dependency at all (an in-process guard), which is a mechanism choice
+   rather than a dependency approval, and needs the owner's word either way.
 4. The benchmark is run and its numbers recorded. **Outstanding** — parameters stay
    provisional until then.
 

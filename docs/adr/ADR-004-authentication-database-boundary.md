@@ -17,8 +17,10 @@
 - Implemented by: `docs/implementation/phase-3.2.3-authentication-database-boundary.md`
   (steps S3, S4, S6) — **implemented and verified on the canonical development database**
   (`b9a27c6`, `cf0d1c2`, `e9d1621`)
-- Register entry: `OPEN-01` (P1, hard) — **still unresolved**: the boundary is built, the
-  request path that would use it is S7's. See §17
+- Register entry: `OPEN-01` (P1, hard) — **still unresolved**: the boundary is built, but
+  no authentication endpoint reads a credential through it yet. Registration (S7) writes a
+  row and verifies credentials internally without issuing anything; the login endpoint and
+  session issuance are S8. See §17
 
 ## Context
 
@@ -320,4 +322,6 @@ These are accepted, disclosed, and not mitigated by this ADR:
 - **`OPEN-28`** — signed tenant context, untouched and unaffected.
 - **`IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10`** — email normalisation, duplicate
   registration, auto-login, password policy, hashing parameters, brute-force control,
-  and email verification. None is answered here, and none changes this boundary.
+  and email verification. None is answered **in this ADR** — all seven are recorded in
+  `docs/review/phase-3.2-s7-owner-decisions.md` as of 2026-11-20 — and none changes this
+  boundary.

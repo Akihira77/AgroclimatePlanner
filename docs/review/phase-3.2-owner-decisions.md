@@ -1109,16 +1109,31 @@ the rest are not.
 (`8fb2270`), and `S6` (`e9d1621`) are implemented, verified, and pushed; `auth_boundary`
 and `sessions` are applied to the canonical development database (5/5), where `db:verify`
 is 499 PASS / 0 FAIL / 0 SKIP, `test:rls` is 88/88, and `test:schema` is 22/22;
-`OPEN-13` is `RESOLVED` on `ADR-005`'s Definition of Done. `S7` and `S8` remain
-unstarted and remain blocked on the `IG` decisions listed under "What these decisions do
-not settle" below. No decision in this file changed, and `OPEN-01` and `OPEN-04` are
-untouched.
+`OPEN-13` is `RESOLVED` on `ADR-005`'s Definition of Done.
+
+**Update, 2026-11-20 (later) — S7 and S8 boundary restated.** The seven `IG` gates are now
+answered (`docs/review/phase-3.2-s7-owner-decisions.md`, option A each; `IG-6`/`IG-7`
+conditional). The row above still reads "Register + login" because that is how the
+sequence was written; the applied boundary is narrower and has two owners:
+
+- **S7** — registration and credential verification: `POST /v1/auth/register`, email
+  normalisation, password policy, Argon2id hashing, user persistence, duplicate handling,
+  uniform credential verification with a dummy hash, and a registration rate limit. It
+  issues no session.
+- **S8** — login and session flow: `POST /v1/auth/login`, session token generation and
+  SHA-256 storage, the session cookie, CSRF, the authentication guard, `/me`, logout, and
+  login-side rate limiting.
+
+S7 and S8 are still unstarted. What remains before S7 is one dependency approval
+(`ARGON2ID-LIB`), one mechanism decision (`LIMITER-MECHANISM`), and the deployment-host
+benchmark. No decision in this file changed, and `OPEN-01` and `OPEN-04` are untouched.
 
 So the honest statement of what these four decisions buy: **Track 1 can start**
 (contracts and plumbing), and **Track 2 can start** (the database boundary and
 sessions). Track 3 cannot — `S7` and `S8` additionally require `IG-1` through `IG-4`,
-`IG-6` through `IG-10`, none of which is answered here and none of which changes the
-boundary.
+`IG-6` through `IG-10`. None of that is answered **in this document**; as of 2026-11-20 the
+seven gates are recorded in `docs/review/phase-3.2-s7-owner-decisions.md`, and none of them
+changes the boundary described here.
 
 **As of 2026-11-18 the architecture gate for S3, S4, and S5 is satisfied by approval.**
 That is a statement about the owner's decision, not about the paperwork. As of
@@ -1132,9 +1147,6 @@ The ADRs are now written, and `ADR-004` was **accepted on 2026-11-18**; at that 
 `ADR-005` remained `Proposed` and gated `S5`, not `S3`. It was accepted on 2026-11-20 and
 `S5` shipped the same day, so that gate is closed too. Do not read acceptance as a fifth
 decision: they record what was approved on 2026-11-18 and add nothing. A separate,
-non-architecture row survives from the original list — the `IG` gates — and it belongs
-to S7/S8, where endpoint behaviour is decided.
-they record what was approved on 2026-11-18 and add nothing. A separate,
 non-architecture row survives from the original list — the `IG` gates — and it belongs
 to S7/S8, where endpoint behaviour is decided.
 
@@ -1165,11 +1177,13 @@ this record; see the header.)
 were not part of it. Only `AG-1`, `AG-2`, `IG-5`, and `IG-11` were put to the owner in
 the original round, and only those four carry an approval date from that round;
 `IG-5-A1` and `IG-12` were approved later on the same day and are recorded above with
-their own dates. **They remained unanswered as of 2026-11-20** — see
-`docs/IMPLEMENTATION_STATUS.md` and the S7 readiness assessment for their current state.
+their own dates. They were unanswered when this record was written; all seven are recorded
+on 2026-11-20 in `docs/review/phase-3.2-s7-owner-decisions.md`, and
+`docs/IMPLEMENTATION_STATUS.md` carries their current state.
 
-`OPEN-01` remains **unresolved** despite its decision being approved, because no login
-path reads a credential through the boundary. `OPEN-13` met the review's rule on
+`OPEN-01` remains **unresolved** despite its decision being approved, because no
+authentication endpoint reads a credential through the boundary yet — the login endpoint
+and session issuance are S8. `OPEN-13` met the review's rule on
 2026-11-20: the ADR is accepted, the migration is applied, and the verification evidence
 is green — three facts about the repository, none of which an approval can supply.
 
