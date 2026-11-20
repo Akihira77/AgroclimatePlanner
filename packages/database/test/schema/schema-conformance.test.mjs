@@ -17,7 +17,7 @@ import { roleConnectionString } from "../../scripts/lib/connections.mjs";
 
 const owner = new Client({ connectionString: roleConnectionString("migration_owner") });
 
-/** The 22 domain tables, `docs/data-model/ownership-and-rls.md` §2. */
+/** The 23 domain tables, `docs/data-model/ownership-and-rls.md` §2. */
 const domainTables = [
   "users",
   "farms",
@@ -41,6 +41,7 @@ const domainTables = [
   "suitability_runs",
   "planting_windows",
   "ai_briefings",
+  "sessions",
 ];
 
 /** Tenant-owned, and therefore ENABLE + FORCE RLS. */
@@ -57,8 +58,16 @@ const tenantTables = [
   "ai_briefings",
 ];
 
+/**
+ * Identity/authentication tables: not tenant-scoped, reached only by `app_auth`,
+ * protected by ENABLE + FORCE RLS, and carry no `app.user_id` predicate.
+ */
+const identityTables = ["sessions"];
+
 /** Global or reference: no tenant dimension, no policy. */
-const globalTables = domainTables.filter((table) => !tenantTables.includes(table));
+const globalTables = domainTables.filter(
+  (table) => !tenantTables.includes(table) && !identityTables.includes(table),
+);
 
 /** Composite ownership FKs required by `docs/data-model/relationships.md` §2. */
 const compositeOwnershipEdges = [
@@ -90,7 +99,7 @@ after(async () => {
 });
 
 describe("table inventory", () => {
-  test("exactly the 22 domain tables exist in app, plus the migration ledger", async () => {
+  test("exactly the 23 domain tables exist in app, plus the migration ledger", async () => {
     const { rows } = await owner.query(
       "select tablename from pg_tables where schemaname = 'app' order by tablename",
     );
@@ -123,7 +132,7 @@ describe("table inventory", () => {
 });
 
 describe("row-level security flags", () => {
-  test("the ten tenant tables are ENABLE + FORCE; the twelve reference tables are neither", async () => {
+  test("the ten tenant tables and one identity table are ENABLE + FORCE; the twelve reference tables are neither", async () => {
     const { rows } = await owner.query(
       `select c.relname as table, c.relrowsecurity as rls, c.relforcerowsecurity as force
          from pg_class c
@@ -145,11 +154,44 @@ describe("row-level security flags", () => {
       assert.equal(row.rls, false, `${table}: relrowsecurity must be false`);
       assert.equal(row.force, false, `${table}: relforcerowsecurity must be false`);
     }
+
+    for (const table of identityTables) {
+      const row = flags.get(table);
+      assert.ok(row, `${table}: missing from pg_class`);
+      assert.equal(row.rls, true, `${table}: relrowsecurity must be true`);
+      assert.equal(row.force, true, `${table}: relforcerowsecurity must be true`);
+    }
   });
 
-  test("tenant and reference sets partition the 22 tables", () => {
+  test("app.sessions must not carry a tenant GUC policy", async () => {
+    const { rows } = await owner.query(
+      `select policyname, qual, with_check
+         from pg_policies
+        where schemaname = 'app' and tablename = 'sessions'`,
+    );
+
+    assert.ok(rows.length > 0, "app.sessions must carry at least one policy");
+
+    const tenantGuc = rows.filter(
+      (row) =>
+        (row.qual ?? "").includes("current_setting('app.user_id'") ||
+        (row.with_check ?? "").includes("current_setting('app.user_id'"),
+    );
+    assert.deepEqual(tenantGuc, [], "app.sessions must not carry a tenant GUC policy");
+  });
+
+  test("tenant, identity and reference sets partition the 23 tables", () => {
     assert.equal(tenantTables.length, 10);
     assert.equal(globalTables.length, 12);
+    assert.equal(identityTables.length, 1);
+    assert.equal(
+      tenantTables.length + globalTables.length + identityTables.length,
+      domainTables.length,
+    );
+    assert.equal(
+      new Set([...tenantTables, ...globalTables, ...identityTables]).size,
+      domainTables.length,
+    );
   });
 });
 

@@ -3,11 +3,11 @@
  *
  * The verifier itself drives four real logins and a cluster-admin re-bootstrap,
  * which is why it has no unit test. These three groups are the ones a reviewer
- * most needs to trust: the session table must be provably absent, every role must
- * be provably unable to replicate, and the `app.users` grant must be exactly the
- * approved column set rather than a superset. All are pure functions of an
- * already fetched row, so they are extracted and driven here through a recording
- * `check`.
+ * most needs to trust: the session table must be present under its exact
+ * identity, every role must be provably unable to replicate, and the
+ * `app.users` grant must be exactly the approved column set rather than a
+ * superset. All are pure functions of an already fetched row, so they are
+ * extracted and driven here through a recording `check`.
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
@@ -15,7 +15,7 @@ import { describe, it } from "node:test";
 import {
   checkAuthUserColumnGrants,
   checkRoleAttributes,
-  checkSessionAbsence,
+  checkSessionTable,
   checkUsersPolicyInventory,
 } from "../../scripts/lib/privilege-verification.mjs";
 
@@ -96,27 +96,32 @@ describe("role attribute assertions", () => {
   });
 });
 
-describe("session absence assertion", () => {
-  it("passes when the relation is missing", () => {
+describe("session table assertion", () => {
+  it("passes a relation that is app.sessions, a regular table", () => {
     const log = recorder();
-    checkSessionAbsence(log.check, null);
-
-    assert.equal(log.calls.length, 1);
-    assert.deepEqual(log.calls[0], {
-      label: "app.sessions is absent before S5",
-      passed: true,
-      detail: undefined,
+    checkSessionTable(log.check, {
+      oid: "12345",
+      relname: "sessions",
+      nspname: "app",
+      relkind: "r",
     });
+
+    assert.equal(log.calls.length, 4);
+    assert.deepEqual(
+      log.calls.filter((call) => call.passed === false),
+      [],
+    );
   });
 
-  it("fails, rather than staying silent, when the relation exists", () => {
+  it("fails, rather than staying silent, when the relation is missing", () => {
     const log = recorder();
-    checkSessionAbsence(log.check, "app.sessions");
+    checkSessionTable(log.check, null);
 
-    assert.equal(log.calls.length, 1);
-    assert.equal(log.calls[0].passed, false);
-    assert.match(log.calls[0].detail, /app\.sessions already exists/);
-    assert.equal(log.calls[0].detail.includes("password"), false);
+    assert.equal(log.calls.length, 4);
+    assert.deepEqual(
+      log.calls.map((call) => call.passed),
+      [false, false, false, false],
+    );
   });
 });
 

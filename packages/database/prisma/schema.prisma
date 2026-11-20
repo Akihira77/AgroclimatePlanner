@@ -1,9 +1,11 @@
-// The Prisma representation of the 22-table `app` schema. This file is a
+// The Prisma representation of the 23-table `app` schema. This file is a
 // representation, not the source of truth: `prisma/migrations` is authoritative.
 //
-// Migrations are hand-written SQL, applied with `prisma migrate deploy`. Three
-// so far: `init_extensions`, `20261118020000_tenant_tables` (Phase 2.2.3), and
-// `20261118030000_domain_tables` (Phase 3, the other nineteen tables).
+// Migrations are hand-written SQL, applied with `prisma migrate deploy`. Five so
+// far: `init_extensions`, `20261118020000_tenant_tables` (Phase 2.2.3),
+// `20261118030000_domain_tables` (Phase 3, nineteen tables),
+// `20261118040000_auth_boundary` (S4, grants and policies only) and
+// `20261118050000_sessions` (S5, the session table).
 //
 // `prisma migrate dev` is deliberately not used: it replays history into a
 // shadow database and diffs the result against this file, and PostGIS alone
@@ -53,9 +55,40 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   farms        Farm[]
+  sessions     Session[]
 
   @@schema("app")
   @@map("users")
+}
+
+// S5 — PostgreSQL session storage (ADR-005). Present here so this file keeps
+// matching the schema it claims to represent; every security property lives in
+// SQL and is unrepresentable in Prisma: the three CHECK constraints (expiry
+// order, token-hash shape `D-1`, 90-day cap `D-2`), `ENABLE` + `FORCE` RLS, the
+// two policies, the column grants, and `pg_catalog`-pinned
+// `app.purge_expired_sessions()`.
+//
+// `token_hash` holds `sha256(token)` in lowercase hex and never the token. The
+// FK names no cascade: PostgreSQL's default `NO ACTION` stands, because the
+// account-deletion policy (`OPEN-04`) is undecided and `D16` forbids a database
+// cascade. Nothing here decides it.
+model Session {
+  id                String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  userId            String    @map("user_id") @db.Uuid
+  tokenHash         String    @unique(map: "sessions_token_hash_key")
+  expiresAt         DateTime  @map("expires_at") @db.Timestamptz(6)
+  absoluteExpiresAt DateTime  @map("absolute_expires_at") @db.Timestamptz(6)
+  revokedAt         DateTime? @map("revoked_at") @db.Timestamptz(6)
+  lastSeenAt        DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  // `D-3`: revoke-all-by-user and the GC scan. No other index is approved.
+  @@index([userId], map: "sessions_user_id_idx")
+  @@index([absoluteExpiresAt], map: "sessions_absolute_expires_at_idx")
+  @@schema("app")
+  @@map("sessions")
 }
 
 model Farm {

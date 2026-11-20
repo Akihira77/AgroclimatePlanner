@@ -635,12 +635,22 @@ statement, not against this table. The grant is authoritative; the ORM is not.
 
 ## 7. S5 — migration `sessions`
 
+Status: **implemented and verified in an isolated project (2026-11-20)**. The migration
+exists at the path below, and `db:verify` reports 493 assertions with 0 `FAIL` and
+0 `SKIP` against project `agroclimate-db-s5-check` (port 5545); `test:schema` is 13/13 and
+`test:rls` 39/39 in the same project. Nothing was applied to the canonical database, so
+`OPEN-13` stays unresolved, and everything from §7.5 onward that describes the request
+path is still S7's: S5 ships no endpoint, no token generation, and no throttle.
+
+One consequence worth stating: `db:verify` now asserts session storage as **required**
+state, so a database that stops at S4 fails it by design rather than reporting a skip.
+
 ### 7.1 Table
 
 `packages/database/prisma/migrations/20261118050000_sessions/migration.sql`.
 
 ```sql
--- PROPOSED — NOT APPLIED
+-- APPLIED in 20261118050000_sessions; verified in an isolated project only.
 CREATE TABLE app.sessions (
   id                  uuid        PRIMARY KEY DEFAULT uuidv7(),
   user_id             uuid        NOT NULL REFERENCES app.users (id),
@@ -780,14 +790,15 @@ rejected, so the choice is not an oversight:
 | `expires_at <= last_seen_at + INTERVAL '30 days'` | constrains two values the application writes in the same statement; it catches a typo and enforces nothing against a caller that controls both. It also couples `last_seen_at` to extension, which the design does not require |
 | A trigger recomputing the deadline | application logic in the database, with a definer-style surface and no gain over the absolute cap. `SECURITY DEFINER` scope discipline (ADR-005, *Garbage collection*) applies |
 
-All three additions are cheap to reverse before S5 ships — a constraint and an index are
-one `ALTER`/`DROP` each in the *same* migration, not a later one, because nothing has
-been applied yet. After it applies, they are immutable like everything else.
+All three additions were cheap to reverse while S5 was still unshipped — a constraint and
+an index are one `ALTER`/`DROP` each in the *same* migration, not a later one. Once it has
+been applied anywhere that matters, they are immutable like everything else, and a change
+becomes a new migration.
 
 ### 7.4 Grants, policies, and the GC function
 
 ```sql
--- PROPOSED — NOT APPLIED
+-- APPLIED in 20261118050000_sessions; verified in an isolated project only.
 ALTER TABLE app.sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app.sessions FORCE  ROW LEVEL SECURITY;
 
@@ -1021,6 +1032,9 @@ nothing, or created a table under the wrong schema, could still pass. It is ther
 | The unique constraint protects `token_hash` | `pg_index`/`pg_constraint` on the column, not a name lookup |
 | Both indexes exist and are on the intended columns | `pg_indexes` on the relation |
 | RLS is enabled **and** forced | `pg_class.relrowsecurity`, `relforcerowsecurity` |
+
+As shipped on 2026-11-20 that replacement is `checkSessionTable()` plus the `app.sessions`
+section of `runPrivilegeVerification()`; the absence call no longer exists in the file.
 
 **The three CHECK constraints, and what "verified" means.** The approved DDL has exactly
 three CHECK constraints. All three are structural, so an assertion that "a CHECK exists"
@@ -1321,7 +1335,7 @@ of them into "done" or "blocked".
 | `IG-8`, `IG-9` | **3 — open** | block **S8**, not S3–S6 |
 | S3 | **4 — implemented** | gate: accepted `ADR-004`; `db:verify` 387 assertions at the time |
 | S4 | **4 — implemented and pushed** | gate: S3 (the role must exist before a policy names it); `db:verify` 419 assertions after the corrective pass |
-| S5 | **4 — not started** | gate: accepted `ADR-005` **and** S4 — both satisfied 2026-11-20, nothing applied |
+| S5 | **4 — implemented, not committed** | gate: accepted `ADR-005` **and** S4, both satisfied 2026-11-20; `db:verify` 493 assertions, applied only in isolated project `agroclimate-db-s5-check` |
 | S6 | **4 — not started** | gate: the stages whose rows it verifies — S3/S4 for the `users` half, plus S5 for the session half |
 | `OPEN-01` | **5 — unresolved** | needs accepted `ADR-004` + migration + `db:verify` |
 | `OPEN-13` | **5 — unresolved** | needs accepted `ADR-005` + migration + session suite |
@@ -1445,6 +1459,15 @@ Each row names the evidence, not the intent.
     90-day deadline fails `23514` (the §7.1 consequence, asserted). If the cap CHECK is
     ever removed, this criterion is deleted from the list rather than relaxed, and the
     gap is recorded as a limitation.
+
+**S5 status against these criteria (2026-11-20).** 13 is asserted by `db:verify` and
+`test:schema`; 14, 15, 18 and 19 by `db:verify`; 16 by the collection probes (an expired
+row is deleted, a live row, a revoked row and an idle row whose *sliding* deadline has
+passed all survive, and the predicate is asserted strict at `absolute_expires_at = now()`).
+Criterion 17 is an S7 statement: the clamp is an expression the application will send, and
+S5 asserts only that the row it produces cannot violate the CHECKs. The `91 days` half of
+19 is covered by the cap CHECK's exact-definition assertion rather than by inserting a
+rejected row.
 
 ### S6 and cross-cutting
 

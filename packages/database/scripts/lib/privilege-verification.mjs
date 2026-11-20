@@ -117,6 +117,31 @@ export function checkRoleAttributes(check, name, role) {
   check(`${name} cannot replicate`, role.rolreplication === false);
 }
 
+/** Set equality on a column-name list, shared by the exact grant inventories. */
+function sameSet(actual, expected) {
+  const sorted = [...new Set(actual)].sort();
+  const wanted = [...new Set(expected)].sort();
+  return sorted.length === wanted.length && sorted.every((name, index) => name === wanted[index]);
+}
+
+/**
+ * `pg_policies.roles` arrives as `name[]`, but a driver or an older query may hand
+ * back its text form. A plain `roles === "{public}"` test misses
+ * `{app_auth,public}`, so the array is normalised before every comparison.
+ */
+function policyRoles(policy) {
+  const roles = policy?.roles;
+  if (Array.isArray(roles)) return roles.map(String);
+  if (typeof roles === "string") {
+    return roles
+      .replace(/^\{|\}$/g, "")
+      .split(",")
+      .map((role) => role.trim().replace(/^"|"$/g, ""))
+      .filter(Boolean);
+  }
+  return [];
+}
+
 /**
  * The column grant on `app.users` is the whole authentication boundary (S4), so it
  * is asserted as an exact set rather than as a floor: a column added by accident is
@@ -126,13 +151,6 @@ export function checkRoleAttributes(check, name, role) {
  * test; the verifier fills it from `has_column_privilege`.
  */
 export function checkAuthUserColumnGrants(check, held) {
-  const sameSet = (actual, expected) => {
-    const sorted = [...new Set(actual)].sort();
-    return (
-      sorted.length === expected.length && sorted.every((name, index) => name === expected[index])
-    );
-  };
-
   const select = held.select_columns ?? [];
   const insert = held.insert_columns ?? [];
   const update = held.update_columns ?? [];
@@ -207,19 +225,6 @@ export function checkUsersPolicyInventory(check, policies) {
     },
   ];
 
-  const rolesOf = (policy) => {
-    const roles = policy?.roles;
-    if (Array.isArray(roles)) return roles.map(String);
-    if (typeof roles === "string") {
-      return roles
-        .replace(/^\{|\}$/g, "")
-        .split(",")
-        .map((role) => role.trim().replace(/^"|"$/g, ""))
-        .filter(Boolean);
-    }
-    return [];
-  };
-
   const actual = Array.isArray(policies) ? policies : [];
   const actualNames = actual.map((policy) => policy.policyname).sort();
   const expectedNames = expected.map((policy) => policy.name).sort();
@@ -233,7 +238,7 @@ export function checkUsersPolicyInventory(check, policies) {
 
   for (const wanted of expected) {
     const found = actual.find((policy) => policy.policyname === wanted.name);
-    const roles = rolesOf(found).sort();
+    const roles = policyRoles(found).sort();
     const wantedRoles = [...wanted.roles].sort();
 
     check(
@@ -254,31 +259,307 @@ export function checkUsersPolicyInventory(check, policies) {
   // the only thing left. Both spellings occur depending on who wrote the SQL.
   check(
     "no policy on app.users names PUBLIC",
-    !actual.some((policy) => rolesOf(policy).some((role) => role.toLowerCase() === "public")),
-    JSON.stringify(actual.map((policy) => `${policy.policyname}:${rolesOf(policy).join(",")}`)),
+    !actual.some((policy) => policyRoles(policy).some((role) => role.toLowerCase() === "public")),
+    JSON.stringify(actual.map((policy) => `${policy.policyname}:${policyRoles(policy).join(",")}`)),
   );
 
   check(
     "app_auth holds no FOR ALL policy on app.users",
-    !actual.some((policy) => policy.cmd === "ALL" && rolesOf(policy).includes("app_auth")),
+    !actual.some((policy) => policy.cmd === "ALL" && policyRoles(policy).includes("app_auth")),
     JSON.stringify(actual.filter((policy) => policy.cmd === "ALL").map((p) => p.policyname)),
   );
 }
 
 /**
- * The session table belongs to S5. Checking that it is absent is not a formality:
- * a table created early would make the later migration a no-op and leave the
- * sessions of this phase half-built.
- *
- * Unconditional on purpose. A check that only runs when the relation is missing
- * reports nothing in the one state that matters.
+ * `pg_get_constraintdef` returns a decompiled reconstruction, not the source
+ * text: `INTERVAL '90 days'` comes back as `'90 days'::interval` and the
+ * expression gains parentheses. Comparing the catalogue's text against the
+ * migration's text therefore requires discarding the things PostgreSQL is free
+ * to rewrite — casts, quotes, the `INTERVAL` keyword, parentheses, whitespace —
+ * and keeping everything that carries meaning. A weakened predicate (`<=` to
+ * `<`, `90` to `99`, `AND` to `OR`) survives this normalisation and still fails.
  */
-export function checkSessionAbsence(check, oid) {
-  const absent = oid === null;
+function normaliseConstraint(definition) {
+  return String(definition)
+    .toLowerCase()
+    .replace(/::[a-z_ ]+/g, "")
+    .replace(/\binterval\b/g, "")
+    .replace(/[()'"]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** The three predicates `D-1`, `D-2` and the expiry ordering require. */
+const EXPECTED_SESSION_CHECKS = [
+  "CHECK (absolute_expires_at >= expires_at AND expires_at > created_at)",
+  "CHECK (token_hash ~ '^[0-9a-f]{64}$')",
+  "CHECK (absolute_expires_at <= created_at + INTERVAL '90 days')",
+];
+
+/**
+ * The session table is S5's, and with S5 applied it is required state.
+ *
+ * Four separate assertions rather than one: a relation that exists in the wrong
+ * schema, or as a view that shadows the name, satisfies "something answers to
+ * that name" while the migration it was supposed to prove never ran.
+ */
+export function checkSessionTable(check, relation) {
+  const found = relation ?? null;
+  check("app.sessions exists", found !== null, found === null ? "relation not found" : undefined);
+  check("app.sessions lives in schema app", found?.nspname === "app", found?.nspname);
+  check("app.sessions is named sessions", found?.relname === "sessions", found?.relname);
+  check("app.sessions is an ordinary table (relkind r)", found?.relkind === "r", found?.relkind);
+}
+
+/**
+ * Every constraint on the table, compared as an inventory rather than by name.
+ *
+ * A name survives a rewrite: `sessions_absolute_expiry_cap_check` still exists
+ * after its predicate is relaxed to `99 days`. The definition is what the
+ * planner enforces, so that is what is asserted — and the count is asserted
+ * too, so an extra constraint cannot hide behind three expected ones.
+ *
+ * `NOT NULL` arrives separately: PostgreSQL 18 catalogues it as `contype = 'n'`,
+ * which is not part of this inventory.
+ */
+export function checkSessionConstraints(check, constraints) {
+  const rows = Array.isArray(constraints) ? constraints : [];
+  const of = (kind) => rows.filter((row) => row.contype === kind);
+
   check(
-    "app.sessions is absent before S5",
-    absent,
-    absent ? undefined : `app.sessions already exists as ${String(oid)}; S3 must not create it`,
+    "app.sessions carries no constraint kind beyond key, unique, check and foreign key",
+    rows.every((row) => ["p", "u", "c", "f"].includes(row.contype)),
+    JSON.stringify(rows.map((row) => row.contype)),
+  );
+
+  const primary = of("p");
+  check(
+    "app.sessions has exactly one primary key, on id",
+    primary.length === 1 &&
+      normaliseConstraint(primary[0].definition) === normaliseConstraint("PRIMARY KEY (id)"),
+    JSON.stringify(primary.map((row) => row.definition)),
+  );
+
+  const unique = of("u");
+  check(
+    "app.sessions has exactly one unique constraint, on token_hash",
+    unique.length === 1 &&
+      unique[0].conname === "sessions_token_hash_key" &&
+      normaliseConstraint(unique[0].definition) === normaliseConstraint("UNIQUE (token_hash)"),
+    JSON.stringify(unique.map((row) => `${row.conname}:${row.definition}`)),
+  );
+
+  const checks = of("c").map((row) => normaliseConstraint(row.definition));
+  const expected = EXPECTED_SESSION_CHECKS.map(normaliseConstraint).sort();
+  const actual = [...checks].sort();
+  check(
+    "app.sessions enforces exactly the three approved CHECK constraints",
+    actual.length === expected.length &&
+      actual.every((definition, index) => definition === expected[index]),
+    JSON.stringify(actual),
+  );
+
+  const foreignKeys = of("f");
+  check(
+    "app.sessions has exactly one foreign key, from user_id to app.users",
+    foreignKeys.length === 1 &&
+      normaliseConstraint(foreignKeys[0].definition) ===
+        normaliseConstraint("FOREIGN KEY (user_id) REFERENCES app.users(id)"),
+    JSON.stringify(foreignKeys.map((row) => row.definition)),
+  );
+  check(
+    "the session foreign key keeps PostgreSQL's default NO ACTION",
+    foreignKeys.length === 1 && foreignKeys[0].confdeltype === "a",
+    foreignKeys[0]?.confdeltype,
+  );
+}
+
+/**
+ * The index inventory, exact. `sessions_pkey` and `sessions_token_hash_key` are
+ * the primary key's and the unique constraint's backing indexes; only the other
+ * two are `D-3`. Counting "two indexes" would be wrong, and dropping the unique
+ * constraint to make a count pass would be a decision violation.
+ */
+export function checkSessionIndexes(check, indexes) {
+  const rows = Array.isArray(indexes) ? indexes : [];
+  const expected = [
+    { name: "sessions_pkey", column: "id", unique: true },
+    { name: "sessions_token_hash_key", column: "token_hash", unique: true },
+    { name: "sessions_user_id_idx", column: "user_id", unique: false },
+    { name: "sessions_absolute_expires_at_idx", column: "absolute_expires_at", unique: false },
+  ];
+
+  const actual = rows.map((row) => row.name).sort();
+  const wanted = expected.map((row) => row.name).sort();
+  check(
+    "app.sessions carries exactly the four expected indexes",
+    actual.length === wanted.length && actual.every((name, index) => name === wanted[index]),
+    JSON.stringify(actual),
+  );
+
+  for (const index of expected) {
+    const found = rows.find((row) => row.name === index.name);
+    check(
+      `${index.name} covers ${index.column}${index.unique ? " and is unique" : ""}`,
+      found !== undefined && found.column === index.column && found.unique === index.unique,
+      JSON.stringify(found ?? null),
+    );
+  }
+}
+
+/**
+ * Both session policies, as four properties each.
+ *
+ * `USING (true)` is the recorded design, not a placeholder: authentication runs
+ * before `app.user_id` exists, so a predicate here would match nothing at the
+ * moment it is needed. That also means a policy that *gains* a predicate is a
+ * failure worth reporting, and the last check states the rule directly rather
+ * than inferring it from `qual === "true"`.
+ */
+export function checkSessionPolicyInventory(check, policies) {
+  const expected = [
+    {
+      name: "sessions_auth_all",
+      cmd: "ALL",
+      roles: ["app_auth"],
+      qual: "true",
+      withCheck: "true",
+    },
+    {
+      name: "sessions_owner_full_access",
+      cmd: "ALL",
+      roles: ["migration_owner"],
+      qual: "true",
+      withCheck: "true",
+    },
+  ];
+
+  const actual = Array.isArray(policies) ? policies : [];
+  const actualNames = actual.map((policy) => policy.policyname).sort();
+  const expectedNames = expected.map((policy) => policy.name).sort();
+
+  check(
+    "app.sessions carries exactly the two expected policies",
+    actualNames.length === expectedNames.length &&
+      actualNames.every((name, index) => name === expectedNames[index]),
+    JSON.stringify(actualNames),
+  );
+
+  for (const wanted of expected) {
+    const found = actual.find((policy) => policy.policyname === wanted.name);
+    const roles = policyRoles(found).sort();
+    const wantedRoles = [...wanted.roles].sort();
+
+    check(
+      `${wanted.name} has its recorded command, roles, USING and WITH CHECK`,
+      found !== undefined &&
+        found.cmd === wanted.cmd &&
+        found.permissive === "PERMISSIVE" &&
+        roles.length === wantedRoles.length &&
+        roles.every((role, index) => role === wantedRoles[index]) &&
+        (found.qual ?? null) === wanted.qual &&
+        (found.with_check ?? null) === wanted.withCheck,
+      JSON.stringify(found ?? null),
+    );
+  }
+
+  check(
+    "no policy on app.sessions names PUBLIC",
+    !actual.some((policy) => policyRoles(policy).some((role) => role.toLowerCase() === "public")),
+    JSON.stringify(actual.map((policy) => `${policy.policyname}:${policyRoles(policy).join(",")}`)),
+  );
+
+  check(
+    "no policy on app.sessions filters on the tenant GUC",
+    !actual.some((policy) =>
+      /current_setting/.test(`${policy.qual ?? ""}${policy.with_check ?? ""}`),
+    ),
+    JSON.stringify(actual.map((policy) => policy.policyname)),
+  );
+}
+
+/**
+ * The three column grants, as exact sets. `created_at` and `absolute_expires_at`
+ * are the point: both are readable, neither is writable, so the 90-day cap
+ * cannot be moved by the credential that holds the session.
+ */
+export function checkSessionColumnGrants(check, held) {
+  const select = held?.select_columns ?? [];
+  const insert = held?.insert_columns ?? [];
+  const update = held?.update_columns ?? [];
+
+  check(
+    "app_auth SELECTs exactly the eight approved columns of app.sessions",
+    sameSet(select, [
+      "id",
+      "user_id",
+      "token_hash",
+      "expires_at",
+      "absolute_expires_at",
+      "revoked_at",
+      "last_seen_at",
+      "created_at",
+    ]),
+    JSON.stringify([...select].sort()),
+  );
+  check(
+    "app_auth INSERTs exactly the four approved columns of app.sessions",
+    sameSet(insert, ["user_id", "token_hash", "expires_at", "absolute_expires_at"]),
+    JSON.stringify([...insert].sort()),
+  );
+  check(
+    "app_auth UPDATEs exactly the three approved columns of app.sessions",
+    sameSet(update, ["expires_at", "last_seen_at", "revoked_at"]),
+    JSON.stringify([...update].sort()),
+  );
+}
+
+/**
+ * The collection function's contract. Its security is the combination, not any
+ * single flag: a definer right without the pinned `search_path` is a hijack, a
+ * pinned path without the definer right cannot delete, and an `EXECUTE` grant to
+ * `PUBLIC` makes both irrelevant.
+ */
+export function checkSessionFunction(check, fn) {
+  const found = fn ?? null;
+  check(
+    "app.purge_expired_sessions() exists",
+    found !== null,
+    found === null ? "function not found" : undefined,
+  );
+  check("app.purge_expired_sessions() is SECURITY DEFINER", found?.prosecdef === true);
+  check(
+    "app.purge_expired_sessions() takes no arguments and returns integer",
+    found?.pronargs === 0 && found?.prorettype === "integer",
+    JSON.stringify({ pronargs: found?.pronargs, prorettype: found?.prorettype }),
+  );
+  check(
+    "app.purge_expired_sessions() pins search_path to pg_catalog, app",
+    Array.isArray(found?.proconfig) &&
+      found.proconfig.length === 1 &&
+      /^search_path=pg_catalog,\s*app$/.test(found.proconfig[0]),
+    JSON.stringify(found?.proconfig ?? null),
+  );
+  check(
+    "app.purge_expired_sessions() is owned by migration_owner",
+    found?.owner_name === "migration_owner",
+    found?.owner_name,
+  );
+
+  const acl = Array.isArray(found?.acl) ? found.acl : [];
+  const grantees = acl.map((entry) => entry.grantee).sort();
+  check(
+    "app.purge_expired_sessions() grants EXECUTE to migration_owner and app_system only",
+    grantees.length === 2 &&
+      grantees[0] === "app_system" &&
+      grantees[1] === "migration_owner" &&
+      acl.every((entry) => entry.privilege === "EXECUTE" && entry.grantable === false),
+    JSON.stringify(acl),
+  );
+  check(
+    "PUBLIC holds no EXECUTE on app.purge_expired_sessions()",
+    !acl.some((entry) => entry.grantee === null || entry.grantee === "PUBLIC"),
+    JSON.stringify(grantees),
   );
 }
 
@@ -324,6 +605,21 @@ export async function runPrivilegeVerification({
     } catch (error) {
       check(label, false, `expected success, got ${error.code}: ${error.message}`);
       return undefined;
+    }
+  };
+
+  /**
+   * An expected error at a named SQLSTATE. Used where the statement is supposed to
+   * fail for a reason other than permission — a foreign key still in use must fail
+   * `23503`, and a probe that passed because it hit `42501` instead would prove the
+   * wrong thing about the wrong constraint.
+   */
+  const expectCode = async (client, label, code, sql, parameters) => {
+    try {
+      await client.query(sql, parameters);
+      check(label, false, `query succeeded, expected ${code}`);
+    } catch (error) {
+      check(label, error.code === code, `expected ${code}, got ${error.code}: ${error.message}`);
     }
   };
 
@@ -462,8 +758,9 @@ export async function runPrivilegeVerification({
     );
 
     // One aggregate rather than one assertion per column, over the tables S4 does
-    // not touch. `users` is excluded here and asserted exactly below; an aggregate
-    // that silently tolerated the six granted columns would prove nothing there.
+    // not touch. `users` (S4) and `sessions` (S5) are excluded here and asserted
+    // exactly below; an aggregate that silently tolerated their granted columns
+    // would prove nothing there.
     const { rows: authColumnPrivileges } = await owner.query(
       `select coalesce(
                 array_agg(c.relname || '.' || a.attname || ':' || p.priv order by c.relname, a.attname),
@@ -475,13 +772,13 @@ export async function runPrivilegeVerification({
          cross join (values ('SELECT'), ('INSERT'), ('UPDATE')) as p(priv)
         where n.nspname = 'app'
           and c.relkind = 'r'
-          and c.relname <> 'users'
+          and c.relname not in ('users', 'sessions')
           and a.attnum > 0
           and not a.attisdropped
           and has_column_privilege('app_auth', a.attrelid, a.attnum, p.priv)`,
     );
     check(
-      "app_auth holds no column privilege on any app table other than users",
+      "app_auth holds no column privilege on any app table other than users and sessions",
       authColumnPrivileges[0].held.length === 0,
       JSON.stringify(authColumnPrivileges[0].held),
     );
@@ -650,13 +947,482 @@ export async function runPrivilegeVerification({
         .catch(() => undefined);
     }
 
-    // S3 and S4 do not create the session table; asserting its absence here keeps a
-    // `42P01` from ever being recorded as a privilege denial. When S5 lands, S6 owns
-    // the session assertions and this check simply stops applying.
+    // ---------------------------------------- S5 — session storage (ADR-005)
+    // The table is required state now. A missing relation is reported as a failure
+    // per group rather than as a `42P01` mid-run, so the report still says what is
+    // absent instead of stopping at the first statement that needed it.
     const { rows: sessionsRelation } = await owner.query(
-      "select to_regclass('app.sessions') as oid",
+      `select c.oid::text as oid, c.relname, n.nspname, c.relkind::text as relkind
+         from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where c.oid = to_regclass('app.sessions')`,
     );
-    checkSessionAbsence(check, sessionsRelation[0].oid);
+    const sessionsPresent = sessionsRelation.length === 1;
+    checkSessionTable(check, sessionsRelation[0] ?? null);
+
+    if (!sessionsPresent) {
+      for (const group of [
+        "column inventory and owner",
+        "constraint inventory",
+        "index inventory",
+        "row-level security and policies",
+        "column grants",
+        "collection function",
+        "behavioural probes",
+      ]) {
+        check(`app.sessions ${group}`, false, "app.sessions does not exist");
+      }
+    }
+
+    if (sessionsPresent) {
+      // Columns, types, nullability and defaults, in `attnum` order: a column that
+      // moved or changed type is a different schema even under the same name.
+      const { rows: sessionColumns } = await owner.query(
+        `select a.attname::text as name,
+                format_type(a.atttypid, a.atttypmod) as type,
+                a.attnotnull as not_null,
+                pg_get_expr(d.adbin, d.adrelid) as default_value
+           from pg_attribute a
+           left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
+          where a.attrelid = 'app.sessions'::regclass
+            and a.attnum > 0
+            and not a.attisdropped
+          order by a.attnum`,
+      );
+      const expectedSessionColumns = [
+        ["id", "uuid", true, "uuidv7()"],
+        ["user_id", "uuid", true, null],
+        ["token_hash", "text", true, null],
+        ["expires_at", "timestamp with time zone", true, null],
+        ["absolute_expires_at", "timestamp with time zone", true, null],
+        ["revoked_at", "timestamp with time zone", false, null],
+        ["last_seen_at", "timestamp with time zone", true, "now()"],
+        ["created_at", "timestamp with time zone", true, "now()"],
+      ];
+      check(
+        "app.sessions carries exactly the eight approved columns, types, nullability and defaults",
+        sessionColumns.length === expectedSessionColumns.length &&
+          expectedSessionColumns.every(([name, type, notNull, defaultValue], index) => {
+            const actual = sessionColumns[index];
+            return (
+              actual?.name === name &&
+              actual.type === type &&
+              actual.not_null === notNull &&
+              (actual.default_value ?? null) === defaultValue
+            );
+          }),
+        JSON.stringify(sessionColumns),
+      );
+
+      const { rows: sessionOwner } = await owner.query(
+        `select pg_get_userbyid(c.relowner) as owner_name
+           from pg_class c where c.oid = 'app.sessions'::regclass`,
+      );
+      check(
+        "app.sessions is owned by migration_owner",
+        sessionOwner[0]?.owner_name === "migration_owner",
+        sessionOwner[0]?.owner_name,
+      );
+
+      // `contype <> 'n'`: PostgreSQL 18 catalogues `NOT NULL` as a constraint row,
+      // and it is not part of this inventory.
+      const { rows: sessionConstraints } = await owner.query(
+        `select conname::text as conname, contype::text as contype,
+                pg_get_constraintdef(oid) as definition, confdeltype::text as confdeltype
+           from pg_constraint
+          where conrelid = 'app.sessions'::regclass and contype <> 'n'`,
+      );
+      checkSessionConstraints(check, sessionConstraints);
+
+      const { rows: sessionIndexes } = await owner.query(
+        `select i.relname::text as name,
+                ix.indisunique as "unique",
+                (select a.attname::text
+                   from pg_attribute a
+                  where a.attrelid = ix.indrelid and a.attnum = ix.indkey[0]) as column
+           from pg_index ix
+           join pg_class i on i.oid = ix.indexrelid
+          where ix.indrelid = 'app.sessions'::regclass`,
+      );
+      checkSessionIndexes(check, sessionIndexes);
+
+      const { rows: sessionRls } = await owner.query(
+        `select c.relrowsecurity as rls, c.relforcerowsecurity as force_rls
+           from pg_class c where c.oid = 'app.sessions'::regclass`,
+      );
+      check("app.sessions has ENABLE ROW LEVEL SECURITY", sessionRls[0]?.rls === true);
+      check("app.sessions has FORCE ROW LEVEL SECURITY", sessionRls[0]?.force_rls === true);
+
+      const { rows: sessionPolicies } = await owner.query(
+        `select policyname, cmd, permissive, roles::text[] as roles, qual, with_check
+           from pg_policies
+          where schemaname = 'app' and tablename = 'sessions'`,
+      );
+      checkSessionPolicyInventory(check, sessionPolicies);
+
+      const { rows: sessionGrants } = await owner.query(
+        `select coalesce(array_agg(distinct a.attname::text)
+                           filter (where has_column_privilege('app_auth', a.attrelid, a.attnum, 'SELECT')),
+                         '{}'::text[]) as select_columns,
+                coalesce(array_agg(distinct a.attname::text)
+                           filter (where has_column_privilege('app_auth', a.attrelid, a.attnum, 'INSERT')),
+                         '{}'::text[]) as insert_columns,
+                coalesce(array_agg(distinct a.attname::text)
+                           filter (where has_column_privilege('app_auth', a.attrelid, a.attnum, 'UPDATE')),
+                         '{}'::text[]) as update_columns
+           from pg_attribute a
+          where a.attrelid = 'app.sessions'::regclass
+            and a.attnum > 0
+            and not a.attisdropped`,
+      );
+      checkSessionColumnGrants(check, sessionGrants[0]);
+
+      const { rows: sessionAuthTablePrivileges } = await owner.query(
+        `select coalesce(array_agg(p.priv::text order by p.priv::text), '{}') as held
+           from (values ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')) as p(priv)
+          where has_table_privilege('app_auth', 'app.sessions', p.priv)`,
+      );
+      check(
+        "app_auth holds no table-level privilege on app.sessions",
+        sessionAuthTablePrivileges[0].held.length === 0,
+        JSON.stringify(sessionAuthTablePrivileges[0].held),
+      );
+
+      for (const role of ["app_api", "app_system"]) {
+        const { rows } = await owner.query(
+          `select coalesce(array_agg(p.priv::text order by p.priv::text), '{}') as table_privs,
+                  (select count(*)::integer
+                     from pg_attribute a
+                    where a.attrelid = 'app.sessions'::regclass
+                      and a.attnum > 0
+                      and not a.attisdropped
+                      and (has_column_privilege($1, a.attrelid, a.attnum, 'SELECT')
+                        or has_column_privilege($1, a.attrelid, a.attnum, 'INSERT')
+                        or has_column_privilege($1, a.attrelid, a.attnum, 'UPDATE'))) as column_privs
+             from (values ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')) as p(priv)
+            where has_table_privilege($1, 'app.sessions', p.priv)`,
+          [role],
+        );
+        check(
+          `${role} holds no privilege on app.sessions`,
+          rows[0].table_privs.length === 0 && rows[0].column_privs === 0,
+          JSON.stringify(rows[0]),
+        );
+      }
+
+      const { rows: purgeOverloads } = await owner.query(
+        `select p.proname::text as proname, p.prosecdef as prosecdef,
+                p.prorettype::regtype::text as prorettype, p.pronargs as pronargs,
+                p.proconfig as proconfig, pg_get_userbyid(p.proowner) as owner_name
+           from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+          where n.nspname = 'app' and p.proname = 'purge_expired_sessions'`,
+      );
+      check(
+        "app.purge_expired_sessions has exactly one signature",
+        purgeOverloads.length === 1,
+        JSON.stringify(purgeOverloads.map((row) => row.pronargs)),
+      );
+
+      // `aclexplode` rather than the textual `proacl`: the array's order is not
+      // guaranteed, and a missing grant and an extra one have to be told apart.
+      const { rows: purgeAcl } = await owner.query(
+        `select coalesce(r.rolname::text, 'PUBLIC') as grantee,
+                a.privilege_type::text as privilege,
+                a.is_grantable as grantable
+           from pg_proc p
+           join pg_namespace n on n.oid = p.pronamespace
+           cross join lateral aclexplode(p.proacl) a
+           left join pg_roles r on r.oid = a.grantee
+          where n.nspname = 'app' and p.proname = 'purge_expired_sessions'`,
+      );
+      checkSessionFunction(
+        check,
+        purgeOverloads.length === 0 ? null : { ...purgeOverloads[0], acl: purgeAcl },
+      );
+
+      // Behavioural half, on a real credential. The fixture user is created by the
+      // owner because `app_auth` may not supply `role`, and removed at the end.
+      const hex64 = (suffix) => `${probes.token}${suffix}`.padStart(64, "0");
+      const liveToken = hex64("a1");
+      const revokedToken = hex64("a2");
+      const expiredToken = hex64("a3");
+      const idleToken = hex64("a5");
+      const equalToken = hex64("a4");
+      const sessionEmail = `session_probe_${probes.token}@verify.invalid`;
+      let sessionUserId;
+
+      try {
+        const { rows: seeded } = await owner.query(
+          "insert into app.users (email, password_hash) values ($1, $2) returning id",
+          [sessionEmail, "verification-probe-not-a-hash"],
+        );
+        sessionUserId = seeded[0]?.id;
+
+        const inserted = await allowed(
+          auth,
+          "app_auth can INSERT a session without supplying id or created_at",
+          `insert into app.sessions (user_id, token_hash, expires_at, absolute_expires_at)
+           values ($1, $2, now() + interval '30 days', now() + interval '90 days')
+           returning id, created_at`,
+          [sessionUserId, liveToken],
+        );
+        check(
+          "the inserted session took its id and created_at from the database",
+          typeof inserted?.rows[0]?.id === "string" && inserted.rows[0].created_at instanceof Date,
+          JSON.stringify(inserted?.rows[0] ?? null),
+        );
+
+        const read = await allowed(
+          auth,
+          "app_auth can SELECT the eight granted columns of app.sessions",
+          `select id, user_id, token_hash, expires_at, absolute_expires_at,
+                  revoked_at, last_seen_at, created_at
+             from app.sessions where token_hash = $1`,
+          [liveToken],
+        );
+        check(
+          "the session row is readable by the credential that wrote it",
+          read?.rows.length === 1,
+          `rows=${read?.rows.length}`,
+        );
+
+        await allowed(
+          auth,
+          "app_auth can extend expires_at and touch last_seen_at",
+          `update app.sessions
+              set expires_at = now() + interval '30 days', last_seen_at = now()
+            where token_hash = $1`,
+          [liveToken],
+        );
+        await allowed(
+          auth,
+          "app_auth can revoke a session through revoked_at",
+          "update app.sessions set revoked_at = now() where token_hash = $1",
+          [liveToken],
+        );
+        await allowed(
+          auth,
+          "app_auth can clear revoked_at",
+          "update app.sessions set revoked_at = null where token_hash = $1",
+          [liveToken],
+        );
+
+        // One probe per protected column, with a value of that column's own type, so
+        // a type error cannot be read as a denial.
+        const protectedUpdates = {
+          id: "00000000-0000-7000-8000-000000000001",
+          user_id: "00000000-0000-7000-8000-000000000002",
+          token_hash: hex64("b1"),
+          absolute_expires_at: "2026-01-01T00:00:00Z",
+          created_at: "2026-01-01T00:00:00Z",
+        };
+        for (const [column, value] of Object.entries(protectedUpdates)) {
+          await denied(
+            auth,
+            `app_auth cannot UPDATE app.sessions.${column}`,
+            `update app.sessions set ${column} = $1 where token_hash = $2`,
+            [value, liveToken],
+          );
+        }
+
+        const protectedInserts = {
+          id: "00000000-0000-7000-8000-000000000003",
+          revoked_at: "2026-01-01T00:00:00Z",
+          last_seen_at: "2026-01-01T00:00:00Z",
+          created_at: "2026-01-01T00:00:00Z",
+        };
+        for (const [index, [column, value]] of Object.entries(protectedInserts).entries()) {
+          await denied(
+            auth,
+            `app_auth cannot INSERT app.sessions.${column}`,
+            `insert into app.sessions
+               (user_id, token_hash, expires_at, absolute_expires_at, ${column})
+             values ($1, $2, now() + interval '30 days', now() + interval '90 days', $3)`,
+            [sessionUserId, hex64(`c${index}`), value],
+          );
+        }
+
+        await denied(
+          auth,
+          "app_auth cannot DELETE from app.sessions",
+          "delete from app.sessions where token_hash = $1",
+          [liveToken],
+        );
+
+        for (const [index, role] of ["app_api", "app_system"].entries()) {
+          const client = role === "app_api" ? api : system;
+          await denied(
+            client,
+            `${role} cannot SELECT from app.sessions`,
+            "select * from app.sessions",
+          );
+          await denied(
+            client,
+            `${role} cannot INSERT into app.sessions`,
+            `insert into app.sessions (user_id, token_hash, expires_at, absolute_expires_at)
+             values ($1, $2, now() + interval '30 days', now() + interval '90 days')`,
+            [sessionUserId, hex64(`d${index}`)],
+          );
+          await denied(
+            client,
+            `${role} cannot UPDATE app.sessions`,
+            "update app.sessions set last_seen_at = now()",
+          );
+          await denied(
+            client,
+            `${role} cannot DELETE from app.sessions`,
+            "delete from app.sessions",
+          );
+        }
+
+        // `app_auth` answers logins and must not run collection; `app_system` is the
+        // one credential that may, asserted positively below.
+        await denied(
+          auth,
+          "app_auth cannot execute app.purge_expired_sessions()",
+          "select app.purge_expired_sessions()",
+        );
+
+        // `OPEN-04` is undecided and `D16` forbids a cascade, so the foreign key is
+        // the only thing standing between a mistaken account delete and a session
+        // that outlives its subject. `42501` would mean the probe proved nothing.
+        await expectCode(
+          owner,
+          "a user with a live session cannot be deleted (NO ACTION, 23503)",
+          "23503",
+          "delete from app.users where id = $1",
+          [sessionUserId],
+        );
+
+        // Collection is asserted against an exclusive view of the eligible set.
+        // Two verifications may run concurrently against one database, and a purge
+        // in one would otherwise be counted by the other. `pg_advisory_lock` is
+        // session-scoped, so it holds across the statements below; the unlock is in
+        // the `finally` that closes this block.
+        await owner.query("select pg_advisory_lock(hashtext('db:verify:sessions'))");
+        try {
+          // Collection fixtures, written by the owner because the past `created_at`
+          // they need is outside `app_auth`'s INSERT grant.
+          await owner.query(
+            `insert into app.sessions (user_id, token_hash, expires_at, absolute_expires_at, created_at)
+           values ($1, $2, now() - interval '62 days', now() - interval '3 days',
+                   now() - interval '92 days')`,
+            [sessionUserId, expiredToken],
+          );
+          await owner.query(
+            `insert into app.sessions
+             (user_id, token_hash, expires_at, absolute_expires_at, revoked_at)
+           values ($1, $2, now() + interval '30 days', now() + interval '90 days', now())`,
+            [sessionUserId, revokedToken],
+          );
+
+          // Sliding expiry in the past, absolute cap still ahead: the purge must leave
+          // it alone. This is what keeps a long-idle session recoverable, and it fails
+          // if the predicate is ever "improved" to `expires_at < now()`.
+          await owner.query(
+            `insert into app.sessions
+             (user_id, token_hash, expires_at, absolute_expires_at, created_at)
+           values ($1, $2, now() - interval '1 day', now() + interval '30 days',
+                   now() - interval '60 days')`,
+            [sessionUserId, idleToken],
+          );
+
+          const { rows: eligible } = await owner.query(
+            "select count(*)::integer as n from app.sessions where absolute_expires_at < now()",
+          );
+          const purged = await allowed(
+            system,
+            "app_system can execute app.purge_expired_sessions()",
+            "select app.purge_expired_sessions() as deleted",
+          );
+          check(
+            "the purge returns the count it deleted",
+            purged?.rows[0]?.deleted === eligible[0].n && eligible[0].n >= 1,
+            `deleted=${purged?.rows[0]?.deleted} eligible=${eligible[0].n}`,
+          );
+
+          const { rows: stillExpired } = await owner.query(
+            "select count(*)::integer as n from app.sessions where absolute_expires_at < now()",
+          );
+          check(
+            "no session past its absolute deadline survives the purge",
+            stillExpired[0].n === 0,
+            `remaining=${stillExpired[0].n}`,
+          );
+
+          const emptyRun = await allowed(
+            system,
+            "a purge with nothing to collect still succeeds",
+            "select app.purge_expired_sessions() as deleted",
+          );
+          check(
+            "a purge with nothing to collect returns zero",
+            emptyRun?.rows[0]?.deleted === 0,
+            `deleted=${emptyRun?.rows[0]?.deleted}`,
+          );
+
+          const { rows: survivors } = await owner.query(
+            "select token_hash from app.sessions where token_hash = any($1)",
+            [[liveToken, revokedToken, expiredToken, idleToken]],
+          );
+          const survived = new Set(survivors.map((row) => row.token_hash));
+          check(
+            "the purge preserves a session whose absolute deadline is still ahead",
+            survived.has(liveToken),
+          );
+          check(
+            "the purge preserves a revoked session before its absolute deadline",
+            survived.has(revokedToken),
+          );
+          check(
+            "the purge ignores the sliding deadline: an idle session inside its cap keeps its row",
+            survived.has(idleToken),
+          );
+          check(
+            "the purge removed the session past its absolute deadline",
+            !survived.has(expiredToken),
+          );
+
+          // The predicate is strict: a row whose absolute deadline equals the current
+          // transaction's `now()` is not expired yet. Both statements run in one
+          // transaction so the two `now()` values are the same timestamp.
+          await owner.query("begin");
+          try {
+            await owner.query(
+              `insert into app.sessions
+               (user_id, token_hash, expires_at, absolute_expires_at, created_at)
+             values ($1, $2, now() - interval '1 second', now(), now() - interval '1 hour')`,
+              [sessionUserId, equalToken],
+            );
+            await owner.query("select app.purge_expired_sessions()");
+            const { rows: boundary } = await owner.query(
+              "select 1 from app.sessions where token_hash = $1",
+              [equalToken],
+            );
+            check(
+              "a session whose absolute deadline equals now() survives the same transaction",
+              boundary.length === 1,
+            );
+          } finally {
+            await owner.query("rollback").catch(() => undefined);
+          }
+        } finally {
+          await owner
+            .query("select pg_advisory_unlock(hashtext('db:verify:sessions'))")
+            .catch(() => undefined);
+        }
+      } finally {
+        // Sessions first: the foreign key refuses to orphan them, which is the
+        // behaviour the probe above asserts.
+        if (sessionUserId !== undefined) {
+          await owner
+            .query("delete from app.sessions where user_id = $1", [sessionUserId])
+            .catch(() => undefined);
+          await owner
+            .query("delete from app.users where id = $1", [sessionUserId])
+            .catch(() => undefined);
+        }
+      }
+    }
 
     // --------------------------------------------- default privileges declared
     const { rows: defaultAcl } = await owner.query(
