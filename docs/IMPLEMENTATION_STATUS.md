@@ -456,18 +456,20 @@ approvals, one amendment `IG-5-A1`, one later gate `IG-12`).
 | S3 — `app_auth` bootstrap | **implemented** | `70a614f`, `d9d774e`, `f5e4d1c`, `a4f1fa0` | fourth role with zero memberships and no `BYPASSRLS`; `APP_AUTH_DATABASE_URL` parsed and role-validated at boot (dev default, production must state it); non-global `AuthDatabaseModule` + `AuthDatabaseLifecycle`, proven by module-assembly tests, not yet imported by `AppModule`; `db:verify` 387 assertions |
 | S4 — `auth_boundary` migration | **committed and pushed** | `b9a27c6`, `cf0d1c2` | `20261118040000_auth_boundary`: two column grants and two policies on `app.users`; `db:verify` 419 assertions, 0 FAIL, 0 SKIP after the corrective pass |
 | S5 — `sessions` migration | **implemented, committed, pushed, and applied to the canonical development database** | `8fb2270` | `20261118050000_sessions`: eight columns, three CHECKs (`D-1`, `D-2`, expiry order), unique `token_hash`, the two `D-3` indexes, `ENABLE`+`FORCE` RLS, two policies, three column grants to `app_auth`, `purge_expired_sessions()` (`SECURITY DEFINER`, pinned `search_path`, `EXECUTE` to `app_system` only); Prisma `Session` model + `User.sessions`. Canonical `127.0.0.1:5442` is at 5/5 (`db:bootstrap` first, then `db:migrate` applying `auth_boundary` + `sessions`); canonical evidence: `db:verify` 493 PASS / 0 FAIL / 0 SKIP, `db:verify:probes` 12/12, `test:schema` 13/13, `test:rls` 39/39, `pnpm test` 87 API + 34 database. Isolated project `agroclimate-db-s5-check` (5545) reproduced the same numbers. Pre-deployment backup: `/tmp/opencode/agroclimate-canonical-pre-s4-s5.dump` |
-| S6 — privilege verification | **implemented and verified on canonical, uncommitted** | — | `db:verify` 493 → **499** PASS / 0 FAIL / 0 SKIP (four `23514` deadline probes, clamped-extension equality, PUBLIC has no privilege on `app.sessions`); new `test/rls/auth-boundary.test.mjs` — **49 cases**, real roles, denials exact at `42501`, `23514`/`23503` separately, 21 non-authentication tables enumerated from `pg_tables` (count asserted); `test:schema` 13 → **22**; `test:rls` **88** (39 unchanged isolation + 49 boundary); all three suites green on canonical and on a fresh isolated project (`agroclimate-s6-fresh`, port 5546, own volume, removed afterwards). `OPEN-13` resolved on that evidence. |
+| S6 — privilege verification | **implemented, committed, pushed, and verified on canonical** | `e9d1621` | `db:verify` 493 → **499** PASS / 0 FAIL / 0 SKIP (four `23514` deadline probes, clamped-extension equality, PUBLIC has no privilege on `app.sessions`); new `test/rls/auth-boundary.test.mjs` — **49 cases**, real roles, denials exact at `42501`, `23514`/`23503` separately, 21 non-authentication tables enumerated from `pg_tables` (count asserted); `test:schema` 13 → **22**; `test:rls` **88** (39 unchanged isolation + 49 boundary); all three suites green on canonical and on a fresh isolated project (`agroclimate-s6-fresh`, port 5546, own volume, removed afterwards). `OPEN-13` resolved on that evidence. |
 | S7 — register + login | blocked | — | needs `IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10` |
 | S8 — session guard, `/me`, logout | blocked | — | needs `IG-8`, `IG-9` |
-| S9 — docs reconciliation | not started | — | `ADR-004` and `ADR-005` are accepted; the reconciliation changes are pending |
+| S9 — docs reconciliation | partially done | — | `ADR-004`/`ADR-005` accepted; `entity-catalog` now carries `sessions` (23 tables) and `IMPLEMENTATION_STATUS` records S3–S6 — done in `e9d1621`. Still absent: the `api-conventions` amendments and the `auth-deferred.md` pointer (`consistency-checklist.md` §6.1) |
 
 Gates this phase answered: `AG-1`, `AG-2`, `IG-5`, `IG-11`, plus `IG-5-A1` and
 `IG-12`. Gates it did not answer: `IG-1`–`IG-4`, `IG-6`–`IG-10`.
 
 What S2 deliberately does not contain: an auth endpoint, session issuance, an
-`app_auth` role, a grant, a policy, or a migration. `OPEN-01` and `OPEN-13` remain
-unresolved — an acceptance and an implementation are not a migration applied to the
-canonical database; `ADR-005` is accepted (2026-11-20), and that applies nothing.
+`app_auth` role, a grant, a policy, or a migration. (This paragraph describes S2 at the
+time it was written; the role, grants, and migrations arrived in S3–S5.) `OPEN-01`
+remains unresolved because no login path exists; `OPEN-13` was resolved on 2026-11-20
+once `ADR-005` was accepted **and** `20261118050000_sessions` was applied to the
+canonical database **and** the S6 session suite was green there.
 
 Verification history, by commit, because the four commits fixed different things:
 
@@ -548,7 +550,9 @@ new unit tests) and `af7c01e` (status reconciliation) — `af7c01e` is HEAD as o
 note. Isolated verification: the corrective run used its
 own project, `agroclimate-s4-corrective-check` / `agroclimate-db-s4-corrective-check`
 on port **5544**, fresh volume, all four migrations applied in order. Canonical
-database application: **pending owner action**. `OPEN-01`: **unresolved**.
+database application: **applied 2026-11-20** — `auth_boundary` and `sessions` were
+applied together from 5/5, and `db:verify` on `127.0.0.1:5442` is 499 PASS / 0 FAIL /
+0 SKIP. `OPEN-01`: **unresolved** (no login path yet).
 
 `checkUsersPolicyInventory` now compares the whole inventory against four records —
 command, `permissive`, role set, `USING`, `WITH CHECK` — and fails on a missing

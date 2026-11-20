@@ -8,11 +8,11 @@
 | Decisions requested | 4 — `AG-1`, `AG-2`, `IG-5`, `IG-11` |
 | Owner decisions made so far | **4 of 4**, plus `IG-5-A1` (amendment) and `IG-12` (new gate) |
 | Decision approval status | **Complete** — every gate this file asked for is answered |
-| Implementation status | **Snapshot at 2026-11-18; live status is `docs/IMPLEMENTATION_STATUS.md`** — `S1` and `S2` implemented at that date, `S3` onward not started then (now `S3` and `S4` are implemented) — contracts at `c44cf5b`/`0bb9792`, plumbing at `ad6235b`, remediation at `6d36741`, details and path hardening at `c762171`, shared path grammar at `38486fd`, parser and numeric-segment correctness at `75607d8` |
+| Implementation status | **Snapshot at 2026-11-18; live status is `docs/IMPLEMENTATION_STATUS.md`** — at that date `S1` and `S2` were implemented and `S3` onward was not started. Since then `S3`/`S4` (`b9a27c6`, `cf0d1c2`), `S5` (`8fb2270`), and `S6` (`e9d1621`) shipped; the canonical development database is at 5/5 and `OPEN-13` was resolved on 2026-11-20. Nothing in this file's decisions changed |
 | Verification status | **Green at `75607d8`, reviewed** — build, typecheck, test, lint, prettier, `git diff --check` all exit `0`; api 76, contracts 187, database 9, 0 failing |
 | Remaining blockers before `S3` | **None documentation-wise** — `ADR-004` was accepted on 2026-11-18 (see the ADR status row). `S3` may begin subject to its own implementation prerequisites (§16 of the plan: test-file authorization, a cluster-admin bootstrap path, an isolated compose project). `ADR-005` gates `S5`, not `S3`. The `IG` gates block **S7** (`IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10`) and **S8** (`IG-8`, `IG-9`), not the database boundary |
 | ADR status | `ADR-004` **Accepted** 2026-11-18 and `ADR-005` **Accepted** 2026-11-20 (approver: Akihira77) — they formalise `AG-1` and `AG-2`; `ADR-005` gates `S5`, and the three schema details it needed are decided as `D-1`–`D-3` in §2.11 (2026-11-20). Neither ADR invents a decision beyond its approval, and `AG-1`/`AG-2` are **not** re-opened or asked for again |
-| `OPEN-nn` dispositions changed | **No** — `OPEN-01` and `OPEN-13` remain unresolved |
+| `OPEN-nn` dispositions changed | **No, at the time of these decisions** — `OPEN-01` and `OPEN-13` were both unresolved then; `OPEN-13` was resolved on 2026-11-20 on `ADR-005`'s three-part Definition of Done (see `docs/data-model/open-decisions.md` §5). `OPEN-01` remains unresolved |
 
 This record exists so the owner can decide without reading 1,100 lines of review. It
 restates the review's recommendations; it does not add to them. Where a detail is
@@ -23,7 +23,10 @@ below were recorded and no code, migration, role, grant, policy, or ADR existed 
 of them. That was accurate on 2026-11-18 before S1. `OPEN-01` and `OPEN-13` stay below
 `RESOLVED`: per the review's Definition of Done, resolution requires an accepted ADR
 **and** an applied migration **and** green verification evidence — not an approval.
-Until then the register's dispositions are unchanged.
+That held on 2026-11-18. `OPEN-13` met all three on 2026-11-20 (accepted `ADR-005`,
+`20261118050000_sessions` applied to the canonical development database, `test/rls/
+auth-boundary.test.mjs` green there) and is recorded `RESOLVED`. `OPEN-01` stays open:
+the boundary exists, but no login path reads a credential through it.
 
 **Update, 2026-11-18 (post-S2).** Two of the tracks this record unblocked now have
 work behind them: `S1` (contracts) at `c44cf5b`, `0bb9792`, `38486fd`, `75607d8`; `S2`
@@ -817,7 +820,7 @@ Conditions attached to it:
 | Original decisions | **4** — `AG-1`, `AG-2`, `IG-5`, `IG-11` |
 | Amendments | **1** — `IG-5-A1` |
 | Entries in the recorded-decisions table | **5** |
-| `OPEN-nn` dispositions changed | **No** — `OPEN-01` and `OPEN-13` remain unresolved |
+| `OPEN-nn` dispositions changed | **No, at this date** — `OPEN-13` has since been resolved (2026-11-20); `OPEN-01` remains unresolved |
 | Other `IG-nn` approved | **None** — `IG-1`–`IG-4` and `IG-6`–`IG-10` remain unanswered |
 
 An amendment is not a new gate and does not unblock anything: `S1` and `S2` were already
@@ -900,7 +903,7 @@ finding F6, which records what was absent at `bf0e593` and remains true of that 
 | Amendments | **1** — `IG-5-A1` |
 | New gates recorded after the original round | **1** — `IG-12` |
 | Entries in the recorded-decisions table | **6** |
-| `OPEN-nn` dispositions changed | **No** — `OPEN-01` and `OPEN-13` remain unresolved |
+| `OPEN-nn` dispositions changed | **No, at this date** — `OPEN-13` has since been resolved (2026-11-20); `OPEN-01` remains unresolved |
 | Other `IG-nn` approved | **None** — `IG-1`–`IG-4`, `IG-6`–`IG-10` remain unanswered |
 
 `IG-12` does not unblock anything. `S2` was already unblocked; it now has one permitted
@@ -1098,8 +1101,18 @@ the rest are not.
 |---|---|---|
 | S1 | **implemented** | `c44cf5b` — response and error envelopes, error-code set, `requestId`; `0bb9792` — branded `NotFoundErrorCode`; `38486fd` — encoded path grammar enforced by `validationIssueSchema`, with the producer importing the same identifier rule; `75607d8` — explicit parser states and canonical numeric segments |
 | S2 | **implemented and remediated** | `ad6235b` — prefix, filter, request id, cookies, helmet, trust proxy, CORS, database client, health probes; `6d36741` — credential boundary, log sanitisation, 405/406/415 documentation, `statement_timeout` readiness, `IG-5-A1`, `IG-12`; `c762171` — `details` trust boundary, path sanitisation in the pipe, log category, readiness budget, S2 commit history; `38486fd` — shared path grammar, producer reuse, segment-boundary truncation; `75607d8` — parser state machine, canonical numeric guard |
-| S3–S8 | **not started** | no `app_auth` role, no migration, no auth endpoint |
-| S9 (partial) | **`ADR-004` and `ADR-005` accepted** | `docs/adr/ADR-004-authentication-database-boundary.md` — **Accepted** 2026-11-18 (Akihira77); `docs/adr/ADR-005-session-storage.md` — **Accepted** 2026-11-20 (Akihira77); `S5` has not started, and every other S9 item is still absent |
+| S3–S8 | **not started at that date** | no `app_auth` role, no migration, no auth endpoint on 2026-11-18 |
+| S9 (partial) | **`ADR-004` and `ADR-005` accepted** | `docs/adr/ADR-004-authentication-database-boundary.md` — **Accepted** 2026-11-18 (Akihira77); `docs/adr/ADR-005-session-storage.md` — **Accepted** 2026-11-20 (Akihira77). At that date `S5` had not started; every other S9 item is still absent |
+
+**Update, 2026-11-20 — current status of the same sequence.** The table above records
+2026-11-18 and is left as written. Since then: `S3`/`S4` (`b9a27c6`, `cf0d1c2`), `S5`
+(`8fb2270`), and `S6` (`e9d1621`) are implemented, verified, and pushed; `auth_boundary`
+and `sessions` are applied to the canonical development database (5/5), where `db:verify`
+is 499 PASS / 0 FAIL / 0 SKIP, `test:rls` is 88/88, and `test:schema` is 22/22;
+`OPEN-13` is `RESOLVED` on `ADR-005`'s Definition of Done. `S7` and `S8` remain
+unstarted and remain blocked on the `IG` decisions listed under "What these decisions do
+not settle" below. No decision in this file changed, and `OPEN-01` and `OPEN-04` are
+untouched.
 
 So the honest statement of what these four decisions buy: **Track 1 can start**
 (contracts and plumbing), and **Track 2 can start** (the database boundary and
@@ -1115,10 +1128,12 @@ leave the process rather than only where they are built, and their checks exit `
 S3, S4, and S5 are still approval-only in the other sense — no `app_auth` role, no
 migration, and no verification row exists for them.
 
-The ADRs are now written, and `ADR-004` was **accepted on 2026-11-18**; `ADR-005`
-remains `Proposed` and gates `S5`, not `S3`. So the last thing standing between
-`AG-1` and S3 is implementation, not paperwork — and `AG-2`'s record still awaits
-acceptance before any session table exists. Do not read acceptance as a fifth decision:
+The ADRs are now written, and `ADR-004` was **accepted on 2026-11-18**; at that date
+`ADR-005` remained `Proposed` and gated `S5`, not `S3`. It was accepted on 2026-11-20 and
+`S5` shipped the same day, so that gate is closed too. Do not read acceptance as a fifth
+decision: they record what was approved on 2026-11-18 and add nothing. A separate,
+non-architecture row survives from the original list — the `IG` gates — and it belongs
+to S7/S8, where endpoint behaviour is decided.
 they record what was approved on 2026-11-18 and add nothing. A separate,
 non-architecture row survives from the original list — the `IG` gates — and it belongs
 to S7/S8, where endpoint behaviour is decided.
@@ -1141,19 +1156,22 @@ to S7/S8, where endpoint behaviour is decided.
 | Signed tenant context | `OPEN-28` (`DEFERRED`) | — |
 | `app_auth` enumeration / impersonation exposure as a stated limitation | Definition of Done item 15 | completion claims |
 
-No `OPEN` disposition has changed in `docs/data-model/open-decisions.md`, no ADR has
-been created or modified, and no implementation exists for any of the above.
+No `OPEN` disposition changed as a result of these decisions, no ADR was created or
+modified by them, and no implementation of the items below exists. (`OPEN-13` was
+resolved later, on 2026-11-20, by implementation plus evidence — not by any decision in
+this record; see the header.)
 
 `IG-1` through `IG-4` and `IG-6` through `IG-10` are **not** approved by this record and
 were not part of it. Only `AG-1`, `AG-2`, `IG-5`, and `IG-11` were put to the owner in
 the original round, and only those four carry an approval date from that round;
 `IG-5-A1` and `IG-12` were approved later on the same day and are recorded above with
-their own dates.
+their own dates. **They remained unanswered as of 2026-11-20** — see
+`docs/IMPLEMENTATION_STATUS.md` and the S7 readiness assessment for their current state.
 
-`OPEN-01` and `OPEN-13` remain **unresolved** despite their decisions being approved.
-The review's rule stands: a disposition moves to `RESOLVED` when the ADR is accepted,
-the migration is applied, and the verification evidence is green — three facts about
-the repository, none of which an approval can supply.
+`OPEN-01` remains **unresolved** despite its decision being approved, because no login
+path reads a credential through the boundary. `OPEN-13` met the review's rule on
+2026-11-20: the ADR is accepted, the migration is applied, and the verification evidence
+is green — three facts about the repository, none of which an approval can supply.
 
 # Source inconsistencies encountered while preparing this record
 

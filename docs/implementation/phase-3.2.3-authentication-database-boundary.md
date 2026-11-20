@@ -301,9 +301,8 @@ Approval is not acceptance of a document, and neither is implementation. Nothing
 asks the owner to decide `AG-1`/`AG-2` a second time: acceptance was a statement that each
 ADR faithfully records what was approved. Both are now accepted — `ADR-004` on
 2026-11-18, `ADR-005` on 2026-11-20 — and `D-1`–`D-3` settled the remaining schema
-questions. All four steps have since been implemented: `S5` in `8fb2270` and `S6`
-uncommitted at the time of writing, with the canonical database at 5/5 and the evidence
-in §7 and §8.5.
+questions. All four steps have since been implemented and pushed: `S5` in `8fb2270`,
+`S6` in `e9d1621`, with the canonical database at 5/5 and the evidence in §7 and §8.5.
 
 The gates are per-milestone, not per-phase:
 
@@ -558,7 +557,7 @@ Three facts that are not the same fact, and are not to be merged in prose:
 |---|---|
 | S4 implementation in source control | **committed and pushed** — `b9a27c6`, `cf0d1c2` |
 | S4 isolated verification | **passed** — 419 PASS / 0 FAIL / 0 SKIP on a fresh volume, all four migrations in order |
-| S4 on the canonical database | **pending owner action** — no evidence exists for it |
+| S4 on the canonical database | **applied** — `db:bootstrap` then `db:migrate` on 2026-11-20 applied `auth_boundary` and `sessions` together; canonical is at 5/5 and `db:verify` is 499 PASS / 0 FAIL / 0 SKIP there |
 | S6 standalone authentication suite | **implemented and green on canonical** — `test/rls/auth-boundary.test.mjs`, 49 cases |
 | `OPEN-01` | **unresolved** |
 
@@ -653,6 +652,8 @@ database `agroclimate`, schema `app`: `prisma migrate status` reports 5/5 applie
 that database `db:verify` reports 493 assertions with 0 `FAIL` and 0 `SKIP`,
 `db:verify:probes` 12/12, `test:schema` 13/13 and `test:rls` 39/39. The isolated project
 `agroclimate-db-s5-check` (port 5545) produced the same numbers before the canonical run.
+`S6` later raised the same database to 499 assertions, `test:schema` 22 and `test:rls` 88
+(§8.5).
 
 Deployment had a precondition the plan did not anticipate: canonical was still at
 `domain_tables`. It had three of four roles — `app_auth` did not exist — so
@@ -1388,7 +1389,7 @@ of them into "done" or "blocked".
 | S3 | **4 — implemented** | gate: accepted `ADR-004`; `db:verify` 387 assertions at the time |
 | S4 | **4 — implemented and pushed** | gate: S3 (the role must exist before a policy names it); `db:verify` 419 assertions after the corrective pass |
 | S5 | **4 — implemented, committed, pushed, and applied to canonical** | gate: accepted `ADR-005` **and** S4, both satisfied 2026-11-20; commit `8fb2270`; canonical `127.0.0.1:5442` at 5/5 with `db:verify` 493/0/0 |
-| S6 | **4 — implemented and verified, uncommitted at the time of writing** | gate: the stages whose rows it verifies — S3/S4 for the `users` half, plus S5 for the session half. Canonical: `db:verify` 499/0/0, `test:rls` 88, `test:schema` 22 |
+| S6 | **4 — implemented, committed, pushed, and verified** | gate: the stages whose rows it verifies — S3/S4 for the `users` half, plus S5 for the session half. `e9d1621`; canonical: `db:verify` 499/0/0, `test:rls` 88, `test:schema` 22 |
 | `OPEN-01` | **5 — unresolved** | needs accepted `ADR-004` + migration + `db:verify` |
 | `OPEN-13` | **RESOLVED 2026-11-20** | `ADR-005` accepted + migration applied + session suite green |
 

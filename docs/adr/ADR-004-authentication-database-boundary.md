@@ -5,18 +5,20 @@
   `docs/review/phase-3.2-owner-decisions.md` §1.10. That approval is the decision; this
   document is its durable record, and acceptance of it is the owner's act, separate from
   the approval it records. Acceptance is a **documentation gate, not implementation**:
-  `S3` and `S4` are committed and pushed (2026-11-18), `S6` is still pending, and
-  `OPEN-01` stays unresolved until the owner applies the migration to the canonical
-  database and `db:verify` is green there. Isolated verification projects are
-  evidence, not application.
+  `S3`, `S4`, and `S6` are implemented, verified, and pushed (`b9a27c6`, `cf0d1c2`,
+  `e9d1621`), and the `auth_boundary` migration is applied to the canonical development
+  database, where `db:verify` is 499 PASS / 0 FAIL / 0 SKIP. `OPEN-01` stays unresolved
+  for a different reason: the boundary exists, but no login path reads a credential
+  through it yet.
 - Date: 2026-11-18 (decision date), recorded here 2026-11-18
 - Depends on: ADR-002 (D5, D7), ADR-003, `docs/data-model/ownership-and-rls.md`,
   `docs/review/phase-3.2-design-review.md` §3, §4, §5, §16
 - Supersedes: none
 - Implemented by: `docs/implementation/phase-3.2.3-authentication-database-boundary.md`
-  (steps S3, S4, S6) — **S3 and S4 committed and pushed** (`b9a27c6`, `cf0d1c2`);
-  `S6` pending
-- Register entry: `OPEN-01` (P1, hard) — **still unresolved**, see §17
+  (steps S3, S4, S6) — **implemented and verified on the canonical development database**
+  (`b9a27c6`, `cf0d1c2`, `e9d1621`)
+- Register entry: `OPEN-01` (P1, hard) — **still unresolved**: the boundary is built, the
+  request path that would use it is S7's. See §17
 
 ## Context
 

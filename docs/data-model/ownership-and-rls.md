@@ -1,26 +1,30 @@
 # Ownership and Row Level Security
 
-Tenant-owned: 10 tables. Global/reference: 12 tables. This document is the
+Tenant-owned: 10 tables. Global/reference: 12 tables. Identity: 1 table
+(`sessions`, added by S5). This document is the
 complete matrix, the policy text, and the two problems the matrix creates that
 are **not** solved here.
 
-This model is **implemented** for all 22 domain tables. Ten tenant-owned tables
+This model is **implemented** for all 22 domain tables, plus `app.sessions`. Ten
+tenant-owned tables
 carry `ENABLE` + `FORCE ROW LEVEL SECURITY` with a `FOR ALL TO app_api` policy and
 a `*_owner_full_access` policy for `migration_owner`. The twelve global/reference
 tables have no RLS because they have no tenant ownership column to filter on.
 Runtime grants and privilege boundaries are applied and verified — `db:verify`
-(419 assertions on PostgreSQL 18.6 after S4), the tenant-isolation suite (39 tests,
-as the real `app_api` role through `withTenant`), and the schema-conformance suite
-(12 tests). The authentication credential `app_auth` holds a column grant on
-`app.users` and two policies (`users_auth_lookup`, `users_auth_register`), applied by
-`prisma/migrations/20261118040000_auth_boundary/migration.sql`, committed as
-`b9a27c6`; `app_api` holds nothing there, before and after.
+(499 assertions on PostgreSQL 18.6 after S6), the tenant-isolation suite (39 tests,
+as the real `app_api` role through `withTenant`) plus the S6 `auth-boundary` suite
+(49 real-role tests), and the schema-conformance suite (22 tests). The authentication
+credential `app_auth` holds column grants on
+`app.users` (`users_auth_lookup`, `users_auth_register`) applied by
+`prisma/migrations/20261118040000_auth_boundary/migration.sql` (`b9a27c6`), and on
+`app.sessions` (`sessions_auth_all`) applied by
+`prisma/migrations/20261118050000_sessions/migration.sql` (`8fb2270`); `app_api` holds
+nothing on either table.
 
-Implementation is not the same as resolution. `OPEN-01` is still open in the
-register: the boundary that answers it now exists and is exercised by `db:verify` in
-an isolated project, but the Definition of Done also requires the migration to be
-committed and applied to the canonical database, and the standalone authentication
-suite is S6's. The trusted-tenant-context problem analysed in §5 is likewise still
+`OPEN-01` is still open in the register: the boundary that answers it exists on the
+canonical database and is exercised by `db:verify` and the `auth-boundary` suite, but
+no login path reads a credential through it yet. The trusted-tenant-context problem
+analysed in §5 is likewise still
 open, and RLS remains containment of forgotten filters, not a boundary against
 arbitrary SQL executed with a compromised `app_api` credential. Neither is solved
 here or anywhere else in the repository.
