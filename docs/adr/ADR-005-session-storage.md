@@ -1,10 +1,11 @@
 # ADR-005 — PostgreSQL Session Storage
 
 - Status: **Proposed** — formalises decision `AG-2` recorded by the repository owner
-  on 2026-11-18 in `docs/review/phase-3.2-owner-decisions.md` §2.10. That approval is
-  the decision; this document is its durable record. Acceptance of *this document* is
-  the owner's, not the author's, and is a separate act from the approval it records.
-- Date: 2026-11-18 (decision date), recorded here 2026-11-18
+  on 2026-11-18 in `docs/review/phase-3.2-owner-decisions.md` §2.10, plus the three
+  schema decisions `D-1`–`D-3` the owner accepted on 2026-11-20 (§2.11). That approval
+  is the decision; this document is its durable record. Acceptance of *this document*
+  is the owner's, not the author's, and is a separate act from the approvals it records.
+- Date: 2026-11-18 (decision date), schema decisions 2026-11-20, recorded here 2026-11-20
 - Depends on: ADR-002 (D5), ADR-003, ADR-004, `docs/review/phase-3.2-design-review.md`
   §4.3, §6, §12.2, §17
 - Supersedes: none
@@ -12,7 +13,8 @@
   refresh rotation in D5's rejected list. Nothing in D5 is amended by this ADR.
 - Implemented by: `docs/implementation/phase-3.2.3-authentication-database-boundary.md`
   (steps S5, S6) — **plan only, nothing applied**
-- Register entry: `OPEN-13` (P1, hard) — **still unresolved**, see §18
+- Register entry: `OPEN-13` (P1, hard) — **still unresolved**, see *Related decisions
+  and open decisions*
 
 ## Context
 
@@ -65,7 +67,15 @@ an opaque bearer token; the database holds only its SHA-256 hash.
 
 ## Token hashing and storage
 
-- Only `sha256(token)` is persisted, hex-encoded, in `token_hash`, which is `UNIQUE`.
+- Only `sha256(token)` is persisted, hex-encoded lowercase, in `token_hash`, which is
+  `UNIQUE`. The encoding is not a stylistic choice any more: `D-1` (accepted
+  2026-11-20) makes it a database constraint.
+- The CHECK constrains the **representation**, not the derivation. It rejects a value
+  that is not 64 lowercase hex characters; it cannot tell a correctly computed
+  `sha256(raw token)` from any other 64-character lowercase hex string, including a
+  double hash or a hash of the wrong input. `sha256(token)` being the value written is
+  an application property, verified by one test that compares the stored column against
+  the hash of the presented token.
 - SHA-256 without a salt or KDF is correct **here** and only here: the input is 256
   bits of CSPRNG output, so there is no dictionary to attack and no rainbow table to
   build. This is not the password path and must never be reused as one. Passwords are
@@ -91,24 +101,54 @@ validation:
 ### What PostgreSQL can and cannot enforce
 
 The distinction matters because `app_auth` holds the `INSERT` grant and is therefore
-allowed to *choose* the initial `absolute_expires_at`. If no constraint exists, the
-column's 90-day rule is a sentence in this document and nothing else.
+allowed to *choose* the initial `absolute_expires_at`. Without `D-2`, the column's
+90-day rule would be a sentence in this document and nothing else.
 
 | Invariant | Layer | Mechanism | What it actually prevents |
 |---|---|---|---|
 | `absolute_expires_at` never changes after creation | **database** | no `UPDATE` grant covers the column (`GRANT UPDATE (expires_at, last_seen_at, revoked_at)`) | a session being pushed past its deadline, or re-pointed at a new user |
-| `absolute_expires_at` is at most 90 days after creation | **database**, if the proposed constraint is accepted | `CHECK (absolute_expires_at <= created_at + INTERVAL '90 days')` | a `10-year` session inserted in one statement — see §"Implementation details still requiring review" |
-| `expires_at` never exceeds the absolute deadline | **database** | `CHECK (absolute_expires_at >= expires_at)` | an extension that outlives the hard deadline |
+| `expires_at` is later than `created_at` at insert | **database** | `CHECK (expires_at > created_at)` | a session inserted already expired, which would authenticate nothing and still occupy a unique hash |
+| `absolute_expires_at` is at most 90 days after creation | **database** — `D-2`, accepted 2026-11-20 | `CHECK (absolute_expires_at <= created_at + INTERVAL '90 days')` | a `10-year` session inserted in one statement; the bound is a maximum, not an equality |
+| `expires_at` never exceeds the absolute deadline | **database** | `CHECK (absolute_expires_at >= expires_at)` | an extension that outlives the hard deadline, including the clamped value |
+| `token_hash` is a 64-character lowercase hex string | **database** — `D-1`, accepted 2026-11-20 | `CHECK (token_hash ~ '^[0-9a-f]{64}$')` | persisting a raw base64url token by mistake; it validates the representation, not the derivation |
 | `expires_at` is exactly 30 days after the last extension | **application only** | none | nothing at the database layer |
-| Extension happens at most once per 5 minutes | **application only** | none | nothing at the database layer |
+| Extension happens at most once per 5 minutes | **application only**, and mandatory | none | nothing at the database layer; see *Concurrency* below |
 | An expired or revoked row is not honoured | **application only** | the read predicate | nothing at the database layer |
+
+The three predicates the database enforces are one constraint on the row's own
+timestamps plus the two accepted additions, and they are written here in full because
+an earlier draft of this ADR recorded only the second one:
+
+```sql
+-- Proposed by the S5 migration. NOT APPLIED.
+CONSTRAINT sessions_expiry_order_check
+  CHECK (absolute_expires_at >= expires_at AND expires_at > created_at),
+CONSTRAINT sessions_token_hash_shape_check
+  CHECK (token_hash ~ '^[0-9a-f]{64}$'),            -- D-1, accepted 2026-11-20
+CONSTRAINT sessions_absolute_expiry_cap_check
+  CHECK (absolute_expires_at <= created_at + INTERVAL '90 days')  -- D-2, accepted
+```
+
+Each predicate answers a different question, and collapsing them into "the expiry
+check" loses one of the three every time:
+
+| Predicate | Question | Failure it rejects |
+|---|---|---|
+| `expires_at > created_at` | can a session be born dead? | an insert whose sliding deadline is already past |
+| `absolute_expires_at >= expires_at` | can a session outlive its hard deadline? | an unclamped or over-eager extension, at `23514` |
+| `absolute_expires_at <= created_at + 90 days` | how long may the credential live? | a single-statement decade-long session |
+
+The `>=` rather than `>` in the middle predicate is not sloppiness: a clamped extension
+legitimately makes the two timestamps equal at the end of a session's life, which is why
+the pair must be stated together. An earlier summary in `design review §17` recorded only
+one clause; it has been corrected to match this one, and `AG-2` §2.4 governs either way.
 
 Four rules follow from that table:
 
 1. **A session cannot outlive its absolute expiration.** `absolute_expires_at` is
    written once at creation and no grant permits changing it (`UPDATE` covers
    `expires_at`, `last_seen_at`, `revoked_at` only). The *upper bound* on the initial
-   value is the proposed 90-day CHECK; the choice of a value within that bound is the
+   value is the `D-2` 90-day CHECK; the choice of a value within that bound is the
    application's.
 2. **Sliding expiration can never exceed absolute expiration.** The extension is
    clamped: `LEAST(now() + interval '30 days', absolute_expires_at)`. `LEAST()` bounds
@@ -130,6 +170,34 @@ Four rules follow from that table:
    row that is past `expires_at` but not yet purged must still be rejected by the
    application. Conflating the two is how an expired session becomes valid again after a
    failed job run.
+
+### Concurrency — the throttle is an invariant, not advice
+
+"A session may be extended at most once per five minutes" (`AG-2` §2.4, step 3) is a
+**mandatory application invariant**. It is not a best-effort optimization, and it does
+not become advisory because two requests can race: concurrent requests for the same
+session must not produce two extensions inside the window.
+
+This ADR deliberately does not solve that, and says so rather than implying a solution:
+
+- The **database foundation** this ADR describes does not implement the throttle
+  protocol. It supplies the columns, the grants, and the clamp; a column grant cannot
+  express "at most once per five minutes", and a constraint on
+  `expires_at`/`last_seen_at` would only constrain two values the same statement writes
+  (rule 3).
+- The **atomic update or row-locking strategy** — a conditional `UPDATE` whose predicate
+  re-checks the window, a `SELECT … FOR UPDATE` around the read-modify-write, or an
+  advisory lock per session — is a decision for the authentication workflow milestone
+  **S7**, where the request path and its transaction boundaries exist and can be tested
+  under concurrency.
+- **S5 must not claim to have solved it.** S5 creates no request path, runs no
+  concurrency test, and ships no procedure. A verifier row that asserted "extension
+  happens at most once per five minutes" at S5 would be asserting something no object
+  in the database enforces.
+
+The clamp bounds the *result* of any number of racing extensions — `expires_at` can
+never pass `absolute_expires_at` — but bounding the result is not enforcing the
+throttle, and the two must not be conflated.
 
 One consequence to state plainly rather than bury: the absolute cap is a **maximum**,
 not an equality. A bug that writes `created_at + 1 day` produces a short-lived session
@@ -159,7 +227,10 @@ GRANT SELECT (id, user_id, token_hash, expires_at, absolute_expires_at,
               revoked_at, last_seen_at, created_at) ON app.sessions TO app_auth;
 GRANT INSERT (user_id, token_hash, expires_at, absolute_expires_at) ON app.sessions TO app_auth;
 GRANT UPDATE (expires_at, last_seen_at, revoked_at) ON app.sessions TO app_auth;
--- no DELETE grant to any runtime role; no grant of any kind to app_api or app_system
+-- no DELETE grant to any runtime role
+-- no table privilege of any kind to app_api or app_system
+-- app_system receives EXECUTE on app.purge_expired_sessions() instead — see
+-- "Garbage collection"; that is a function privilege, not a table one
 ```
 
 What the column grants do and do not do, stated because it is easy to over-read them:
@@ -168,7 +239,7 @@ What the column grants do and do not do, stated because it is easy to over-read 
   `absolute_expires_at`, or `created_at`, so a session cannot be re-pointed at another
   user or pushed past its absolute deadline.
 - `created_at` is outside the `INSERT` grant as well as the `UPDATE` one. That is what
-  keeps the proposed 90-day cap meaningful: a caller cannot backdate `created_at` to
+  keeps the `D-2` 90-day cap meaningful: a caller cannot backdate `created_at` to
   make an arbitrarily long deadline pass
   `absolute_expires_at <= created_at + INTERVAL '90 days'`. Both timestamps come from
   the same `now()`, and only one of them is the caller's to choose.
@@ -253,6 +324,13 @@ Why it needs elevated context, and why that is not a loophole:
 6. It purges on `absolute_expires_at`, not `expires_at`, so an idle-but-not-yet-expired
    session is never collected. The cost is a bounded amount of dead rows: at most 90
    days of sessions, which is the approved semantics rather than a bug.
+7. **A return value of `0` is a success, not a failure.** The three outcomes are
+   distinct and must be reported as such: the function ran and found nothing eligible
+   (`0`), the function ran and removed `n` rows (`n > 0`), or the function did not
+   complete (an error, no return value). `AG-2` §2.9 item 8 says a `0` count is not a
+   failed job, and job health is read from the `maintenance` queue's execution record —
+   a value the SQL function cannot observe about itself. No scheduler exists in S5;
+   nothing calls this function until Phase 4 enqueues it hourly.
 
 **Scope discipline.** This is the only `SECURITY DEFINER` object in the repository and
 it must stay narrow. It reads no credential, returns a count, touches one table, and
@@ -261,14 +339,66 @@ tenant validator does not transfer to it; equally, this function's existence is 
 precedent for a definer credential read (ADR-004, *Decision*, alternative B2) or any elevated
 helper. A new definer function is a new decision.
 
+## Accepted owner decisions on schema details
+
+`AG-2` approved the architecture from *Decision* through *Garbage collection*. It did
+not decide three schema details, which this ADR previously listed as proposals. The
+owner accepted all three on **2026-11-20**; the durable record is
+`docs/review/phase-3.2-owner-decisions.md` §2.11. They **supplement** `AG-2` and do not
+amend it.
+
+| ID | Decision | Exact object |
+|---|---|---|
+| `D-1` | Accept | `CONSTRAINT sessions_token_hash_shape_check CHECK (token_hash ~ '^[0-9a-f]{64}$')` |
+| `D-2` | Accept | `CONSTRAINT sessions_absolute_expiry_cap_check CHECK (absolute_expires_at <= created_at + INTERVAL '90 days')` |
+| `D-3` | Accept | `sessions_user_id_idx (user_id)`, `sessions_absolute_expires_at_idx (absolute_expires_at)` |
+
+Why each is load-bearing:
+
+- **`D-1`** — nothing else in the schema distinguishes a hash from a raw token. A bug
+  that stored the 43-character base64url token would still authenticate. 64 lowercase
+  hex characters is exactly the encoding of `sha256(32 bytes)`, so that mistake fails at
+  `23514` instead of persisting a working credential. It constrains the
+  **representation**, not the derivation.
+- **`D-2`** — `app_auth` holds the `INSERT` grant, so it chooses the initial
+  `absolute_expires_at`. Without this CHECK the 90-day rule is documentation only, and
+  one statement can mint a decade-long session. The bound is a **maximum, not an
+  equality**: a shorter session still passes, because a short session is a usability bug
+  rather than a security one. **Insert constraint:** `created_at` defaults to the
+  statement's `now()`, so both deadlines must be derived from the same SQL clock —
+  `now() + interval '30 days'` and `now() + interval '90 days'` — never from a
+  JavaScript `Date.now()`. A client-computed deadline is later than
+  `created_at + 90 days` by the request's latency and fails `23514`.
+- **`D-3`** — `token_hash` is already `UNIQUE` and carries the request path. The two
+  added indexes support revoke-all-by-user and the GC scan; without them both degrade to
+  a sequential scan as rows accumulate. An index supports a path; it does not guarantee
+  a plan. No further index is approved.
+
+### Provenance of every element in this design
+
+Stated so a later reader can tell an owner decision from an engineering choice, and can
+see what remains undecided:
+
+| Element | Provenance |
+|---|---|
+| PostgreSQL over Redis/JWT, `app.sessions`, `app_auth`-only access | `AG-2` (§2.10), 2026-11-18 |
+| Columns, 30-day sliding window, 90-day absolute, 5-minute throttle, `revoked_at` | `AG-2` (§2.4, §2.6, §2.9), 2026-11-18 |
+| Expiry-order CHECK (`absolute_expires_at >= expires_at AND expires_at > created_at`) | `AG-2` §2.4, corrected here to three clauses |
+| `token_hash` shape CHECK, 90-day cap CHECK, two indexes | `D-1`–`D-3`, 2026-11-20 |
+| `sessions_auth_all FOR ALL TO app_auth USING (true) WITH CHECK (true)` + owner policy | `AG-2` §2.4/§2.7, accepted |
+| `app.purge_expired_sessions()` definer shape, `EXECUTE` to `app_system` | `AG-2` §2.9, accepted |
+| Column-grant list, function body, policy names, index names | engineering detail, constrained by the rows above |
+| Throttle enforcement mechanism under concurrency | **undecided**, owned by S7 |
+| `sessions.user_id` foreign-key policy under account deletion | **undecided**, blocked by `OPEN-04` |
+
 ## Security properties
 
 | Property | Enforced by | Evidence required |
 |---|---|---|
 | Validity requires not-revoked, not-sliding-expired, not-absolutely-expired | application | three independent tests, each failing for its own reason |
-| Only a hash is stored | application + one CHECK | the proposed `token_hash` shape CHECK rejects a 43-char base64url token at `23514` |
+| Only a hash is stored | application + `D-1` CHECK | the `token_hash` shape CHECK rejects a 43-char base64url token at `23514` |
 | `absolute_expires_at` cannot be extended | PostgreSQL | no `UPDATE` grant covers it; `42501` |
-| `absolute_expires_at` is at most 90 days from creation | PostgreSQL **if the proposed CHECK is accepted** | an insert at `created_at + 91 days` fails `23514`; without the CHECK, nothing does |
+| `absolute_expires_at` is at most 90 days from creation | PostgreSQL — `D-2` | an insert at `created_at + 91 days` fails `23514` |
 | `expires_at` cannot exceed the absolute deadline | PostgreSQL | the expiry-order CHECK rejects the row at `23514` |
 | The 30-day sliding window is exactly 30 days | **nobody** | application invariant; no constraint can express it |
 | `token_hash` and `user_id` cannot be rewritten | PostgreSQL | no `UPDATE` grant covers them; `42501` |
@@ -305,17 +435,48 @@ helper. A new definer function is a new decision.
 9. **Sessions do not survive nothing** — they survive a PostgreSQL restart, a Redis
    restart would not, and backup/restore already covers this table like any other.
 10. **`app_auth` chooses the absolute deadline within the cap.** The database enforces
-    "at most 90 days" only if the proposed CHECK is accepted; it can never enforce "the
-    application intended 90 days". A session created 89 days long is legal at the
-    database layer. Likewise, a compromised `app_auth` inserts a session for any
-    `user_id` and may shorten a session it should not touch — bounded only by the
-    statement's own columns, not by intent.
-11. **The hash-shape CHECK and the 90-day CHECK are implementation proposals, not owner
-    decisions.** See *Implementation details still requiring review*.
+    "at most 90 days" (`D-2`); it can never enforce "the application intended 90 days".
+    A session created 89 days long is legal at the database layer. Likewise, a
+    compromised `app_auth` inserts a session for any `user_id` and may shorten a session
+    it should not touch — bounded only by the statement's own columns, not by intent.
+11. **The throttle is not enforced by any database object.** Concurrent extensions are
+    bounded in result by the clamp but not prevented; enforcement is S7's, as stated
+    under *Concurrency*.
+
+## Availability and failure behaviour
+
+The session store is a hard dependency of every authenticated request. There is no
+degraded mode, and this ADR does not pretend otherwise:
+
+| Situation | Required | Forbidden |
+|---|---|---|
+| Store unreachable during authentication | `503`, after a bounded timeout and at most one retry | treating the request as anonymous, or trusting a client-supplied identity |
+| Store unreachable on logout | `503` | `204`; a claimed revocation that did not happen is the only failure that stays silent |
+| Store fails after validation succeeded | the request proceeds on the already-validated subject | re-validating mid-request |
+| Store unavailable during the GC sweep | the sweep fails and is retried; validity is unaffected | a "success" with no count, or any change to session lifetime |
+
+The reason is the same one `ADR-002:54` states for Redis eviction: an infrastructure
+failure must never change what a farmer was told, and it must never silently change
+who a request is. Fail closed, and say `503` rather than 200.
+
+## `OPEN-04` — account deletion, and the foreign key
+
+`sessions.user_id` references `app.users (id)`, so deleting a `users` row is governed
+by the FK's `ON DELETE` action, not by this ADR. This ADR proposes `NO ACTION`, which
+means a user row with any session row cannot be deleted until those sessions are
+removed or the policy changes — the delete fails with `23503` rather than silently
+cascading a deletion across tables.
+
+That is a statement about the constraint's mechanics, **not a decision**. Which
+lifecycle wins — anonymise the user and keep provenance, delete with cascade, or
+something else — is `OPEN-04` (`P1`, product/legal, `BLOCKED_EXTERNAL_INPUT`). This ADR
+does not resolve it, does not choose a `ON DELETE` action on the owner's behalf, and
+must be revisited once `OPEN-04` is decided. `OPEN-04`'s disposition in
+`docs/data-model/open-decisions.md` is unchanged by this document.
 
 ## Alternatives considered
 
-Covered in §5 and summarised here for completeness: Redis (reverses D5, adds an
+Covered earlier in this document and summarised here for completeness: Redis (reverses D5, adds an
 authority), stateless JWT (cannot revoke), JWT with refresh rotation (rejected by D5),
 and a tenant-GUC-keyed session table (unusable before identity exists). Each was
 evaluated against the same criterion: which component should hold the authority for
@@ -354,6 +515,10 @@ closed.
 ## Related decisions and open decisions
 
 - **`AG-2`** — approved 2026-11-18; this ADR is its formal record.
+- **`D-1`–`D-3`** — schema decisions accepted 2026-11-20; they supplement `AG-2`.
+- **`OPEN-04`** — account deletion and the `sessions.user_id` foreign key, still
+  **unresolved**; mechanics documented under *`OPEN-04` — account deletion, and the
+  foreign key*, decision untouched.
 - **ADR-002 D5** — preserved, not amended.
 - **ADR-004** — the `app_auth` role that reaches this table, and the credential
   boundary that bounds it.
@@ -363,25 +528,3 @@ closed.
 - **`IG-8`** (cookie name and `__Host-` prefix), **`IG-9`** (CSRF), **`IG-6`**
   (password hashing parameters) — unanswered, and they block S8/S7 rather than this
   store.
-
-## Implementation details still requiring review
-
-The owner approved the architecture from *Decision* through *Garbage collection*.
-Three schema details are proposals that the owner decision does not cover, and they
-must be **accepted or removed** at S5 review rather than shipped by default:
-
-| Proposal | Status | Argument |
-|---|---|---|
-| `CHECK (token_hash ~ '^[0-9a-f]{64}$')` | **not approved** | nothing in the schema currently distinguishes a hash from a raw token; a bug that stored the base64url token would still authenticate. 64 lowercase hex characters is exactly the encoding of `sha256(32 bytes)`, so the mistake fails at `23514` instead of persisting a credential. It constrains the encoding, not the algorithm |
-| `CHECK (absolute_expires_at <= created_at + INTERVAL '90 days')` | **not approved** | `app_auth` holds the `INSERT` grant, so it chooses the initial `absolute_expires_at`; without this the 90-day rule is documentation only, and a single statement can mint a session valid for a decade. It is the only lifetime rule that bounds the credential itself rather than one write, and it is a *maximum* — a shorter value passes, because a short session is a usability bug, not a security one. It encodes a number `AG-2` already approved; it does not change `AG-2`, and no other 90-day source exists. **Compatibility constraint on the insert:** `created_at` defaults to the statement's `now()`, so the application must derive both timestamps from the same SQL clock — `now() + interval '30 days'` and `now() + interval '90 days'` — not from a JavaScript `Date.now()`. A client-computed deadline is later than `created_at + 90 days` by the request's latency and would fail with `23514` |
-| Indexes `sessions_user_id_idx` and `sessions_absolute_expires_at_idx` | **not approved** | `token_hash` is already `UNIQUE` and carries the request path. The other two support revoke-all-by-user and the GC scan; without them both degrade to a sequential scan as rows accumulate |
-
-Everything else in this ADR — the table, its columns, the CHECK on expiry order, the
-grants, the policies, and the purge function — is the approved `AG-2` design as
-recorded on 2026-11-18.
-
-**If the owner declines the 90-day CHECK,** the result is not a broken design, it is a
-disclosed gap: the absolute deadline remains application-chosen and unbounded at the
-database layer, and the session table can hold a row whose `absolute_expires_at` is
-arbitrary. That sentence must then appear in *Explicit limitations* instead of this
-table.

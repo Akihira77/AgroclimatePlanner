@@ -8,10 +8,10 @@
 | Decisions requested | 4 — `AG-1`, `AG-2`, `IG-5`, `IG-11` |
 | Owner decisions made so far | **4 of 4**, plus `IG-5-A1` (amendment) and `IG-12` (new gate) |
 | Decision approval status | **Complete** — every gate this file asked for is answered |
-| Implementation status | **`S1` and `S2` implemented, `S3` onward not started** — contracts at `c44cf5b`/`0bb9792`, plumbing at `ad6235b`, remediation at `6d36741`, details and path hardening at `c762171`, shared path grammar at `38486fd`, parser and numeric-segment correctness at `75607d8` |
+| Implementation status | **Snapshot at 2026-11-18; live status is `docs/IMPLEMENTATION_STATUS.md`** — `S1` and `S2` implemented at that date, `S3` onward not started then (now `S3` and `S4` are implemented) — contracts at `c44cf5b`/`0bb9792`, plumbing at `ad6235b`, remediation at `6d36741`, details and path hardening at `c762171`, shared path grammar at `38486fd`, parser and numeric-segment correctness at `75607d8` |
 | Verification status | **Green at `75607d8`, reviewed** — build, typecheck, test, lint, prettier, `git diff --check` all exit `0`; api 76, contracts 187, database 9, 0 failing |
 | Remaining blockers before `S3` | **None documentation-wise** — `ADR-004` was accepted on 2026-11-18 (see the ADR status row). `S3` may begin subject to its own implementation prerequisites (§16 of the plan: test-file authorization, a cluster-admin bootstrap path, an isolated compose project). `ADR-005` gates `S5`, not `S3`. The `IG` gates block **S7** (`IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10`) and **S8** (`IG-8`, `IG-9`), not the database boundary |
-| ADR status | `ADR-004` **Accepted** 2026-11-18 (approver: Akihira77) — formalises `AG-1`, not implemented, `S3`/`S4`/`S6` pending. `ADR-005` **written, `Proposed`, not accepted** — formalises `AG-2` and gates `S5`. Neither adds a decision of its own, and `AG-1`/`AG-2` are **not** re-opened or asked for again |
+| ADR status | `ADR-004` **Accepted** 2026-11-18 (approver: Akihira77) — formalises `AG-1`. `ADR-005` **written, `Proposed`, not accepted** — formalises `AG-2` and gates `S5`; the three schema details it needed are decided as `D-1`–`D-3` in §2.11 (2026-11-20). Neither ADR invents a decision beyond its approval, and `AG-1`/`AG-2` are **not** re-opened or asked for again |
 | `OPEN-nn` dispositions changed | **No** — `OPEN-01` and `OPEN-13` remain unresolved |
 
 This record exists so the owner can decide without reading 1,100 lines of review. It
@@ -532,6 +532,64 @@ Approved by: Repository owner   Date: 2026-11-18
 
 Exactly one box is marked. Two marked boxes would leave the decision unmade; none
 marked would have meant no decision, not a rejection.
+
+## 2.11 Owner decisions on the ADR-005 schema proposals — D-1 to D-3
+
+`AG-2` approved the architecture; it did not decide three schema details that the
+implementation needs. The ADR review recorded them as *not approved* rather than
+shipping them by default. The owner has now decided all three. They **supplement**
+`AG-2`; they do not amend or supersede it.
+
+| Field | Value |
+|---|---|
+| Decision date | 2026-11-20 |
+| Approved by | Repository owner |
+| Recorded in | `docs/adr/ADR-005-session-storage.md` §"Accepted owner decisions on schema details" |
+| Relationship to `AG-2` | additive; `AG-2` §2.4 and §2.10 are unchanged |
+
+### `D-1` — `token_hash` shape CHECK: **ACCEPT**
+
+```sql
+CONSTRAINT sessions_token_hash_shape_check
+  CHECK (token_hash ~ '^[0-9a-f]{64}$')
+```
+
+`token_hash` must be exactly 64 lowercase hexadecimal characters. The database rejects
+any other representation, so a bug that stored the 43-character base64url token fails
+with `23514` instead of persisting a working credential. The CHECK validates the
+**representation**; it does not prove the value was derived by SHA-256, and derivation
+remains the application's responsibility. It does not touch the password path
+(`IG-6`).
+
+### `D-2` — Absolute expiration cap CHECK: **ACCEPT**
+
+```sql
+CONSTRAINT sessions_absolute_expiry_cap_check
+  CHECK (absolute_expires_at <= created_at + INTERVAL '90 days')
+```
+
+The initial `absolute_expires_at` cannot exceed 90 days after `created_at`, and
+`created_at` is outside both the `INSERT` and the `UPDATE` grant, so the caller cannot
+move the anchor to fit a longer deadline. A 91-day initial value fails with `23514`.
+This is a **maximum, not an equality**: the application still chooses a value inside the
+bound, and a shorter session is legal. The consequence is stated in
+`ADR-005`: the insert must derive both deadlines from SQL `now()`, not from a
+JavaScript clock.
+
+### `D-3` — Two additional indexes: **ACCEPT**
+
+```sql
+CREATE INDEX sessions_user_id_idx             ON app.sessions (user_id);
+CREATE INDEX sessions_absolute_expires_at_idx ON app.sessions (absolute_expires_at);
+```
+
+| Index | Intended query path |
+|---|---|
+| `sessions_user_id_idx` | user-scoped session lookup and revoke-all-sessions-for-a-user |
+| `sessions_absolute_expires_at_idx` | garbage-collection selection by `absolute_expires_at` |
+
+An index supports a path; it does not guarantee a plan. No further index is approved,
+and the request path still uses the `token_hash` unique constraint.
 
 ---
 
