@@ -34,7 +34,7 @@ different cost, and no document chooses:
 | Option | Consequence |
 |---|---|
 | soft delete + partial unique on email | re-registration with the same address becomes possible; every `SELECT` on `users` grows a filter |
-| hard delete + cascade | destroys the provenance chain of every artifact the account produced; a stored `inputSnapshotHash` becomes unexplainable |
+| hard delete through an application-managed workflow — dependent rows removed explicitly, never by `ON DELETE CASCADE` (`D16`) | destroys the provenance chain of every artifact the account produced; a stored `inputSnapshotHash` becomes unexplainable |
 | anonymise (strip email/hash, keep id) | preserves provenance; the account cannot log in; the email is freed; needs a partial unique index anyway |
 
 The last is the only option compatible with this model's own reproducibility

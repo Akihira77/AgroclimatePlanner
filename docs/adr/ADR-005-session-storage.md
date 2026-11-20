@@ -395,7 +395,7 @@ see what remains undecided:
 | `app.purge_expired_sessions()` definer shape, `EXECUTE` to `app_system` | `AG-2` §2.9, accepted |
 | Column-grant list, function body, policy names, index names | engineering detail, constrained by the rows above |
 | Throttle enforcement mechanism under concurrency | **undecided**, owned by S7 |
-| `sessions.user_id` FK action under account deletion | `NO ACTION` is PostgreSQL's default for the declared FK, not an owner decision; the lifecycle policy remains **undecided**, blocked by `OPEN-04` |
+| `sessions.user_id` FK action under account deletion | the proposed S5 FK names no action, so PostgreSQL's default `NO ACTION` would apply if that DDL is applied; it is not an owner decision, and the lifecycle policy remains **undecided**, blocked by `OPEN-04` |
 
 ## Security properties
 
@@ -465,35 +465,55 @@ The reason is the same one `ADR-002:54` states for Redis eviction: an infrastruc
 failure must never change what a farmer was told, and it must never silently change
 who a request is. Fail closed, and say `503` rather than 200.
 
-## `OPEN-04` — account deletion, and the foreign key
+## `OPEN-04` — account deletion, and the proposed foreign key
 
-`sessions.user_id` is declared `uuid NOT NULL REFERENCES app.users (id)`, with no
-`ON DELETE` clause. PostgreSQL fills that omission with its default action, `NO ACTION`.
-The accurate description of the current schema is therefore mechanical, not normative:
-deleting a `users` row that still has session rows fails with `23503`
-(`foreign_key_violation`) instead of silently deleting those sessions too.
+`app.sessions` does not exist yet: S5 has not started, and the table, its constraints, and
+this foreign key are proposed implementation details. The proposal declares:
+
+```sql
+-- Proposed by the S5 migration. NOT APPLIED.
+sessions.user_id uuid NOT NULL REFERENCES app.users (id)
+```
+
+No `ON DELETE` clause appears in that declaration. **If** the proposal is applied as
+written, PostgreSQL fills the omission with its default referential action, `NO ACTION`.
+That is a statement about PostgreSQL, not about this repository's policy, and it is
+conditional on the migration existing: the table is not a current schema object, so
+nothing here describes present database state.
+
+The behaviour would then be mechanical: deleting a `users` row while session rows still
+reference it fails with `23503` (`foreign_key_violation`), unless those session rows are
+removed first. The database refuses the deletion; it does not quietly remove the
+dependent rows.
 
 Three things this section is **not** saying:
 
 1. **It is not a decision to adopt `NO ACTION` as the account-deletion policy.** The
-   default is what the constraint does when nobody has chosen an action; describing it
-   is not choosing it. The FK exists to protect referential integrity between two
-   tables, and its default action is simply the state of the DDL until life-cycle
-   policy says otherwise.
-2. **It does not resolve `OPEN-04`.** Which lifecycle wins — anonymise the user and keep
-   provenance, hard-delete with a cascade, soft-delete, or something else — is
-   undecided. `OPEN-04` stays `P1`, product/legal, `BLOCKED_EXTERNAL_INPUT`, and its
+   default is what the constraint does when nobody has chosen an action; describing it is
+   not choosing it, and the condition "if this DDL is applied" is doing real work in that
+   sentence. The FK would exist for referential integrity, and its default action is a
+   property of the declaration, not an owner decision.
+2. **It does not resolve `OPEN-04`.** Which lifecycle wins is undecided: soft deletion,
+   anonymisation, and hard deletion all remain open, as does any other option the owner
+   selects. `OPEN-04` stays `P1`, product/legal, `BLOCKED_EXTERNAL_INPUT`, and its
    disposition in `docs/data-model/open-decisions.md` is unchanged by this ADR.
-3. **It does not permit `ON DELETE CASCADE`.** The project-wide decision `D16` forbids a
+3. **It does not permit `ON DELETE CASCADE`.** Project decision `D16` forbids a database
    cascade anywhere (`relationships.md` §2, `lifecycle-and-retention.md`), because a
-   cascade is a data-loss path that fires on a mistake. Whatever `OPEN-04` eventually
-   selects must respect that constraint, and this ADR neither anticipates nor proposes
-   an exception.
+   cascade is a data-loss path that fires on a mistake.
+
+**Hard deletion, if it is ever selected, is not a database cascade.** `D16` does not
+forbid deleting a user; it forbids delegating that deletion to the foreign key. A
+hard-delete strategy would therefore be an application-managed workflow that removes or
+anonymises the dependent rows — sessions first, then any other referencing row — in an
+explicit order inside a transaction, with the deletion path owning the order. That
+workflow is not approved, not designed here, and not implied by the proposed FK: it is one
+of the options `OPEN-04` has not chosen. Nothing in this ADR may be cited later as
+approval of it.
 
 `NO ACTION` and `RESTRICT` differ only in when the check runs — `RESTRICT` immediately,
 `NO ACTION` at the end of the statement unless the constraint is deferred — and neither
-is a statement about product policy. When `OPEN-04` is decided, the deletion path and
-this FK are revisited together in a later migration; nothing about that decision is
+is a statement about product policy. When `OPEN-04` is decided, the deletion path and this
+proposed FK are revisited together in a later migration; nothing about that decision is
 settled here.
 
 ## Alternatives considered
@@ -538,9 +558,9 @@ closed.
 
 - **`AG-2`** — approved 2026-11-18; this ADR is its formal record.
 - **`D-1`–`D-3`** — schema decisions accepted 2026-11-20; they supplement `AG-2`.
-- **`OPEN-04`** — account deletion and the `sessions.user_id` foreign key, still
-  **unresolved**; mechanics documented under *`OPEN-04` — account deletion, and the
-  foreign key*, decision untouched.
+- **`OPEN-04`** — account deletion and the proposed `sessions.user_id` foreign key,
+  still **unresolved**; mechanics documented under *`OPEN-04` — account deletion, and
+  the proposed foreign key*, decision untouched.
 - **ADR-002 D5** — preserved, not amended.
 - **ADR-004** — the `app_auth` role that reaches this table, and the credential
   boundary that bounds it.
