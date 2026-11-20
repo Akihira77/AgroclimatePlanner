@@ -197,6 +197,7 @@ Rules:
 ## 6. Endpoint surface (v1)
 
 ```
+POST   /v1/auth/register
 POST   /v1/auth/login | /logout | GET /v1/auth/me
 
 GET    /v1/farms                       POST /v1/farms
@@ -247,9 +248,46 @@ GET    /health  |  /health/ready
 - Authorization: ownership checked at the controller boundary, mirrored by Postgres RLS. A `404` is returned for another user's resource — never `403`, which leaks existence.
 - Roles: `owner` (everything on own data), `admin` (catalog and profile publishing, read-only on other users' farms). No per-field granularity in v1.
 
+### 8.1 Registration and login (S7)
+
+`POST /v1/auth/register` and `POST /v1/auth/login` are the only endpoints that run before
+a tenant context exists. Neither opens a tenant transaction and neither sets
+`app.user_id`; both use the dedicated `app_auth` credential.
+
+Registration:
+
+- Body is `{ email, password }` and nothing else; unknown keys are a `400`.
+- Email is trimmed and lowercased by one shared function, used by both endpoints. The
+  unique constraint stays case-sensitive, so normalisation is an application invariant.
+- Password: at least 12 characters, at most 1024 UTF-8 bytes, printable ASCII only
+  (U+0020–U+007E), no composition rules, no trimming, no Unicode normalisation.
+- `201` with the safe user representation `{ id, email, role, locale, timezone }`.
+  `createdAt` is **not** returned: the auth credential has no `SELECT` privilege on
+  `created_at`.
+- A duplicate address is `409` with code `CONFLICT` and no `details`. That discloses
+  existence; the disclosure is accepted and recorded in
+  `docs/review/phase-3.2-s7-owner-decisions.md`.
+- No session, no token, no `Set-Cookie`. Session issuance belongs to login only.
+
+Login:
+
+- Body is `{ email, password }`; the same normalisation function runs first.
+- Rate limiting runs **before** the database lookup and before hashing.
+- Every failure is identical: `401` with code `UNAUTHENTICATED`, no `details`, no field
+  that distinguishes an unknown address from a wrong password. Unknown addresses are
+  verified against a fixed dummy hash so the cost does not differ.
+- Success returns the same safe representation. The session token exists only in the
+  `Set-Cookie` header that S8 defines; it is never in the body.
+
+Passwords are hashed with Argon2id (`IG-6`); parameters are provisional until the
+deployment-host benchmark is recorded. Email verification is deferred (`IG-10`), so an
+address is not proven to belong to the registrant.
+
 ## 9. Rate limiting
 
 - Public/auth endpoints: 30 req/min/IP.
+- The v1 limiter is process-local: quotas do not aggregate across replicas, and
+  distributed credential stuffing is an accepted gap (`IG-7`).
 - Read endpoints: 300 req/min/user.
 - `POST /agronomy/evaluate` and `POST /ai/briefing`: 20/hour/user, because both are compute-costly and neither is needed at dashboard speed.
 - Responses include `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`.

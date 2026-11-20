@@ -69,7 +69,7 @@ part of it.
 | ID | Sev | Category | Applies | Blocking | What is unresolved | Blocked | Continues independently |
 |---|---|---|---|---|---|---|---|
 | `OPEN-09` | P1 | catalog vocabulary | after Phase 3 (vocabulary only) | **none** — `D26` omits the DDL | whether the planting status vocabulary spells `active` | the `plantings.status` default and `plantings_active_idx`, both **deliberately not created** in Phase 3 | the `plantings` table without a default, `harvests`, every other table and index |
-| `OPEN-01` | P1 | authentication | after Phase 3 | **hard** | how a credential is read before a tenant context exists | login, session issuance, and therefore every authenticated request | the DDL, the catalog, the weather plane, all RLS policies and grants |
+| `OPEN-01` | P1 | authentication | after Phase 3 | **hard** for the slice: the mechanism (`ADR-004`, S3/S4/S6) is decided and shipped, the login endpoint that reads a credential through it is not | login, session issuance, and therefore every authenticated request | the DDL, the catalog, the weather plane, all RLS policies and grants |
 | `OPEN-13` | P1 | authentication | after Phase 3 | **none** — resolved 2026-11-20 | nothing: PostgreSQL `app.sessions` was selected (`ADR-005`) and shipped in S5 | nothing on the storage question; the request path that uses the table stays `OPEN-01` | everything — the table exists, is granted, and is verified on canonical |
 | `OPEN-17` | P1 | field snapshot | after Phase 3 | **hard**, for point-shaped fields only | what `areaHa` means for a `POINT`-shaped field | field snapshot creation for point-shaped fields, and every artifact derived from one | the DDL (a `POINT` row is still storable); `POLYGON`/`MULTIPOLYGON` fields end to end |
 | `OPEN-21` | P1 | field snapshot | after Phase 3 | **hard** | the `irrigationAvailable` boolean mapping and three field vocabularies | field → snapshot construction | the DDL — the columns stay unconstrained `text`; every non-snapshot path |
@@ -129,16 +129,18 @@ The read that happens before a tenant context exists. `app_api` has no grant on
 `withTenant`, which requires knowing the user. "Authenticate, then open a scope"
 is not buildable from the current schema.
 
-Options and their costs are in `ownership-and-rls.md` §5 (dedicated `auth` role ·
-`SECURITY DEFINER` function · column grant + second GUC). The first is
-recommended, none is chosen.
+**The mechanism is no longer open.** `AG-1` selected the dedicated `app_auth` role on
+2026-11-18 (`ADR-004`), and S3/S4/S6 built and verified it: column grants on
+`app.users`, two policies, `db:verify` 499 assertions, the `auth-boundary` suite at 49
+real-role cases. What remains open is the **request path** — no endpoint reads a
+credential through that boundary yet — which is S7's, and S7's decisions are recorded in
+`docs/review/phase-3.2-s7-owner-decisions.md` without being implemented.
 
 **Blocks:** the authentication slice — login, session issuance, and therefore
 every authenticated request. It does **not** block table creation, the catalog,
 the weather plane, or any RLS policy.
-**Would be settled by:** a decision
-on whether to add a fourth role, which is a bootstrap-script change requiring
-review of its own.
+**Would be settled by:** a login endpoint that reads a credential through `app_auth`,
+plus the verification that proves it.
 
 ### 1.3 `OPEN-17` — `area_ha` for a `POINT` field — **P1**
 
@@ -377,7 +379,7 @@ and "deferred" were doing too much work:
 | ID | Disposition | Assigned to | Why Phase 3 does not depend on it |
 |---|---|---|---|
 | `OPEN-09` | **DEFERRED** | the first `plantings` writer | the DDL half is settled by omission (`D26`): no default, no partial index |
-| `OPEN-01` | **BLOCKED_EXTERNAL_INPUT** | authentication slice; owner approval of a fourth role or a `SECURITY DEFINER` function | `app_api` keeps no grant on `app.users`; Phase 3 adds no auth object |
+| `OPEN-01` | **BLOCKED_EXTERNAL_INPUT** | authentication slice; owner approval of a fourth role or a `SECURITY DEFINER` function | the boundary exists and is verified; no endpoint reads a credential through it, so no authentication path exists |
 | `OPEN-13` | **RESOLVED** | — | not applicable now: `ADR-005` accepted, S5 applied canonically, and the S6 `auth-boundary` suite green (49 cases) |
 | `OPEN-17` | **BLOCKED_EXTERNAL_INPUT** | product decision, then the snapshot path | a `POINT` row is storable; only its snapshot is impossible |
 | `OPEN-18` | **DEFERRED** | ingestion; the rule is derivable from each grid's published resolution | `cell_key` is `text`; no constraint depends on its content |

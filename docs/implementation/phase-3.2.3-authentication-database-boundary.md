@@ -1384,7 +1384,7 @@ of them into "done" or "blocked".
 | `IG-5`, `IG-5-A1` | decided, implemented | S1/S2 shipped against them |
 | `IG-11` | decided | `node:test` for `apps/api`; already in use |
 | `IG-12` | decided | Zod-only validation, bound per parameter; in use |
-| `IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10` | **3 — open** | block **S7**, not S3–S6 |
+| `IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10` | **answered 2026-11-20** — `docs/review/phase-3.2-s7-owner-decisions.md`; two dependency approvals and the benchmark remain before implementation | S7 only, not S3–S6 |
 | `IG-8`, `IG-9` | **3 — open** | block **S8**, not S3–S6 |
 | S3 | **4 — implemented** | gate: accepted `ADR-004`; `db:verify` 387 assertions at the time |
 | S4 | **4 — implemented and pushed** | gate: S3 (the role must exist before a policy names it); `db:verify` 419 assertions after the corrective pass |
@@ -1425,13 +1425,23 @@ stops one track's paperwork from gating the other's code.
 | `IG-5` (+`IG-5-A1`), `IG-11`, `IG-12` | approved / recorded; S2 implemented against them |
 | `ADR-002` D5 (server-side sessions) | accepted; `AG-2` A preserves it |
 
-### Still blocking S7 — register and login
+### S7 gates — answered 2026-11-20, implementation not started
 
 `IG-1` (email normalisation), `IG-2` (duplicate registration: `409` vs `202`),
 `IG-3` (auto-login after register), `IG-4` (password policy), `IG-6` (Argon2id
-parameters, measured on the host), `IG-7` (per-account brute-force control),
-`IG-10` (email verification). None is answered. S7 may not start with any of these
-open, and none may be "settled by the first implementer".
+parameters, measured on the host), `IG-7` (per-account brute-force control), and
+`IG-10` (email verification) are **recorded** in
+`docs/review/phase-3.2-s7-owner-decisions.md`: option A for each, with `IG-6` and
+`IG-7` conditional.
+
+Three things still gate the implementation, and none of them is a design question:
+
+1. Argon2id **library** selection and dependency approval.
+2. Rate-limiter **dependency** approval.
+3. The deployment-host **benchmark**, without which the parameters stay provisional.
+
+`IG-10`'s answer is to defer, so email ownership remains unproven and is recorded as a
+blocker for public deployment rather than a detail for later.
 
 ### Still blocking S8 — session guard, `/me`, logout
 
