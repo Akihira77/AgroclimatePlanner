@@ -503,9 +503,9 @@ Three things this section is **not** saying:
 
 **Hard deletion, if it is ever selected, is not a database cascade.** `D16` does not
 forbid deleting a user; it forbids delegating that deletion to the foreign key. A
-hard-delete strategy would therefore be an application-managed workflow that removes or
-anonymises the dependent rows — sessions first, then any other referencing row — in an
-explicit order inside a transaction, with the deletion path owning the order. That
+hard-delete strategy would therefore be an application-managed workflow that explicitly
+removes the dependent rows — sessions first, then any other referencing row — in a
+deliberate order inside a transaction, with the deletion path owning the order. That
 workflow is not approved, not designed here, and not implied by the proposed FK: it is one
 of the options `OPEN-04` has not chosen. Nothing in this ADR may be cited later as
 approval of it.
