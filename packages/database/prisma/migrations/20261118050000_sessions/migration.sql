@@ -17,13 +17,24 @@
 -- five-minute extension throttle — that throttle is an application invariant
 -- owned by S7, and nothing in the database enforces it.
 
--- The eight columns are the accepted set. `created_at` and `absolute_expires_at`
--- are deliberately outside the `INSERT` and `UPDATE` grants below, which is what
--- keeps the 90-day cap (`D-2`) meaningful: both deadlines come from the same
--- `now()`, and no credential can move either one afterwards.
+-- The eight columns are the accepted set, and the three grants below are split
+-- deliberately rather than uniformly.
 --
--- `expires_at >= absolute_expires_at` is allowed by the ordering CHECK because a
--- clamped extension makes the two coincide; it is not an equality.
+-- `created_at` is outside both the `INSERT` and the `UPDATE` grant, so the
+-- database owns it and no credential can backdate a session. Both deadlines must
+-- therefore come from the same `now()`, which is `transaction_timestamp()`: a
+-- deadline computed in JavaScript is already later than `created_at + 90 days`
+-- by the time the transaction began, and fails `D-2`.
+--
+-- `absolute_expires_at` is `INSERT`-writable but not `UPDATE`-writable. A new
+-- session states its own cap, which `sessions_absolute_expiry_cap_check` (`D-2`)
+-- bounds at 90 days from `created_at`; after that insert neither `app_auth` nor
+-- anything else can extend or shorten it. `expires_at` and `last_seen_at` are
+-- the sliding window and stay writable; `revoked_at` is logout.
+--
+-- The ordering CHECK is `absolute_expires_at >= expires_at`, so equality is
+-- allowed: a clamped extension makes the sliding deadline reach the cap and the
+-- two coincide. It is not required to.
 CREATE TABLE app.sessions (
   id                  uuid        PRIMARY KEY DEFAULT uuidv7(),
   user_id             uuid        NOT NULL REFERENCES app.users (id),

@@ -635,12 +635,26 @@ statement, not against this table. The grant is authoritative; the ORM is not.
 
 ## 7. S5 — migration `sessions`
 
-Status: **implemented and verified in an isolated project (2026-11-20)**. The migration
-exists at the path below, and `db:verify` reports 493 assertions with 0 `FAIL` and
-0 `SKIP` against project `agroclimate-db-s5-check` (port 5545); `test:schema` is 13/13 and
-`test:rls` 39/39 in the same project. Nothing was applied to the canonical database, so
-`OPEN-13` stays unresolved, and everything from §7.5 onward that describes the request
-path is still S7's: S5 ships no endpoint, no token generation, and no throttle.
+Status: **implemented (commit `8fb2270`), applied to the isolated verification project and
+to the canonical development database on 2026-11-20.** Canonical is `127.0.0.1:5442`,
+database `agroclimate`, schema `app`: `prisma migrate status` reports 5/5 applied, and on
+that database `db:verify` reports 493 assertions with 0 `FAIL` and 0 `SKIP`,
+`db:verify:probes` 12/12, `test:schema` 13/13 and `test:rls` 39/39. The isolated project
+`agroclimate-db-s5-check` (port 5545) produced the same numbers before the canonical run.
+
+Deployment had a precondition the plan did not anticipate: canonical was still at
+`domain_tables`. It had three of four roles — `app_auth` did not exist — so
+`db:bootstrap` ran first, and `db:migrate` then applied `auth_boundary` **and** `sessions`
+in one pass. Both are committed and reviewed; neither was altered to make this work. A
+custom-format backup was taken and validated before either step.
+
+`OPEN-13` stays **unresolved** despite the canonical deployment: `ADR-005`'s Definition of
+Done is accepted ADR **and** applied migration **and** a green session suite, and the third
+conjunct is `test/rls/auth-boundary.test.mjs`, which is S6's deliverable and does not exist
+yet. The storage question itself is settled and deployed; the register's own gate is not.
+
+Everything from §7.5 onward that describes the request path is still S7's: S5 ships no
+endpoint, no token generation, and no throttle.
 
 One consequence worth stating: `db:verify` now asserts session storage as **required**
 state, so a database that stops at S4 fails it by design rather than reporting a skip.
@@ -650,7 +664,7 @@ state, so a database that stops at S4 fails it by design rather than reporting a
 `packages/database/prisma/migrations/20261118050000_sessions/migration.sql`.
 
 ```sql
--- APPLIED in 20261118050000_sessions; verified in an isolated project only.
+-- APPLIED as 20261118050000_sessions in both the isolated project and canonical (5442).
 CREATE TABLE app.sessions (
   id                  uuid        PRIMARY KEY DEFAULT uuidv7(),
   user_id             uuid        NOT NULL REFERENCES app.users (id),
@@ -1335,7 +1349,7 @@ of them into "done" or "blocked".
 | `IG-8`, `IG-9` | **3 — open** | block **S8**, not S3–S6 |
 | S3 | **4 — implemented** | gate: accepted `ADR-004`; `db:verify` 387 assertions at the time |
 | S4 | **4 — implemented and pushed** | gate: S3 (the role must exist before a policy names it); `db:verify` 419 assertions after the corrective pass |
-| S5 | **4 — implemented, not committed** | gate: accepted `ADR-005` **and** S4, both satisfied 2026-11-20; `db:verify` 493 assertions, applied only in isolated project `agroclimate-db-s5-check` |
+| S5 | **4 — implemented, committed, pushed, and applied to canonical** | gate: accepted `ADR-005` **and** S4, both satisfied 2026-11-20; commit `8fb2270`; canonical `127.0.0.1:5442` at 5/5 with `db:verify` 493/0/0 |
 | S6 | **4 — not started** | gate: the stages whose rows it verifies — S3/S4 for the `users` half, plus S5 for the session half |
 | `OPEN-01` | **5 — unresolved** | needs accepted `ADR-004` + migration + `db:verify` |
 | `OPEN-13` | **5 — unresolved** | needs accepted `ADR-005` + migration + session suite |
