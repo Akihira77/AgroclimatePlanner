@@ -334,6 +334,368 @@ describe("composite ownership foreign keys", () => {
   });
 });
 
+/**
+ * Reduce a constraint definition to the planner's meaning: PostgreSQL adds casts,
+ * the `interval` keyword, redundant parentheses and quotes that are formatting,
+ * not policy. Applied to both sides so the comparison is against the normative
+ * definition rather than against PostgreSQL's printer.
+ */
+function normaliseCheck(definition) {
+  return definition
+    .toLowerCase()
+    .replace(/::[a-z_]+(?:\s+(?:with|without)\s+time\s+zone)?/g, "")
+    .replace(/\binterval\b/g, "")
+    .replace(/['"()]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+describe("app.sessions structure", () => {
+  test("the eight columns match the definition in attnum order", async () => {
+    const expected = [
+      { name: "id", type: "uuid", notNull: true, default: "uuidv7()" },
+      { name: "user_id", type: "uuid", notNull: true, default: null },
+      { name: "token_hash", type: "text", notNull: true, default: null },
+      {
+        name: "expires_at",
+        type: "timestamp with time zone",
+        notNull: true,
+        default: null,
+      },
+      {
+        name: "absolute_expires_at",
+        type: "timestamp with time zone",
+        notNull: true,
+        default: null,
+      },
+      {
+        name: "revoked_at",
+        type: "timestamp with time zone",
+        notNull: false,
+        default: null,
+      },
+      {
+        name: "last_seen_at",
+        type: "timestamp with time zone",
+        notNull: true,
+        default: "now()",
+      },
+      {
+        name: "created_at",
+        type: "timestamp with time zone",
+        notNull: true,
+        default: "now()",
+      },
+    ];
+
+    const { rows } = await owner.query(
+      `select a.attname as name,
+              format_type(a.atttypid, a.atttypmod) as type,
+              a.attnotnull as not_null,
+              pg_get_expr(d.adbin, d.adrelid) as default
+         from pg_attribute a
+         join pg_class c on c.oid = a.attrelid
+         join pg_namespace n on n.oid = c.relnamespace
+         left join pg_attrdef d on d.adrelid = a.attrelid and d.adnum = a.attnum
+        where n.nspname = 'app' and c.relname = 'sessions'
+          and a.attnum > 0 and not a.attisdropped
+        order by a.attnum`,
+    );
+    assert.deepEqual(
+      rows.map((row) => ({
+        name: row.name,
+        type: row.type,
+        notNull: row.not_null,
+        default: row.default,
+      })),
+      expected,
+      "app.sessions columns must be exactly the eight approved definitions",
+    );
+  });
+
+  test("the three CHECK constraints are an exact inventory", async () => {
+    const expected = [
+      "CHECK (absolute_expires_at >= expires_at AND expires_at > created_at)",
+      "CHECK (token_hash ~ '^[0-9a-f]{64}$')",
+      "CHECK (absolute_expires_at <= created_at + INTERVAL '90 days')",
+    ]
+      .map(normaliseCheck)
+      .sort();
+
+    const { rows } = await owner.query(
+      `select conname, pg_get_constraintdef(oid) as definition
+         from pg_constraint
+        where conrelid = 'app.sessions'::regclass and contype = 'c'
+        order by conname`,
+    );
+
+    assert.equal(
+      rows.length,
+      3,
+      `app.sessions must carry exactly three CHECK constraints (found ${rows
+        .map((row) => row.conname)
+        .join(", ")})`,
+    );
+    assert.deepEqual(
+      rows.map((row) => normaliseCheck(row.definition)).sort(),
+      expected,
+      "app.sessions CHECK definitions must match the expiry order, hash shape and 90-day cap",
+    );
+  });
+
+  test("no constraint kind exists beyond p, u, c and f", async () => {
+    const { rows } = await owner.query(
+      `select distinct contype
+         from pg_constraint
+        where conrelid = 'app.sessions'::regclass and contype <> 'n'
+        order by contype`,
+    );
+    assert.deepEqual(
+      rows.map((row) => row.contype),
+      ["c", "f", "p", "u"],
+      "app.sessions must not carry an unexpected constraint kind",
+    );
+  });
+
+  test("the unique constraint on token_hash and the primary key on id are present", async () => {
+    const { rows } = await owner.query(
+      `select con.conname as name,
+              con.contype as kind,
+              pg_get_constraintdef(con.oid) as definition,
+              array(
+                select att.attname
+                  from unnest(con.conkey) with ordinality as k(attnum, ord)
+                  join pg_attribute att
+                    on att.attrelid = con.conrelid and att.attnum = k.attnum
+                 order by k.ord
+              )::text[] as columns
+         from pg_constraint con
+        where con.conrelid = 'app.sessions'::regclass and con.contype in ('p', 'u')
+        order by con.conname`,
+    );
+
+    assert.deepEqual(
+      rows.map((row) => ({
+        name: row.name,
+        kind: row.kind,
+        definition: row.definition,
+        columns: row.columns,
+      })),
+      [
+        {
+          name: "sessions_pkey",
+          kind: "p",
+          definition: "PRIMARY KEY (id)",
+          columns: ["id"],
+        },
+        {
+          name: "sessions_token_hash_key",
+          kind: "u",
+          definition: "UNIQUE (token_hash)",
+          columns: ["token_hash"],
+        },
+      ],
+      "app.sessions must carry sessions_pkey (id) and sessions_token_hash_key (token_hash)",
+    );
+  });
+
+  test("the index inventory is exactly the primary key, the unique key and two lookup indexes", async () => {
+    const { rows } = await owner.query(
+      `select idx.relname as name,
+              i.indisunique as unique,
+              array(
+                select att.attname
+                  from unnest(i.indkey) with ordinality as k(attnum, ord)
+                  join pg_attribute att
+                    on att.attrelid = i.indrelid and att.attnum = k.attnum
+                 order by k.ord
+              )::text[] as columns,
+              i.indnkeyatts as key_columns
+         from pg_index i
+         join pg_class idx on idx.oid = i.indexrelid
+         join pg_class c on c.oid = i.indrelid
+         join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'app' and c.relname = 'sessions'
+        order by idx.relname`,
+    );
+
+    assert.deepEqual(
+      rows.map((row) => ({
+        name: row.name,
+        columns: row.columns,
+        unique: row.unique,
+        keyColumns: row.key_columns,
+      })),
+      [
+        {
+          name: "sessions_absolute_expires_at_idx",
+          columns: ["absolute_expires_at"],
+          unique: false,
+          keyColumns: 1,
+        },
+        { name: "sessions_pkey", columns: ["id"], unique: true, keyColumns: 1 },
+        {
+          name: "sessions_token_hash_key",
+          columns: ["token_hash"],
+          unique: true,
+          keyColumns: 1,
+        },
+        { name: "sessions_user_id_idx", columns: ["user_id"], unique: false, keyColumns: 1 },
+      ],
+      "app.sessions must have exactly the four approved single-column indexes",
+    );
+  });
+
+  test("the two policies grant ALL to app_auth and migration_owner and no one else", async () => {
+    const { rows } = await owner.query(
+      `select policyname as name,
+              permissive,
+              roles::text[] as roles,
+              cmd,
+              qual,
+              with_check
+         from pg_policies
+        where schemaname = 'app' and tablename = 'sessions'
+        order by policyname`,
+    );
+
+    assert.deepEqual(
+      rows.map((row) => ({
+        name: row.name,
+        permissive: row.permissive,
+        roles: row.roles,
+        cmd: row.cmd,
+        qual: row.qual,
+        withCheck: row.with_check,
+      })),
+      [
+        {
+          name: "sessions_auth_all",
+          permissive: "PERMISSIVE",
+          roles: ["app_auth"],
+          cmd: "ALL",
+          qual: "true",
+          withCheck: "true",
+        },
+        {
+          name: "sessions_owner_full_access",
+          permissive: "PERMISSIVE",
+          roles: ["migration_owner"],
+          cmd: "ALL",
+          qual: "true",
+          withCheck: "true",
+        },
+      ],
+      "app.sessions policies must be ALL/permissive/true for app_auth and migration_owner only",
+    );
+
+    const forbidden = rows
+      .flatMap((row) => row.roles)
+      .filter((role) => role === "PUBLIC" || role === "app_api");
+    assert.deepEqual(forbidden, [], "app.sessions must not grant a policy to PUBLIC or app_api");
+  });
+
+  test("app_auth holds exactly the approved column grants", async () => {
+    const { rows: columns } = await owner.query(
+      `select a.attname as name
+         from pg_attribute a
+         join pg_class c on c.oid = a.attrelid
+         join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'app' and c.relname = 'sessions'
+          and a.attnum > 0 and not a.attisdropped
+        order by a.attnum`,
+    );
+    const names = columns.map((column) => column.name);
+    const insertable = new Set(["user_id", "token_hash", "expires_at", "absolute_expires_at"]);
+    const updatable = new Set(["expires_at", "last_seen_at", "revoked_at"]);
+
+    const { rows } = await owner.query(
+      `select a.attname as name,
+              has_column_privilege('app_auth', 'app.sessions', a.attname, 'SELECT') as can_select,
+              has_column_privilege('app_auth', 'app.sessions', a.attname, 'INSERT') as can_insert,
+              has_column_privilege('app_auth', 'app.sessions', a.attname, 'UPDATE') as can_update,
+              exists (
+                select 1
+                  from aclexplode(coalesce(a.attacl, '{}'::aclitem[])) as acl
+                  join pg_roles r on r.oid = acl.grantee
+                 where r.rolname = 'app_auth' and acl.privilege_type = 'DELETE'
+              ) as can_delete
+         from pg_attribute a
+         join pg_class c on c.oid = a.attrelid
+         join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'app' and c.relname = 'sessions'
+          and a.attnum > 0 and not a.attisdropped
+        order by a.attnum`,
+    );
+
+    assert.deepEqual(
+      rows.map((row) => ({
+        name: row.name,
+        canSelect: row.can_select,
+        canInsert: row.can_insert,
+        canUpdate: row.can_update,
+        canDelete: row.can_delete,
+      })),
+      names.map((name) => ({
+        name,
+        canSelect: true,
+        canInsert: insertable.has(name),
+        canUpdate: updatable.has(name),
+        canDelete: false,
+      })),
+      "app_auth column grants must be SELECT all, INSERT four, UPDATE three, DELETE none",
+    );
+  });
+
+  test("the column grants never become a table privilege", async () => {
+    const { rows } = await owner.query(
+      `select has_table_privilege('app_auth', 'app.sessions', 'SELECT') as can_select,
+              has_table_privilege('app_auth', 'app.sessions', 'INSERT') as can_insert,
+              has_table_privilege('app_auth', 'app.sessions', 'UPDATE') as can_update,
+              has_table_privilege('app_auth', 'app.sessions', 'DELETE') as can_delete`,
+    );
+    assert.deepEqual(
+      {
+        canSelect: rows[0].can_select,
+        canInsert: rows[0].can_insert,
+        canUpdate: rows[0].can_update,
+        canDelete: rows[0].can_delete,
+      },
+      { canSelect: false, canInsert: false, canUpdate: false, canDelete: false },
+      "app_auth must hold no table-level privilege on app.sessions",
+    );
+  });
+
+  test("user_id references app.users(id) with NO ACTION on delete", async () => {
+    const { rows } = await owner.query(
+      `select con.conname as name,
+              pg_get_constraintdef(con.oid) as definition,
+              con.confdeltype as on_delete,
+              parent.relname as parent_table
+         from pg_constraint con
+         join pg_class parent on parent.oid = con.confrelid
+        where con.conrelid = 'app.sessions'::regclass and con.contype = 'f'`,
+    );
+
+    assert.equal(rows.length, 1, "app.sessions must carry exactly one foreign key");
+    assert.deepEqual(
+      {
+        name: rows[0].name,
+        definition: rows[0].definition,
+        onDelete: rows[0].on_delete,
+        parentTable: rows[0].parent_table,
+      },
+      {
+        name: "sessions_user_id_fkey",
+        definition: "FOREIGN KEY (user_id) REFERENCES app.users(id)",
+        onDelete: "a",
+        parentTable: "users",
+      },
+      "user_id must reference app.users(id) with NO ACTION, not a cascade",
+    );
+  });
+});
+
 describe("geometry columns", () => {
   test("fields.geom is geometry(Geometry,4326) with the SRID enforced in the typmod", async () => {
     const { rows } = await owner.query(

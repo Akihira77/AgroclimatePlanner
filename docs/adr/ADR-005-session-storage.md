@@ -6,9 +6,10 @@
   `D-1`–`D-3` the owner accepted on 2026-11-20 (§2.11). That approval is the decision;
   this document is its durable record, and acceptance of it is the owner's act, separate
   from the approvals it records. Acceptance is a **documentation gate, not
-  implementation**: `S5` and `S6` have not started, `app.sessions` does not exist, and
-  `OPEN-13` stays unresolved until the owner applies the migration to the canonical
-  database and the session suite is green there.
+  implementation**: at acceptance `S5` and `S6` had not started and `app.sessions` did
+  not exist. Both have since shipped — `20261118050000_sessions` (S5), applied to the
+  canonical development database on 2026-11-20, and `test/rls/auth-boundary.test.mjs`
+  (S6) green there — and that is what resolved `OPEN-13`.
 - Date: 2026-11-18 (decision date), schema decisions 2026-11-20, accepted 2026-11-20,
   recorded here 2026-11-20
 - Depends on: ADR-002 (D5), ADR-003, ADR-004, `docs/review/phase-3.2-design-review.md`
@@ -17,16 +18,18 @@
 - Preserves: ADR-002 D5 — "server-side sessions in PostgreSQL, not JWT", with JWT +
   refresh rotation in D5's rejected list. Nothing in D5 is amended by this ADR.
 - Implemented by: `docs/implementation/phase-3.2.3-authentication-database-boundary.md`
-  (steps S5, S6) — **plan only, nothing applied**
-- Register entry: `OPEN-13` (P1, hard) — **still unresolved**, see *Related decisions
+  (steps S5, S6) — **implemented and verified on the canonical development database,
+  2026-11-20**
+- Register entry: `OPEN-13` (P1) — **RESOLVED 2026-11-20**, see *Related decisions
   and open decisions*
 
 ## Context
 
 ADR-002 D5 chose server-side sessions in PostgreSQL and rejected JWT with refresh
-rotation. That decision was never implemented: `entity-catalog.md` lists `sessions` as
-unspecified, no table, model, grant, or job exists, and `OPEN-13` holds the question
-open.
+rotation. That decision was never implemented: `entity-catalog.md` listed `sessions` as
+unspecified, no table, model, grant, or job existed, and `OPEN-13` held the question
+open. (It has been implemented since 2026-11-20 — the table exists, is granted, and is
+verified on the canonical database; see *Status* and *Related decisions*.)
 
 The environment shapes the choice more than the preference does. The stack has one
 database and no cache: `docker-compose.yml` defines a single `db` service, and
@@ -472,24 +475,26 @@ who a request is. Fail closed, and say `503` rather than 200.
 
 ## `OPEN-04` — account deletion, and the proposed foreign key
 
-`app.sessions` does not exist yet: S5 has not started, and the table, its constraints, and
-this foreign key are proposed implementation details. The proposal declares:
+`app.sessions` was created by S5 in `20261118050000_sessions` with exactly this
+declaration, and the foreign key carries no `ON DELETE` clause, so PostgreSQL's
+default `NO ACTION` stands — asserted by `db:verify` (`confdeltype = 'a'`). The
+proposal below is now the applied definition:
 
 ```sql
--- Proposed by the S5 migration. NOT APPLIED.
+-- Applied as S5 (`20261118050000_sessions`).
 sessions.user_id uuid NOT NULL REFERENCES app.users (id)
 ```
 
-No `ON DELETE` clause appears in that declaration. **If** the proposal is applied as
-written, PostgreSQL fills the omission with its default referential action, `NO ACTION`.
-That is a statement about PostgreSQL, not about this repository's policy, and it is
-conditional on the migration existing: the table is not a current schema object, so
-nothing here describes present database state.
+No `ON DELETE` clause appears in that declaration, so PostgreSQL filled the omission with
+its default referential action, `NO ACTION`. That is a statement about PostgreSQL, not
+about this repository's policy.
 
-The behaviour would then be mechanical: deleting a `users` row while session rows still
-reference it fails with `23503` (`foreign_key_violation`), unless those session rows are
-removed first. The database refuses the deletion; it does not quietly remove the
-dependent rows.
+The behaviour is mechanical: deleting a `users` row while session rows still reference it
+fails with `23503` (`foreign_key_violation`), unless those session rows are removed first.
+The database refuses the deletion; it does not quietly remove the dependent rows.
+`db:verify` asserts this against a real fixture, and the constraint's `confdeltype = 'a'`
+is asserted separately, so a later `ON DELETE CASCADE` is a red run rather than a review
+miss.
 
 Three things this section is **not** saying:
 
@@ -534,8 +539,9 @@ closed.
 
 - Authentication gains a durable, revocable, backup-covered session store with no new
   service and no new dependency.
-- The system gains one table, one function, and one job that does not exist yet. The
-  job is the only part of this design that is not fully realisable in Phase 3.2.3.
+- The system gains one table, one function, and one job. The table and the function
+  exist as of S5, applied and verified; the hourly scheduler does not, and it is the only
+  part of this design that is not realisable in Phase 3.2.3.
 - Every authenticated request costs one indexed lookup on a unique hash. This is the
   price of revocation; it was accepted when D5 was accepted.
 - The auth credential can read all session rows and mint sessions for any user. That is
@@ -570,8 +576,11 @@ closed.
 - **ADR-004** — the `app_auth` role that reaches this table, and the credential
   boundary that bounds it.
 - **ADR-003** — why the tenant GUC cannot key a session policy.
-- **`OPEN-13`** — still **unresolved**. The Definition of Done requires an accepted
-  ADR **and** an applied migration **and** a green session suite.
+- **`OPEN-13`** — **RESOLVED 2026-11-20.** The Definition of Done is met on all three
+  conjuncts: this ADR is accepted, `20261118050000_sessions` is applied to the canonical
+  development database (`127.0.0.1:5442`, 5/5), and `test/rls/auth-boundary.test.mjs` is
+  green there (49 cases). `OPEN-01` and `OPEN-04` remain open and are unaffected: the
+  store exists, the request path that uses it does not.
 - **`IG-8`** (cookie name and `__Host-` prefix), **`IG-9`** (CSRF), **`IG-6`**
   (password hashing parameters) — unanswered, and they block S8/S7 rather than this
   store.

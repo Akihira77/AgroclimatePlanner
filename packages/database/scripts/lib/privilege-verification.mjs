@@ -1087,6 +1087,29 @@ export async function runPrivilegeVerification({
         JSON.stringify(sessionAuthTablePrivileges[0].held),
       );
 
+      // `PUBLIC` is grantee oid 0 in the ACL array, and it is not a role any other
+      // assertion in this file speaks for: a grant to it would hand the table to
+      // every credential in the cluster while every per-role check stayed green.
+      // Table ACL and column ACL are separate arrays, so both are read.
+      const { rows: sessionPublicAcl } = await owner.query(
+        `select coalesce((select array_agg(distinct a.privilege_type::text)
+                            from pg_class c
+                            cross join lateral aclexplode(c.relacl) a
+                           where c.oid = 'app.sessions'::regclass and a.grantee = 0),
+                         '{}'::text[]) as table_public,
+                coalesce((select array_agg(distinct a.privilege_type::text)
+                            from pg_attribute at
+                            cross join lateral aclexplode(at.attacl) a
+                           where at.attrelid = 'app.sessions'::regclass and a.grantee = 0),
+                         '{}'::text[]) as column_public`,
+      );
+      check(
+        "PUBLIC holds no table-level or column-level privilege on app.sessions",
+        sessionPublicAcl[0].table_public.length === 0 &&
+          sessionPublicAcl[0].column_public.length === 0,
+        JSON.stringify(sessionPublicAcl[0]),
+      );
+
       for (const role of ["app_api", "app_system"]) {
         const { rows } = await owner.query(
           `select coalesce(array_agg(p.priv::text order by p.priv::text), '{}') as table_privs,
@@ -1205,6 +1228,82 @@ export async function runPrivilegeVerification({
           "update app.sessions set revoked_at = null where token_hash = $1",
           [liveToken],
         );
+
+        // `23514`, never `42501`: these rows are refused by the CHECK constraints, not
+        // by the grant, and conflating the two would let a missing constraint hide
+        // behind a passing denial. `insertRejected` keeps the deadlines as SQL
+        // expressions on purpose — the acceptance criterion is about the transaction
+        // clock, and a test that binds a timestamp proves nothing about it.
+        const insertRejected = async (label, deadlines, token) =>
+          expectCode(
+            auth,
+            label,
+            "23514",
+            `insert into app.sessions (user_id, token_hash, expires_at, absolute_expires_at)
+             values ($1, $2, ${deadlines})`,
+            [sessionUserId, token],
+          );
+
+        await insertRejected(
+          "a 91-day absolute deadline is refused by the D-2 cap (23514)",
+          "now() + interval '30 days', now() + interval '91 days'",
+          hex64("e1"),
+        );
+        await insertRejected(
+          "a sliding deadline beyond the absolute deadline is refused (23514)",
+          "now() + interval '60 days', now() + interval '30 days'",
+          hex64("e2"),
+        );
+        await insertRejected(
+          "a session born already expired is refused (23514)",
+          "now() - interval '1 day', now() + interval '30 days'",
+          hex64("e3"),
+        );
+
+        // §7.1's consequence, made executable. JavaScript reads its own clock after
+        // the transaction has begun and rounds to the millisecond, so a JS-computed
+        // deadline can only land at or after `created_at + 90 days` — never before.
+        // The offset is one second rather than a sleep: it is the smallest gap that
+        // is guaranteed rather than probable, and the cap has to refuse it anyway.
+        await auth.query("begin");
+        try {
+          const { rows: transactionClock } = await auth.query("select now() as tx");
+          const computedDeadline = new Date(
+            Math.floor(new Date(transactionClock[0].tx).getTime() / 1000) * 1000 +
+              90 * 24 * 60 * 60 * 1000 +
+              1000,
+          );
+          await expectCode(
+            auth,
+            "a JavaScript-computed 90-day deadline is refused (23514)",
+            "23514",
+            `insert into app.sessions (user_id, token_hash, expires_at, absolute_expires_at)
+             values ($1, $2, now() + interval '30 days', $3)`,
+            [sessionUserId, hex64("e4"), computedDeadline.toISOString()],
+          );
+        } finally {
+          await auth.query("rollback").catch(() => undefined);
+        }
+
+        // Equality is the clamped-extension shape `AG-2` describes, not a violation:
+        // at day 70 of 90 `LEAST(now() + 30 days, absolute_expires_at)` lands exactly
+        // on the cap, and the ordering CHECK has to accept it.
+        await auth.query("begin");
+        try {
+          await auth.query(
+            `insert into app.sessions (user_id, token_hash, expires_at, absolute_expires_at)
+             values ($1, $2, now() + interval '30 days', now() + interval '90 days')`,
+            [sessionUserId, hex64("e5")],
+          );
+          await allowed(
+            auth,
+            "a sliding deadline may equal the absolute deadline (clamped extension)",
+            "update app.sessions set expires_at = absolute_expires_at where token_hash = $1",
+            [hex64("e5")],
+          );
+        } finally {
+          await auth.query("rollback").catch(() => undefined);
+        }
 
         // One probe per protected column, with a value of that column's own type, so
         // a type error cannot be read as a denial.

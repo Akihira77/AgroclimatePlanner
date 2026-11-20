@@ -23,7 +23,10 @@ must not be mistaken for architecture. A new directory is the honest place for i
 ## 1. Executive summary
 
 `OPEN-01` and `OPEN-13` were approved on 2026-11-18 (`AG-1` = Option A, `AG-2` =
-Option A) and are still **unresolved**, because approval is not implementation. This
+Option A). Approval is not implementation, so both stayed unresolved through the work
+below: `OPEN-13`'s storage question was **resolved on 2026-11-20** once all three of
+`ADR-005`'s conjuncts held (accepted ADR, applied migration, green session suite) and
+`OPEN-01` — the request path — stays open. This
 plan is the implementation half, and only the database half of it: a fourth role,
 two additive migrations, and the verification that proves each boundary exists.
 
@@ -36,12 +39,11 @@ Four steps, in a fixed order:
 | **S5** | migration `sessions`: table, grants, policies, GC function | session rows are written by the credential S3 creates |
 | **S6** | `db:verify` rows, `auth-boundary` suite, conformance additions | a boundary nobody measured is a claim, not a control |
 
-Status, as of 2026-11-18: **S3 and S4 are implemented, verified in isolated projects,
-and pushed** (`b9a27c6`, `cf0d1c2`). `S5`'s gate is now satisfied — `ADR-005` was
-accepted on 2026-11-20 and S4 is complete — but S5 has **not started**; `S6`'s session
-half waits for `S5`, and its `users` half is what the corrective pass just hardened; the
-canonical database application is the owner's and is not evidenced anywhere in this
-repository.
+Status, as of 2026-11-18 (kept as the starting point): **S3 and S4 are implemented,
+verified in isolated projects, and pushed** (`b9a27c6`, `cf0d1c2`). Since then `S5`
+(`8fb2270`) and `S6` shipped and were applied to the canonical development database on
+2026-11-20 — `db:verify` 499/0/0, `test:rls` 88, `test:schema` 22 — with a fresh isolated
+project reproducing the same numbers from an empty volume (§8.5).
 
 What this does **not** produce: a register endpoint, a login endpoint, a session
 guard, `/me`, `/logout`, password hashing, rate limiting, or a GC job. Those are S7
@@ -122,7 +124,9 @@ Also out of scope by rule: changing the disposition of `OPEN-01` or `OPEN-13`. T
 flip only when an accepted ADR **and** an applied migration **and** a green
 `db:verify` exist (`phase-3.2-design-review.md` §§16-17, "Marked `RESOLVED` only
 when"), which is a separate,
-later action.
+later action. (`OPEN-13` was flipped that way on 2026-11-20 — ADR accepted, migration
+applied to canonical, `auth-boundary` suite green — and it is recorded in the register as
+its own act, not as a side effect of S5 or S6.)
 
 ---
 
@@ -141,7 +145,11 @@ suite iterate.
 | `migration_owner` | no | provisioned | schema `app` and every object in it | everything |
 | `app_api` | no | provisioned | nothing | 9 tenant tables RW, 6 catalog + 6 weather tables R, `INSERT (provider, model, cell_key)` on `outlook_cells`; **nothing** on `users` |
 | `app_system` | **yes** | provisioned | nothing | 6 weather tables RW; nothing on any tenant or identity table |
-| `app_auth` | — | — | — | **does not exist** |
+| `app_auth` | no | provisioned (S3) | nothing | `SELECT` 6 columns + `INSERT` 2 on `users`; session columns only on `sessions`; no tenant, catalog, or weather reach |
+
+The `app_auth` row records the state after S3–S5; when this section was measured
+(2026-11-18) the role did not exist and its `LOGIN`/`BYPASSRLS` columns were empty. What
+it may reach is asserted row by row in §8.2, not summarised here.
 
 `NOINHERIT` is on every role and the verification asserts **zero** memberships in
 either direction (`privilege-verification.mjs:182-194`). This is the property that
@@ -182,6 +190,10 @@ return zero rows without `app.user_id`; and `app.user_id` is only ever written b
 must therefore run on a credential that never opens a tenant transaction.
 
 ### 3.3 What exists for sessions
+
+*(Written before S5. Since 2026-11-20 the table, its column grants, its policies, and
+`purge_expired_sessions()` exist and are verified on canonical; see §7 and §8. The
+paragraph below records the starting point the design was written against.)*
 
 Nothing. No table, no model, no grant, no job. `entity-catalog.md:89` lists
 `sessions` as unspecified and blocked by `OPEN-13`; `ADR-002` D5 already decided
@@ -283,15 +295,15 @@ Three artefacts, three different meanings, and none of them substitutes for anot
 | `phase-3.2-owner-decisions.md` §1.10, §2.10 | the owner **approved** `AG-1`/`AG-2` on 2026-11-18 | approved |
 | `phase-3.2-owner-decisions.md` §2.11 | the owner **accepted** the three schema details `D-1`–`D-3` on 2026-11-20 (hash-shape CHECK, 90-day cap CHECK, two indexes) | approved; supplements `AG-2`, does not amend it |
 | `ADR-004`, `ADR-005` | the durable formal record of those approvals | `ADR-004` **Accepted** 2026-11-18; `ADR-005` **Accepted** 2026-11-20 |
-| this plan | how the approved architecture becomes schema and evidence | `S3`/`S4` implemented; the rest is still plan |
+| this plan | how the approved architecture becomes schema and evidence | `S3`–`S6` implemented; canonical application and evidence in §7–§8 |
 
 Approval is not acceptance of a document, and neither is implementation. Nothing here
 asks the owner to decide `AG-1`/`AG-2` a second time: acceptance was a statement that each
 ADR faithfully records what was approved. Both are now accepted — `ADR-004` on
-2026-11-18, `ADR-005` on 2026-11-20 — so every approval gate this plan names is
-satisfied, and `D-1`–`D-3` settled the remaining schema questions. S5's gate is therefore
-satisfied as well; the milestone itself is still **not started**, because a satisfied gate
-authorises work rather than performing it.
+2026-11-18, `ADR-005` on 2026-11-20 — and `D-1`–`D-3` settled the remaining schema
+questions. All four steps have since been implemented: `S5` in `8fb2270` and `S6`
+uncommitted at the time of writing, with the canonical database at 5/5 and the evidence
+in §7 and §8.5.
 
 The gates are per-milestone, not per-phase:
 
@@ -547,7 +559,7 @@ Three facts that are not the same fact, and are not to be merged in prose:
 | S4 implementation in source control | **committed and pushed** — `b9a27c6`, `cf0d1c2` |
 | S4 isolated verification | **passed** — 419 PASS / 0 FAIL / 0 SKIP on a fresh volume, all four migrations in order |
 | S4 on the canonical database | **pending owner action** — no evidence exists for it |
-| S6 standalone authentication suite | **pending** — §8.3 is still unwritten |
+| S6 standalone authentication suite | **implemented and green on canonical** — `test/rls/auth-boundary.test.mjs`, 49 cases |
 | `OPEN-01` | **unresolved** |
 
 `FOR SELECT`/`FOR INSERT` and not `FOR ALL`: one policy per capability is what makes
@@ -648,10 +660,12 @@ Deployment had a precondition the plan did not anticipate: canonical was still a
 in one pass. Both are committed and reviewed; neither was altered to make this work. A
 custom-format backup was taken and validated before either step.
 
-`OPEN-13` stays **unresolved** despite the canonical deployment: `ADR-005`'s Definition of
-Done is accepted ADR **and** applied migration **and** a green session suite, and the third
-conjunct is `test/rls/auth-boundary.test.mjs`, which is S6's deliverable and does not exist
-yet. The storage question itself is settled and deployed; the register's own gate is not.
+`OPEN-13` was **resolved on 2026-11-20**, once the third of `ADR-005`'s conjuncts
+existed: the S6 suite `test/rls/auth-boundary.test.mjs` is green on canonical. The first
+two conjuncts were already satisfied — ADR accepted, migration applied — so the flip is
+recorded in `docs/data-model/open-decisions.md` §5 as its own act, and it resolves the
+storage question only: `OPEN-01` (the request path) and `OPEN-04` (account deletion)
+remain open.
 
 Everything from §7.5 onward that describes the request path is still S7's: S5 ships no
 endpoint, no token generation, and no throttle.
@@ -1158,6 +1172,30 @@ Both migrations are applied to an isolated compose project with its own volume
 is removed afterwards. This is the only way to know S3-before-S4 ordering holds from
 zero rather than from an already-provisioned cluster.
 
+**Implemented 2026-11-20, with the numbers.** Three deliverables, each with its own
+evidence:
+
+| Deliverable | Before | After | Evidence |
+|---|---|---|---|
+| `db:verify` assertions | 493 PASS | **499 PASS**, 0 FAIL, 0 SKIP | six new rows: four `23514` constraint probes (90-day cap, expiry order, born-expired, JavaScript-computed deadline), the clamped-extension equality, and PUBLIC holding no table- or column-level privilege on `app.sessions` |
+| `test/rls/auth-boundary.test.mjs` | did not exist | **49 cases**, all passing | real roles only; `42501` exact for every denial; `23514`/`23503` asserted separately; 21 non-authentication tables enumerated from the catalogue, not sampled |
+| `test:schema` | 13 tests | **22 tests**, all passing | eight session columns in `attnum` order, the three CHECK definitions as an exact inventory, the unique key, the four indexes, both policies as contracts, the column-grant sets, and the FK's `confdeltype = 'a'` |
+
+`test:rls` therefore runs 88 cases (39 isolation + 49 boundary) and the existing 39 are
+unchanged. Canonical (`127.0.0.1:5442`, 5/5) and a fresh isolated project
+(`agroclimate-s6-fresh`, port 5546, own volume, bootstrap then `db:migrate`) produced the
+same 499/22/88; the isolated project was removed afterwards and canonical was untouched.
+Migration order from zero is therefore evidenced, not assumed.
+
+Two boundaries the implementation deliberately keeps: the JavaScript-deadline probe uses
+a one-second offset inside a transaction rather than a sleep, because JavaScript rounds to
+the millisecond and can only land *after* the transaction clock; and the suite derives the
+21-table denial list from `pg_tables` at run time, asserting the derived count, so a table
+added later cannot silently escape coverage.
+
+The `OPEN-13` flip is recorded in the register as its own act (§8.2 of this document
+required exactly that): accepted ADR, applied migration, green suite — in that order.
+
 ---
 
 ## 9. Database object and privilege matrix (target state)
@@ -1350,9 +1388,9 @@ of them into "done" or "blocked".
 | S3 | **4 — implemented** | gate: accepted `ADR-004`; `db:verify` 387 assertions at the time |
 | S4 | **4 — implemented and pushed** | gate: S3 (the role must exist before a policy names it); `db:verify` 419 assertions after the corrective pass |
 | S5 | **4 — implemented, committed, pushed, and applied to canonical** | gate: accepted `ADR-005` **and** S4, both satisfied 2026-11-20; commit `8fb2270`; canonical `127.0.0.1:5442` at 5/5 with `db:verify` 493/0/0 |
-| S6 | **4 — not started** | gate: the stages whose rows it verifies — S3/S4 for the `users` half, plus S5 for the session half |
+| S6 | **4 — implemented and verified, uncommitted at the time of writing** | gate: the stages whose rows it verifies — S3/S4 for the `users` half, plus S5 for the session half. Canonical: `db:verify` 499/0/0, `test:rls` 88, `test:schema` 22 |
 | `OPEN-01` | **5 — unresolved** | needs accepted `ADR-004` + migration + `db:verify` |
-| `OPEN-13` | **5 — unresolved** | needs accepted `ADR-005` + migration + session suite |
+| `OPEN-13` | **RESOLVED 2026-11-20** | `ADR-005` accepted + migration applied + session suite green |
 
 **Two things this table exists to fix.** First: **no `IG` gate blocks S3, S4, S5, or
 S6.** They are endpoint-behaviour decisions — email normalisation, duplicate
@@ -1495,6 +1533,19 @@ rejected row.
 24. `pnpm build`, `typecheck`, `lint`, `test`, `prettier --check .`, `git diff --check`
     all exit 0.
 
+**S6 status against these criteria (2026-11-20).** 20 — `db:verify` is 499 PASS / 0 FAIL /
+0 SKIP, the exact count recorded in §8.5; every denial in the run is `42501`, and the log
+carries no `42P01`, because existence is asserted before any probe that needs it. 21 — the
+suite is green (49 cases, twice in a row, and twice concurrently against one database) and
+the 39 isolation tests are unchanged, so no existing count moved. 22 — both migrations
+applied in order from an empty volume (`agroclimate-s6-fresh`, port 5546, own volume,
+removed afterwards). 23 — neither disposition changed *by the implementation*;
+`OPEN-13` was resolved afterwards, as the separate act the ADR's Definition of Done
+requires and the register now records. 24 — build, typecheck, lint, `test`,
+`prettier --check .` and `git diff --check` all exit 0; the known Prisma-generation race is
+handled by building `@agroclimate/database` before the root typecheck, and it did not
+reproduce in that order.
+
 ---
 
 ## 15. Suggested commit boundaries
@@ -1569,5 +1620,5 @@ the session table in the diff.
 can read and insert exactly the credential columns it needs and exactly the session
 columns it needs, cannot reach a single tenant, catalog, or weather row, cannot delete
 a session, is proven to those bounds by `db:verify` and a behavioural suite running as
-the real role, and `OPEN-01`/`OPEN-13` are still unresolved because resolution is a
-separate, evidence-gated step.
+the real role, and `OPEN-01` stays unresolved because resolution is a separate,
+evidence-gated step (`OPEN-13` met that gate on 2026-11-20 and is recorded as resolved).

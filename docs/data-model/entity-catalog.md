@@ -17,9 +17,11 @@ boundary of this phase.
 
 ## 1. Specified tables
 
-22 tables, all implemented. Three since Phase 2.2.3 (`users`, `farms`, `fields`);
-the other nineteen since Phase 3, in migration `20261118030000_domain_tables`. The
-`State` column records when each arrived, not whether it exists.
+22 tables from Phase 3, all implemented, plus one added afterwards: `sessions`, in
+`20261118050000_sessions` (S5), for 23 tables in total. Three of the 22 arrived with
+Phase 2.2.3 (`users`, `farms`, `fields`); the other nineteen with Phase 3, in migration
+`20261118030000_domain_tables`. The `State` column records when each arrived, not whether
+it exists.
 
 | # | Table | Logical entity | Class | Ownership key | RLS | State | Specified in |
 |---|---|---|---|---|---|---|---|
@@ -45,9 +47,13 @@ the other nineteen since Phase 3, in migration `20261118030000_domain_tables`. T
 | 20 | `app.suitability_runs` | `SuitabilityRun` | `tenant-derived` | `user_id` | yes | Phase 3 | `tables-derived.md` §1 |
 | 21 | `app.planting_windows` | `PlantingWindow` | `tenant-derived` | `user_id` | yes | Phase 3 | `tables-derived.md` §2 |
 | 22 | `app.ai_briefings` | `AiBriefing` | `tenant-derived` | `user_id` | yes | Phase 3 | `tables-derived.md` §3 |
+| 23 | `app.sessions` | `Session` | `identity` | `user_id` → `users` | yes | S5, 2026-11-20 | `ADR-005`, `phase-3.2.3` §7 |
 
 Tenant-owned (RLS): 10 tables — rows 1–7 and 20–22.
 Global/reference (no RLS, no `user_id`): 12 tables — rows 8–19.
+Identity (RLS forced, not tenant-scoped): 1 table — row 23. `sessions` carries no
+`app.user_id` predicate on purpose: it is read during authentication, before a tenant
+context exists (`ADR-005`).
 
 ### Logical entities that are not tables
 
@@ -86,7 +92,6 @@ Full matrix: `ownership-and-rls.md` §2.
 
 | Entity / area | Why not | Tracked as |
 |---|---|---|
-| `sessions` | the auth mechanism is undecided; Redis vs table changes the whole read path | `OPEN-13`, `OPEN-01` |
 | `forecast_scores` (verification truth, skill metrics) | `provenance-contract.md` §4 rule 3 says scoring lives in "the scoring tables", but no column list exists anywhere | `OPEN-12` |
 | `raw_payloads` | retention is a licensing question per provider, and the object store is optional | `D12`, `OPEN-05` |
 | `subscriptions` / billing | not in the domain model at all | not tracked — out of product scope |

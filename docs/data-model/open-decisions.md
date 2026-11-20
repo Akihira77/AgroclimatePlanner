@@ -70,7 +70,7 @@ part of it.
 |---|---|---|---|---|---|---|---|
 | `OPEN-09` | P1 | catalog vocabulary | after Phase 3 (vocabulary only) | **none** — `D26` omits the DDL | whether the planting status vocabulary spells `active` | the `plantings.status` default and `plantings_active_idx`, both **deliberately not created** in Phase 3 | the `plantings` table without a default, `harvests`, every other table and index |
 | `OPEN-01` | P1 | authentication | after Phase 3 | **hard** | how a credential is read before a tenant context exists | login, session issuance, and therefore every authenticated request | the DDL, the catalog, the weather plane, all RLS policies and grants |
-| `OPEN-13` | P1 | authentication | after Phase 3 | **hard** | where a session lives — Redis vs a table | session issuance and session read, together with `OPEN-01`; a table would add a 23rd entity | the DDL — this model contains no session table and does not need one |
+| `OPEN-13` | P1 | authentication | after Phase 3 | **none** — resolved 2026-11-20 | nothing: PostgreSQL `app.sessions` was selected (`ADR-005`) and shipped in S5 | nothing on the storage question; the request path that uses the table stays `OPEN-01` | everything — the table exists, is granted, and is verified on canonical |
 | `OPEN-17` | P1 | field snapshot | after Phase 3 | **hard**, for point-shaped fields only | what `areaHa` means for a `POINT`-shaped field | field snapshot creation for point-shaped fields, and every artifact derived from one | the DDL (a `POINT` row is still storable); `POLYGON`/`MULTIPOLYGON` fields end to end |
 | `OPEN-21` | P1 | field snapshot | after Phase 3 | **hard** | the `irrigationAvailable` boolean mapping and three field vocabularies | field → snapshot construction | the DDL — the columns stay unconstrained `text`; every non-snapshot path |
 | `OPEN-18` | P1 | cell resolution | after Phase 3 | **hard** | the `cell_key` rounding rule, per model | writing a cell identity, and field → cell resolution for any model whose rule is undefined | the DDL (`cell_key` is `text` for exactly this reason), the catalog, every query that reads an already-keyed cell |
@@ -269,10 +269,24 @@ cannot be implemented. **Blocks:** the AI slice, and the write path into
 `ai_briefings`. **Does not block:** the `ai_briefings` DDL, its constraints, its
 indexes, or any read of a row written under a later contract.
 
-### `OPEN-13` — session storage — **P1**
+### `OPEN-13` — session storage — **P1 — RESOLVED 2026-11-20**
 
-Redis vs a table. A table would be a 23rd entity in this model with its own
-retention; Redis would not appear here at all. **Blocks:** auth (with `OPEN-01`).
+Redis vs a table. **Decided: PostgreSQL `app.sessions`**, on the owner's `AG-2`
+(2026-11-18) and `ADR-005` (accepted 2026-11-20), with `D-1`–`D-3` fixing the token-hash
+shape, the 90-day absolute cap, and the two indexes. Delivered by S5 in
+`20261118050000_sessions` and applied to the canonical development database
+(`127.0.0.1:5442`) on 2026-11-20.
+
+All three of `ADR-005`'s Definition of Done are evidenced, not asserted: the ADR is
+**Accepted**; the migration is applied canonically (5/5 in `app._prisma_migrations`); and
+`packages/database/test/rls/auth-boundary.test.mjs` (S6) is green there — 49 real-role
+cases, including the `app_auth` column boundary on `sessions`, the `23514` constraint
+behaviour at the 90-day cap, and the GC split between `app_api` and `app_system`.
+
+**Does not resolve `OPEN-01`, and does not resolve `OPEN-04`.** The store is decided,
+applied, and proven; the login, issuance, and request-path code that will use it is S7
+and does not exist. `sessions.user_id` keeps PostgreSQL's default `NO ACTION`, so account
+deletion still has no policy (`D16` forbids the cascade).
 
 ### `OPEN-04` — account deletion — **P1**
 
@@ -364,7 +378,7 @@ and "deferred" were doing too much work:
 |---|---|---|---|
 | `OPEN-09` | **DEFERRED** | the first `plantings` writer | the DDL half is settled by omission (`D26`): no default, no partial index |
 | `OPEN-01` | **BLOCKED_EXTERNAL_INPUT** | authentication slice; owner approval of a fourth role or a `SECURITY DEFINER` function | `app_api` keeps no grant on `app.users`; Phase 3 adds no auth object |
-| `OPEN-13` | **BLOCKED_EXTERNAL_INPUT** | authentication slice, with `OPEN-01` | no session table exists in this model |
+| `OPEN-13` | **RESOLVED** | — | not applicable now: `ADR-005` accepted, S5 applied canonically, and the S6 `auth-boundary` suite green (49 cases) |
 | `OPEN-17` | **BLOCKED_EXTERNAL_INPUT** | product decision, then the snapshot path | a `POINT` row is storable; only its snapshot is impossible |
 | `OPEN-18` | **DEFERRED** | ingestion; the rule is derivable from each grid's published resolution | `cell_key` is `text`; no constraint depends on its content |
 | `OPEN-21` | **BLOCKED_EXTERNAL_INPUT** | agronomic decision, then snapshot construction | the columns stay unconstrained `text` |
@@ -392,14 +406,13 @@ and "deferred" were doing too much work:
 | `OPEN-25` | **DEFERRED** | writer discipline | a looping supersession chain is a bug, not a state |
 | `OPEN-29` | **DEFERRED** | snapshot builder | the column stores what the contract says it stores |
 
-**Counts:** 0 RESOLVED, 20 DEFERRED, 9 BLOCKED_EXTERNAL_INPUT, 0 NOT_APPLICABLE.
+**Counts:** 1 RESOLVED (`OPEN-13`), 19 DEFERRED, 9 BLOCKED_EXTERNAL_INPUT, 0 NOT_APPLICABLE.
 
-Zero `RESOLVED` is the honest result, not an omission: every remaining `OPEN` is
-a question whose answer has an owner outside this task — a product decision, a
-licence, an agronomic vocabulary, or a security review. The one thing Phase 2.4
-could settle was whether any of them changes the Phase 3 DDL, and `D26` settled
-the only one that did.
+One item is `RESOLVED`, and it earned the word: an accepted ADR, an applied migration,
+and a real-role suite green on the canonical database, in that order. The other 28 still
+need an owner outside this task — a product decision, a licence, an agronomic vocabulary,
+or a security review.
 
-Note that `RESOLVED` is not the goal. A phase that resolved `OPEN-17` by assuming a
-500 m radius "for now" would have made the database lie about a plot's area, and
-that lie is inside a hash.
+Note that `RESOLVED` is still not the goal. A phase that resolved `OPEN-17` by assuming a
+500 m radius "for now" would have made the database lie about a plot's area, and that lie
+is inside a hash.
