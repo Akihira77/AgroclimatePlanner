@@ -665,11 +665,12 @@ Ownership: created by the migration connection, so the table and both indexes ar
 owned by `migration_owner` along with every other object in `app`.
 
 **The cap constraint changes how the insert must be written, and that is the point.**
-`created_at` defaults to the statement's `now()`, which is the transaction timestamp and
-is stable within the statement. If the application computes a deadline in JavaScript,
-`Date.now() + 90 days` is already later than `created_at + 90 days` by the request's
-latency, and the insert fails `23514`. Both timestamps must therefore come from the same
-SQL clock:
+`created_at` defaults to `now()`, which is `transaction_timestamp()`: the time the current
+transaction began, not the time the current statement began, and it does not change for
+the duration of that transaction. If the application computes a deadline in JavaScript,
+`Date.now() + 90 days` is already later than `created_at + 90 days` by however much time
+elapsed since the transaction started, and the insert fails `23514`. Both deadlines must
+therefore come from the same SQL clock:
 
 ```sql
 -- What the application must run instead of binding two JS timestamps.
@@ -679,9 +680,11 @@ RETURNING id;
 ```
 
 This is a consequence of the constraint, not a preference: it is what makes "90 days
-from creation" mean the same instant on both sides. `now()` is `transaction_timestamp()`,
-so all three timestamps agree exactly, including when the insert runs inside the
-request's transaction.
+from creation" mean the same instant on both sides. `statement_timestamp()` and
+`clock_timestamp()` would not work here — both are later than the value `created_at`
+received from `now()`, so a deadline built from either can violate `D-2` by the elapsed
+time. Inside a longer transaction, `now()` is earlier than the moment of the insert;
+that is the property being relied on, and it is why all three timestamps agree exactly.
 
 ### 7.2 Why user-scoped, not tenant-scoped
 
@@ -1010,10 +1013,58 @@ nothing, or created a table under the wrong schema, could still pass. It is ther
 |---|---|
 | The relation exists, in `app`, as a table | `to_regclass('app.sessions')` not null; `relkind = 'r'`; `relnamespace = 'app'::regnamespace` |
 | The column set is exactly the eight approved columns | `information_schema.columns` compared as a set, not a count |
-| Both CHECK constraints exist by definition | `pg_constraint` rows for the relation, `contype = 'c'`, `pg_get_constraintdef` matched — not matched by name |
+| The exact three-check inventory exists, by definition | `pg_constraint` rows for the relation with `contype = 'c'`, each definition compared against its expected `pg_get_constraintdef` text — not matched by name, and not matched as a count |
 | The unique constraint protects `token_hash` | `pg_index`/`pg_constraint` on the column, not a name lookup |
 | Both indexes exist and are on the intended columns | `pg_indexes` on the relation |
 | RLS is enabled **and** forced | `pg_class.relrowsecurity`, `relforcerowsecurity` |
+
+**The three CHECK constraints, and what "verified" means.** The approved DDL has exactly
+three CHECK constraints. All three are structural, so an assertion that "a CHECK exists"
+or that "two of them exist" would pass on a table that lost one and gained another. Each
+is verified separately, by purpose:
+
+| ID | Constraint | Purpose | Expected definition |
+|---|---|---|---|
+| A | expiry order (`AG-2` §2.4) | a session cannot be born dead or outlive its hard deadline | `CHECK (absolute_expires_at >= expires_at AND expires_at > created_at)` |
+| B | token hash shape (`D-1`) | the stored value is 64 lowercase hex characters | `CHECK (token_hash ~ '^[0-9a-f]{64}$')` |
+| C | absolute expiry cap (`D-2`) | no single statement can mint a decade-long credential | `CHECK (absolute_expires_at <= created_at + INTERVAL '90 days')` |
+
+`B` validates the **representation** only; it cannot prove the value was derived with
+SHA-256. `C` is an **upper bound**, not an obligation to use exactly 90 days. `A` is the
+`AG-2` constraint that predates `D-1`/`D-2` — a verifier that checks only `B` and `C`
+would leave the expiry-order rule unmeasured, which is the defect this inventory exists
+to prevent.
+
+The comparison target is the catalogue's normalised text, not the source SQL: PostgreSQL
+rewrites definitions (`'90 days'::interval`, parenthesisation, `'^[0-9a-f]{64}$'::text`),
+the same reason `users_self_only`'s predicate is recorded from `pg_get_constraintdef`
+rather than copied from the migration. The expected strings are therefore captured from
+an isolated project at S5 and unit-tested without a database, exactly as the policy
+contract is.
+
+The verifier must fail, as separate cases, on each of these:
+
+1. **Missing** — the relation has fewer than three CHECK constraints
+   (`contype = 'c'`), or one of the three expected definitions is absent. A missing `A`
+   is not compensated by a present `B`/`C`.
+2. **Extra** — a fourth CHECK constraint, or any CHECK whose definition is none of the
+   three. The approved DDL declares no other CHECK on `app.sessions`, so the inventory
+   is exact; an additional constraint is a schema change that bypassed review.
+3. **Weakened or rewritten** — right purpose, different predicate: `>` for `>=`, a
+   `30 days` cap, `[0-9a-f]{1,64}`, `OR` in place of `AND`, or a dropped clause. Text
+   equality on the normalised definition catches all of them.
+4. **Renamed** — a correct definition under an unexpected name still passes, because the
+   name is not the contract; the mismatch is logged as an informational note so the
+   rename is visible rather than silent. If the definition changed as well, case 3 fails
+   it.
+5. **Displaced** — a matching definition attached to a different relation. The probe
+   filters by the session table's oid, so a constraint of the same name on another table
+   cannot satisfy the assertion.
+
+Constraint names are recorded for diagnostics only
+(`sessions_expiry_order_check`, `sessions_token_hash_shape_check`,
+`sessions_absolute_expiry_cap_check`). A later rename must not turn the suite red; a
+later rewrite must.
 
 The unit tests that drive the function move with it: the "passes when the relation is
 missing" case becomes "fails when the relation is missing", and the "already exists"
@@ -1371,8 +1422,9 @@ Each row names the evidence, not the intent.
 ### S5
 
 13. `sessions` exists with the eight columns, all three CHECKs (expiry order, hash
-    shape, absolute cap), unique `token_hash`, two indexes, `ENABLE`+`FORCE`, and both
-    policies.
+    shape, absolute cap) asserted as an **exact inventory** — a missing, extra, or
+    rewritten definition each fails separately — plus unique `token_hash`, two indexes,
+    `ENABLE`+`FORCE`, and both policies.
 14. `app_api` and `app_system` fail `42501` on all four verbs; `app_auth` has exactly
     the column privileges in §7.4 and no `DELETE`.
 15. `purge_expired_sessions()` is `prosecdef`, owned by `migration_owner`, `search_path`

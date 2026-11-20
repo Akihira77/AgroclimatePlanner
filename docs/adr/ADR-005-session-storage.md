@@ -242,7 +242,8 @@ What the column grants do and do not do, stated because it is easy to over-read 
   keeps the `D-2` 90-day cap meaningful: a caller cannot backdate `created_at` to
   make an arbitrarily long deadline pass
   `absolute_expires_at <= created_at + INTERVAL '90 days'`. Both timestamps come from
-  the same `now()`, and only one of them is the caller's to choose.
+  the same transaction timestamp `now()`, and only one of them is the caller's to
+  choose.
 - They do **not** hide session rows from `app_auth`. The `SELECT` list covers every
   column, so the auth credential can read every session row. That is `AG-2` S-4,
   accepted, and §14 explains why no policy fixes it.
@@ -364,11 +365,16 @@ Why each is load-bearing:
   `absolute_expires_at`. Without this CHECK the 90-day rule is documentation only, and
   one statement can mint a decade-long session. The bound is a **maximum, not an
   equality**: a shorter session still passes, because a short session is a usability bug
-  rather than a security one. **Insert constraint:** `created_at` defaults to the
-  statement's `now()`, so both deadlines must be derived from the same SQL clock —
-  `now() + interval '30 days'` and `now() + interval '90 days'` — never from a
-  JavaScript `Date.now()`. A client-computed deadline is later than
-  `created_at + 90 days` by the request's latency and fails `23514`.
+  rather than a security one. **Insert constraint:** `created_at` defaults to `now()`,
+  which is `transaction_timestamp()` — the instant the current *transaction* began, not
+  the instant the current statement began — so both deadlines must be derived from that
+  same clock: `now() + interval '30 days'` and `now() + interval '90 days'`. They must
+  not come from a JavaScript `Date.now()`, and they must not use
+  `statement_timestamp()` or `clock_timestamp()`, because either one is later than the
+  value `created_at` received: a deadline that should be 90 days, but is computed from
+  any clock other than `now()`, is later than `created_at + 90 days` by the elapsed time
+  and fails `23514`. Using `now()` for both makes the three timestamps identical by
+  construction, including inside a long transaction.
 - **`D-3`** — `token_hash` is already `UNIQUE` and carries the request path. The two
   added indexes support revoke-all-by-user and the GC scan; without them both degrade to
   a sequential scan as rows accumulate. An index supports a path; it does not guarantee
@@ -389,7 +395,7 @@ see what remains undecided:
 | `app.purge_expired_sessions()` definer shape, `EXECUTE` to `app_system` | `AG-2` §2.9, accepted |
 | Column-grant list, function body, policy names, index names | engineering detail, constrained by the rows above |
 | Throttle enforcement mechanism under concurrency | **undecided**, owned by S7 |
-| `sessions.user_id` foreign-key policy under account deletion | **undecided**, blocked by `OPEN-04` |
+| `sessions.user_id` FK action under account deletion | `NO ACTION` is PostgreSQL's default for the declared FK, not an owner decision; the lifecycle policy remains **undecided**, blocked by `OPEN-04` |
 
 ## Security properties
 
@@ -461,18 +467,34 @@ who a request is. Fail closed, and say `503` rather than 200.
 
 ## `OPEN-04` — account deletion, and the foreign key
 
-`sessions.user_id` references `app.users (id)`, so deleting a `users` row is governed
-by the FK's `ON DELETE` action, not by this ADR. This ADR proposes `NO ACTION`, which
-means a user row with any session row cannot be deleted until those sessions are
-removed or the policy changes — the delete fails with `23503` rather than silently
-cascading a deletion across tables.
+`sessions.user_id` is declared `uuid NOT NULL REFERENCES app.users (id)`, with no
+`ON DELETE` clause. PostgreSQL fills that omission with its default action, `NO ACTION`.
+The accurate description of the current schema is therefore mechanical, not normative:
+deleting a `users` row that still has session rows fails with `23503`
+(`foreign_key_violation`) instead of silently deleting those sessions too.
 
-That is a statement about the constraint's mechanics, **not a decision**. Which
-lifecycle wins — anonymise the user and keep provenance, delete with cascade, or
-something else — is `OPEN-04` (`P1`, product/legal, `BLOCKED_EXTERNAL_INPUT`). This ADR
-does not resolve it, does not choose a `ON DELETE` action on the owner's behalf, and
-must be revisited once `OPEN-04` is decided. `OPEN-04`'s disposition in
-`docs/data-model/open-decisions.md` is unchanged by this document.
+Three things this section is **not** saying:
+
+1. **It is not a decision to adopt `NO ACTION` as the account-deletion policy.** The
+   default is what the constraint does when nobody has chosen an action; describing it
+   is not choosing it. The FK exists to protect referential integrity between two
+   tables, and its default action is simply the state of the DDL until life-cycle
+   policy says otherwise.
+2. **It does not resolve `OPEN-04`.** Which lifecycle wins — anonymise the user and keep
+   provenance, hard-delete with a cascade, soft-delete, or something else — is
+   undecided. `OPEN-04` stays `P1`, product/legal, `BLOCKED_EXTERNAL_INPUT`, and its
+   disposition in `docs/data-model/open-decisions.md` is unchanged by this ADR.
+3. **It does not permit `ON DELETE CASCADE`.** The project-wide decision `D16` forbids a
+   cascade anywhere (`relationships.md` §2, `lifecycle-and-retention.md`), because a
+   cascade is a data-loss path that fires on a mistake. Whatever `OPEN-04` eventually
+   selects must respect that constraint, and this ADR neither anticipates nor proposes
+   an exception.
+
+`NO ACTION` and `RESTRICT` differ only in when the check runs — `RESTRICT` immediately,
+`NO ACTION` at the end of the statement unless the constraint is deferred — and neither
+is a statement about product policy. When `OPEN-04` is decided, the deletion path and
+this FK are revisited together in a later migration; nothing about that decision is
+settled here.
 
 ## Alternatives considered
 
