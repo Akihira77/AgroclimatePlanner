@@ -1250,11 +1250,13 @@ started (adapter foundation only); 5.2–5.8 have no work started.
 | `src/http.ts` | **Implemented.** `Transport` boundary: `GET`, timeout via `AbortController`, caller `AbortSignal` via `AbortSignal.any`, streaming body cap, `Retry-After` parse. No retry, no JSON parsing, no provider knowledge |
 | `src/failures.ts` | **Implemented.** `AdapterOutcome<T>`; the four shared kinds are `Extract<AdapterResult, …>["kind"]` from `@agroclimate/contracts`, so a contract rename fails to compile. Adds `incomplete_horizon`, `invalid_config`, `invalid_payload`, `unsupported_unit` |
 | `src/adapters/open-meteo-seasonal.ts` | **Implemented.** Pins `models=ecmwf_seas5`, `monthly=precipitation_mean`, `forecast_days=217`; validates month axis (first-of-month, strictly increasing, 7 rows), maps 429/4xx/5xx/other/network to the taxonomy; returns the provider-native series with the provider's own unit string and no `valueMm` |
-| `src/normalize/monthly.ts` | **Implemented.** Unit gate (`mm` only), ordering, null → `provider_null`, negative/non-finite refused, deterministic, frozen. **No conversion, no anomaly, no aggregation, no climatology fallback** |
+| `src/normalize/monthly.ts` | **Implemented.** Unit gate (`mm` only), calendar continuity, null → `provider_null`, negative/non-finite refused, deterministic, frozen. **No conversion, no anomaly, no aggregation, no climatology fallback** |
+| `src/calendar-month.ts` | **Implemented (F-10).** `parseCalendarMonth`, `formatMonthKey`, `isConsecutiveMonth` — `year * 12 + month` adjacency, no `Date`, no timezone, no elapsed-time division. Shared by the adapter and the normalizer so both boundaries enforce the same rule |
+| F-10 | A seven-row monthly axis must be **seven consecutive calendar months**, not merely seven increasing keys: a dropped January would otherwise pass. Enforced in both the adapter (`provider_changed`) and the normalizer (`invalid_payload`), naming the index and both months. Row count and `SEAS5_EXPECTED_MONTHS` are unchanged, and this says nothing about what `precipitation_mean` means |
 | Open-Meteo daily adapter | **Deferred** — needs record assembly and the daily coverage threshold; nothing would consume it |
 | EC46 / ERA5 / CHIRPS adapters | **Deferred** — no monthly product, undecided dataset route, unresolved licensing |
 | BMKG / Set VII adapters | **Blocked** — written permission and licence/GRIB proof of concept pending |
-| Tests | **27 in `weather-core`** (deliberately every fixture is labelled synthetic; no network) |
-| Executed | `pnpm --filter @agroclimate/weather-core test` — 27 passed; `typecheck`, `lint`, `build` clean. `pnpm typecheck` 8/8, `pnpm lint` 6/6 |
+| Tests | **36 in `weather-core`** (deliberately every fixture is labelled synthetic; no network) |
+| Executed | `pnpm --filter @agroclimate/weather-core test` — 36 passed; `typecheck`, `lint`, `build` clean. `pnpm typecheck` 8/8, `pnpm lint` 6/6 |
 | Not implemented | No persistence, no Prisma change, no migration, no worker, no queue, no route, no config loader, no raw-payload store, no cell resolution |
 | Open | `Q-P5-7` / `F-09` (`precipitation_mean` vs `valueMm`); `Q-P5-5`, `Q-P5-6` unchanged |

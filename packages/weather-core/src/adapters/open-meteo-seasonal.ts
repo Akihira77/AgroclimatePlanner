@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { failure, type AdapterOutcome } from "../failures.js";
 import type { AdapterRuntime } from "../runtime.js";
+import { formatMonthKey, isConsecutiveMonth, parseCalendarMonth } from "../calendar-month.js";
 
 /**
  * SEAS5 monthly adapter, via the Open-Meteo seasonal API.
@@ -13,6 +14,9 @@ import type { AdapterRuntime } from "../runtime.js";
  *   a usable horizon and is never used.
  * - The only monthly precipitation variable verified is `precipitation_mean`.
  *   `precipitation_spread` and friends return 400, so no spread is requested.
+ * - Seven rows must also be **seven consecutive calendar months**. A provider
+ *   that skips one returns seven ordered keys and no longer describes a
+ *   seven-month horizon, so the axis is checked for adjacency, not just order.
  * - The payload exposes no initialisation time. It is supplied by the run that
  *   calls this adapter and marked as configured, never inferred from the clock.
  *
@@ -67,8 +71,6 @@ export interface Seas5MonthlyPayload {
   readonly rawPayloadRef: null;
   readonly months: readonly ProviderMonth[];
 }
-
-const monthKeySchema = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])(-01)?$/);
 
 const payloadSchema = z.looseObject({
   latitude: z.number(),
@@ -195,15 +197,17 @@ export async function fetchSeas5Monthly(
   const months: ProviderMonth[] = [];
   let previous: string | null = null;
   for (let index = 0; index < times.length; index += 1) {
-    const rawMonth = times[index] ?? "";
-    if (!monthKeySchema.safeParse(rawMonth).success) {
+    const calendarMonth = parseCalendarMonth(times[index] ?? "");
+    if (calendarMonth === null) {
       return failure("provider_changed", `monthly.time[${index}] is not a month key`, { status });
     }
-    const month = rawMonth.length === 7 ? `${rawMonth}-01` : rawMonth;
-    if (previous !== null && month <= previous) {
+    const month = formatMonthKey(calendarMonth);
+    // Row count is not continuity: seven ordered keys can still skip January. Each
+    // key must be the calendar month after the previous one (F-10).
+    if (previous !== null && !isConsecutiveMonth(previous, month)) {
       return failure(
         "provider_changed",
-        `monthly.time is not strictly increasing at index ${index}`,
+        `monthly.time[${index}] is ${month}, expected the month after ${previous}`,
         { status },
       );
     }

@@ -1,5 +1,6 @@
 import { failure, type NormalizationFailure } from "../failures.js";
 import type { ProviderMonth, Seas5MonthlyPayload } from "../adapters/open-meteo-seasonal.js";
+import { formatMonthKey, isConsecutiveMonth, parseCalendarMonth } from "../calendar-month.js";
 
 /**
  * Monthly normalizer: provider-native series in, the same series with validated
@@ -11,8 +12,9 @@ import type { ProviderMonth, Seas5MonthlyPayload } from "../adapters/open-meteo-
  * has not decided what that column means for a `precipitation_mean` row (F-09).
  *
  * The only work it does is the work that can be proven: the month key is a
- * first-of-month date, the axis is ordered, a null stays null, and a negative
- * precipitation amount is refused rather than clamped to zero.
+ * first-of-month date, the axis is continuous (each month the calendar successor
+ * of the previous), a null stays null, and a negative precipitation amount is
+ * refused rather than clamped to zero.
  */
 
 export const MONTHLY_NORMALIZER_VERSION = "monthly-normalizer@1.0.0";
@@ -54,8 +56,6 @@ export interface NormalizedMonthlySeries {
   };
 }
 
-const MONTH_KEY = /^\d{4}-(0[1-9]|1[0-2])-01$/;
-
 export function normalizeMonthlySeries(
   payload: Seas5MonthlyPayload,
 ): NormalizedMonthlySeries | NormalizationFailure {
@@ -79,11 +79,17 @@ export function normalizeMonthlySeries(
 
   for (let index = 0; index < payload.months.length; index += 1) {
     const entry = payload.months[index] as ProviderMonth;
-    if (!MONTH_KEY.test(entry.month)) {
+    const calendarMonth = parseCalendarMonth(entry.month);
+    if (calendarMonth === null || formatMonthKey(calendarMonth) !== entry.month) {
       return failure("invalid_payload", `months[${index}] is not a first-of-month key`);
     }
-    if (previous !== null && entry.month <= previous) {
-      return failure("invalid_payload", `months[${index}] is not strictly increasing`);
+    // Same rule as the adapter, and for the same reason: another source may hand
+    // this normalizer a series, and an ordered series is not a continuous one.
+    if (previous !== null && !isConsecutiveMonth(previous, entry.month)) {
+      return failure(
+        "invalid_payload",
+        `months[${index}] is ${entry.month}, expected the month after ${previous}`,
+      );
     }
     previous = entry.month;
 

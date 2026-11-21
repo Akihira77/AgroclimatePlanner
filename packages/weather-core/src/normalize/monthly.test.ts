@@ -144,6 +144,69 @@ describe("monthly normalizer", () => {
     expect("ok" in reversed && reversed.ok === false).toBe(true);
   });
 
+  it("accepts a series that crosses the year boundary", () => {
+    const series = normalized(
+      normalizeMonthlySeries(
+        withMonths([
+          { month: "2026-12-01", value: 300 },
+          { month: "2027-01-01", value: 310 },
+          { month: "2027-02-01", value: 320 },
+        ]),
+      ),
+    );
+    expect(series.months.map((month) => month.month)).toEqual([
+      "2026-12-01",
+      "2027-01-01",
+      "2027-02-01",
+    ]);
+  });
+
+  it("rejects a series with a missing calendar month", () => {
+    // Ordered, plausible, and wrong: January never arrives.
+    const outcome = normalizeMonthlySeries(
+      withMonths([
+        { month: "2026-11-01", value: 1 },
+        { month: "2026-12-01", value: 2 },
+        { month: "2027-02-01", value: 3 },
+      ]),
+    );
+    expect("ok" in outcome && outcome.ok === false).toBe(true);
+    if ("ok" in outcome && outcome.ok === false) {
+      expect(outcome.kind).toBe("invalid_payload");
+      expect(outcome.message).toContain("months[2]");
+      expect(outcome.message).toContain("2027-02-01");
+      expect(outcome.message).toContain("2026-12-01");
+    }
+  });
+
+  it("rejects a gap immediately after December", () => {
+    const outcome = normalizeMonthlySeries(
+      withMonths([
+        { month: "2026-11-01", value: 1 },
+        { month: "2026-12-01", value: 2 },
+        { month: "2027-02-01", value: 3 },
+      ]),
+    );
+    expect("ok" in outcome && outcome.ok === false).toBe(true);
+    if ("ok" in outcome && outcome.ok === false) expect(outcome.kind).toBe("invalid_payload");
+  });
+
+  it("rejects seven months that skip one", () => {
+    const outcome = normalizeMonthlySeries(
+      withMonths([
+        { month: "2026-12-01", value: 1 },
+        { month: "2027-01-01", value: 2 },
+        { month: "2027-03-01", value: 3 },
+        { month: "2027-04-01", value: 4 },
+        { month: "2027-05-01", value: 5 },
+        { month: "2027-06-01", value: 6 },
+        { month: "2027-07-01", value: 7 },
+      ]),
+    );
+    expect("ok" in outcome && outcome.ok === false).toBe(true);
+    if ("ok" in outcome && outcome.ok === false) expect(outcome.kind).toBe("invalid_payload");
+  });
+
   it("is deterministic and ordered for equal input", () => {
     const first = normalized(normalizeMonthlySeries(PAYLOAD));
     const second = normalized(normalizeMonthlySeries(PAYLOAD));

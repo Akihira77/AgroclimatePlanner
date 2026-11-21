@@ -368,7 +368,21 @@ and retrying is pointless.
 The SEAS5 request is pinned, not defaulted: `models=ecmwf_seas5`,
 `monthly=precipitation_mean`, `forecast_days=217`. The provider's default horizon is
 six months; seven rows require that explicit value, so a six-row answer is
-`incomplete_horizon`, never a six-month outlook. `initializedAt` is supplied by the
+`incomplete_horizon`, never a six-month outlook.
+
+**Seven rows must also be seven consecutive calendar months** (`F-10`). A strictly
+increasing axis is not a continuous one: a provider that drops January returns seven
+ordered keys and no longer describes a seven-month horizon. Each key must be the
+calendar successor of the previous one, computed as `year * 12 + month` adjacency
+(`calendar-month.ts`) rather than by elapsed milliseconds or a `Date`, so
+December → January rolls over correctly and no timezone can move a month. A gap, a
+duplicate, a reversal, or an unparseable key is `provider_changed` at the adapter and
+`invalid_payload` at the normalizer, naming the index and both months. The normalizer
+enforces the same rule with the same function, because it is a separate boundary and
+may later receive a monthly series from another source. This says nothing about what
+`precipitation_mean` means — that is still `F-09` / `Q-P5-7`.
+
+`initializedAt` is supplied by the
 caller and recorded as `initializedAtSource: 'request_configuration'`, because the
 payload reports no initialisation time and inferring it from the clock would corrupt
 every freshness calculation downstream.
@@ -1011,7 +1025,7 @@ Two layout deviations from the original scope, both deliberate:
 discriminated union of §5.1.1: a result type that cannot express `rate_limited`
 would force the adapter to throw, which loses the classification the queue needs.
 
-#### 8.0.1 Corrective passes — F-03…F-09 (2026-11-21)
+#### 8.0.1 Corrective passes — F-03…F-10 (2026-11-21)
 
 A review of the delivered contracts produced four findings, all fixed in place. No
 new file, dependency, or sub-phase.
@@ -1025,6 +1039,7 @@ new file, dependency, or sub-phase.
 | **F-07** | Complete/partial is decided by `answeredCells` vs `requestedCells` only. A rounded 100 from an incomplete answer stays `partial`; the percentage is display, not status. `ingestion_runs` stores no counts, so `status` is the authority there and a `partial` row may read 100 — no migration needed |
 | **F-08** | 5.1 adds a real `@agroclimate/weather-core` package — transport, failure union, SEAS5 monthly adapter, monthly normalizer — with no dependency beyond the workspace `zod` catalogue entry. Transport owns bytes/status/timeout/body cap and nothing else; adapters classify, they never retry; the normalizer refuses instead of converting |
 | **F-09** | `precipitation_mean` is a **mean**, and `MonthlyOutlook.valueMm` reads as a monthly amount. No approved definition says they are the same quantity, so the adapter and normalizer stop at the provider-native series and populate no `valueMm`. The decision — whether a monthly outlook stores a mean, a total derived by an approved rule, or gains a separate column — is `Q-P5-7`, owner-owned and open |
+| **F-10** | A seven-row monthly axis is not a seven-month forecast: strictly increasing keys can still skip a month. The adapter and the normalizer both require each key to be the calendar successor of the previous one, using one shared `year * 12 + month` adjacency check (`calendar-month.ts`) with no `Date` and no elapsed-time division. Row count alone is never completeness |
 
 Capability status after 5.0, stated so no reader infers more than exists:
 
@@ -1053,7 +1068,7 @@ Capability status after 5.0, stated so no reader infers more than exists:
 | Contracts | `failures.ts` derives its four shared failure kinds from the contract's `AdapterResult` (`Extract<AdapterResult, { kind: … }>["kind"]`), so a rename there fails this package at compile time instead of letting two unions drift. `weather-core` depends on `@agroclimate/contracts` for that. Its own `AdapterOutcome<T>` stays narrower on purpose: the contract's success variants need observations and a cell-count coverage figure, which a monthly series does not have |
 | Not built | `normalize/*` does not produce `{ values, coverage, rejects }` or `weather_records`-shaped records — it validates a monthly series and stops at the provider's quantity (F-09). `fixtures/*` do not exist; the tests build labelled synthetic payloads inline |
 | Database impact | none |
-| Tests | 27 in `weather-core` — request pinning and determinism, 429/400/5xx/302 mapping, invalid config with no request made, six-row horizon, duplicate/reversed/malformed month keys, unequal array lengths, non-JSON body, null preservation, and the normalizer's refusals |
+| Tests | 36 in `weather-core` — request pinning and determinism, 429/400/5xx/302 mapping, invalid config with no request made, six-row horizon, malformed month keys, unequal array lengths, non-JSON body, null preservation, calendar continuity on both sides of the boundary (missing month, rollover gap, duplicate, reversal, year crossing), and the normalizer's refusals |
 | Acceptance | met for the SEAS5 monthly boundary: the request is reproducible from explicit config, a short axis is refused, a schema change is classified as `provider_changed`, and the output never claims a monthly total |
 | Dependencies | 5.0 |
 | Risks | over-fitting the normalizer to one payload shape; mitigate with three fixtures of different lengths |

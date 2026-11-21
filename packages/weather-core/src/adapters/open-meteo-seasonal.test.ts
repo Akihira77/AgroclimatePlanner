@@ -163,6 +163,117 @@ describe("SEAS5 monthly response", () => {
     if (!revOutcome.ok) expect(revOutcome.kind).toBe("provider_changed");
   });
 
+  it("accepts a seven-month axis that crosses a year boundary", async () => {
+    const months = [
+      "2026-12-01",
+      "2027-01-01",
+      "2027-02-01",
+      "2027-03-01",
+      "2027-04-01",
+      "2027-05-01",
+      "2027-06-01",
+    ];
+    const outcome = await fetchSeas5Monthly(
+      CONFIG,
+      runtimeReturning(ok(syntheticBody({ months, values: SEVEN_VALUES }))),
+    );
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.value.months.map((month) => month.month)).toEqual(months);
+    }
+  });
+
+  it("rejects seven rows with a missing calendar month", async () => {
+    // Seven rows, strictly increasing — and January is simply absent. Row count
+    // alone accepted this before F-10.
+    const months = [
+      "2026-11-01",
+      "2026-12-01",
+      "2027-02-01",
+      "2027-03-01",
+      "2027-04-01",
+      "2027-05-01",
+      "2027-06-01",
+    ];
+    const outcome = await fetchSeas5Monthly(
+      CONFIG,
+      runtimeReturning(ok(syntheticBody({ months, values: SEVEN_VALUES }))),
+    );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.kind).toBe("provider_changed");
+      // Index 2 is the first key that is not the successor of the previous one.
+      expect(outcome.message).toContain("monthly.time[2]");
+      expect(outcome.message).toContain("2027-02-01");
+      expect(outcome.message).toContain("2026-12-01");
+    }
+  });
+
+  it("rejects a gap across the December to January rollover", async () => {
+    // December is present and the next key is February: the year arithmetic must
+    // see the jump, not treat a new year as a new sequence.
+    const months = [
+      "2026-09-01",
+      "2026-10-01",
+      "2026-11-01",
+      "2026-12-01",
+      "2027-02-01",
+      "2027-03-01",
+      "2027-04-01",
+    ];
+    const outcome = await fetchSeas5Monthly(
+      CONFIG,
+      runtimeReturning(ok(syntheticBody({ months, values: SEVEN_VALUES }))),
+    );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.kind).toBe("provider_changed");
+  });
+
+  it("rejects seven rows whose tail replaces a missing month", async () => {
+    // February is dropped and May is appended in its place: seven rows, one span,
+    // and a hole the count cannot reveal.
+    const months = [
+      "2026-12-01",
+      "2027-01-01",
+      "2027-03-01",
+      "2027-04-01",
+      "2027-05-01",
+      "2027-06-01",
+      "2027-07-01",
+    ];
+    const outcome = await fetchSeas5Monthly(
+      CONFIG,
+      runtimeReturning(ok(syntheticBody({ months, values: SEVEN_VALUES }))),
+    );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.kind).toBe("provider_changed");
+  });
+
+  it("checks continuity on the abbreviated month key too", async () => {
+    const continuous = [
+      "2026-12",
+      "2027-01",
+      "2027-02",
+      "2027-03",
+      "2027-04",
+      "2027-05",
+      "2027-06",
+    ];
+    const good = await fetchSeas5Monthly(
+      CONFIG,
+      runtimeReturning(ok(syntheticBody({ months: continuous, values: SEVEN_VALUES }))),
+    );
+    expect(good.ok).toBe(true);
+
+    const hole = ["2026-12", "2027-02", "2027-03", "2027-04", "2027-05", "2027-06", "2027-07"];
+    const bad = await fetchSeas5Monthly(
+      CONFIG,
+      runtimeReturning(ok(syntheticBody({ months: hole, values: SEVEN_VALUES }))),
+    );
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.kind).toBe("provider_changed");
+  });
+
   it("rejects a month key that is not the first of a month", async () => {
     const months = ["2026-11-15", ...SEVEN_MONTHS.slice(1)];
     const outcome = await fetchSeas5Monthly(
