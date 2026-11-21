@@ -75,8 +75,8 @@ flowchart TB
 | App | Runtime | Responsibility | Must not |
 |---|---|---|---|
 | `apps/web` | static SPA | render, route, cache, call API | compute suitability, derive anomalies, invent labels |
-| `apps/api` | Node 22, NestJS/Express | auth, CRUD, read models, enqueue jobs, serve contracts | hold long-running provider calls on the request path |
-| `apps/worker` | Node 22, BullMQ | ingest, aggregate, recompute, verify | serve user traffic or own business rules that the API needs synchronously |
+| `apps/api` | Node.js (engines `>=24.14.0`), NestJS/Express | auth, CRUD, read models, enqueue jobs, serve contracts | hold long-running provider calls on the request path |
+| `apps/worker` | Node.js (engines `>=24.14.0`), BullMQ | ingest, aggregate, recompute, verify | serve user traffic or own business rules that the API needs synchronously |
 
 **Rule:** the API never calls a weather provider synchronously. If the data is stale, the API returns the stale record *with its freshness metadata*, or a `503` with a machine-readable reason — never a blocking fetch.
 

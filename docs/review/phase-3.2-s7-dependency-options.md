@@ -78,9 +78,10 @@ the method, the resource inventory, and the interpretation rules are in
 The earlier sketch in this section is superseded. It measured a single
 `process.memoryUsage().rss` snapshot after the run and called it peak, used 20 samples
 (so its "p95" was the 19th value), performed no warm-up, and had no memory guard. The
-harness replaces it with `VmHWM`/`resourceUsage().maxRSS`, at least 100 samples, a
-warm-up phase, per-operation error accounting, and a guard that refuses to run when the
-container limit is unknown.
+harness replaces it with `VmHWM`/`resourceUsage().maxRSS`, at least 100 samples, isolated
+sequential/concurrent hash and verify stages, a warm-up phase, per-stage error accounting,
+and a guard that refuses concurrency 4 whenever the effective container memory limit is
+unknown — `--allow-unbounded-memory` permits only a concurrency-1 latency-only run.
 
 Acceptance, per `IG-6` and unchanged: verify p95 ≤ 250 ms at concurrency 4; peak RSS
 ≤ 25% of the container memory limit; a hash produced with different parameters still
