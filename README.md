@@ -3,30 +3,31 @@
 AI-assisted agricultural weather and climate planning for Indonesia. Twelve-month
 rolling outlook, crop planting windows, calendar UI, and an AI analyst.
 
-This repository is at **Phase 3 complete** — monorepo foundation, shared
-contracts, and the full PostgreSQL/PostGIS schema. Nothing agricultural is
-implemented yet: no weather ingestion, no agronomy evaluation, and no user-facing
-workflow.
+This repository is at **Phase 4 complete** — monorepo foundation, shared contracts,
+the full PostgreSQL/PostGIS schema, authentication, and tenant-scoped Farm and Field
+CRUD. The climate data plane is designed
+(`docs/architecture/climate-data-foundation.md`) and not implemented: no provider
+adapter, no ingestion job, no climate route, no agronomy evaluation.
 
-| Layer                                           | State                                                                                                                                     |
-| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| Monorepo                                        | implemented — pnpm workspaces + Turborepo, three applications and two shared packages, pinned versions                                    |
-| Contracts                                       | implemented — Zod schemas, provenance contract, canonical serialisation, SHA-256 golden vectors                                           |
-| Database                                        | implemented — 22 domain tables in schema `app`, RLS forced on every tenant-owned table, three explicit roles, hand-written SQL migrations |
-| API                                             | scaffold only — one health endpoint, no authentication, no domain routes                                                                  |
-| Worker                                          | scaffold only — process starts, no queue, no job                                                                                          |
-| Web                                             | scaffold only — Vite React shell, no screens                                                                                              |
-| Weather ingestion, agronomy engine, AI briefing | not implemented — their tables exist and are documented, the code does not                                                                |
+| Layer                                           | State                                                                                                                                                       |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Monorepo                                        | implemented — pnpm workspaces + Turborepo, three applications and two shared packages, pinned versions                                                      |
+| Contracts                                       | implemented — Zod schemas, provenance contract, canonical serialisation, SHA-256 golden vectors                                                             |
+| Database                                        | implemented — 23 tables in schema `app` (22 domain + `sessions`), RLS forced on every tenant-owned table, three explicit roles, hand-written SQL migrations |
+| API                                             | implemented — health, auth (register, login, logout, CSRF), and tenant-scoped Farm and Field CRUD; no climate routes                                        |
+| Worker                                          | scaffold only — process starts, no queue, no job                                                                                                            |
+| Web                                             | scaffold only — Vite React shell, no screens                                                                                                                |
+| Weather ingestion, agronomy engine, AI briefing | not implemented — their tables exist and are documented, the code does not                                                                                  |
 
-Next milestone: the authentication slice (`OPEN-01` — nothing can read a
-credential before a tenant context exists), then the first ingest (`OPEN-18` —
-the per-model `cell_key` rounding rule).
+Next milestone: Phase 5 — climate data foundation. Design first, then the provider
+adapter and normalization layer; the blockers are decisions, not code: the
+`cell_key` rounding rule (`OPEN-18`) and the Open-Meteo commercial plan (`OPEN-03`).
 
 ## Layout
 
 ```
 apps/web        React + Vite frontend (scaffold)
-apps/api        NestJS + Express HTTP API (health endpoint only)
+apps/api        NestJS + Express HTTP API (health, auth, farms, fields)
 apps/worker     background worker process (no queues yet)
 packages/contracts  Zod schemas, inferred types, provenance contract, canonical ordering
 packages/database   Prisma client, hand-written SQL migrations, role bootstrap, RLS and privilege verification

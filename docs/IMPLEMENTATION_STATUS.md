@@ -1145,3 +1145,61 @@ this task; `postgis_typmod_dims` returning `3` for such a typmod was measured on
 table instead. `db:reset` and `db:verify:probes` were not run (destructive / grant-mutating).
 
 Phases 4.5 and 4.6 remain **not started**.
+
+---
+
+## Phase 5 — Climate Data Foundation — **designed, not implemented**
+
+Status: **design only.** This phase produced one document and corrected the project
+status line; it added no source file, migration, Prisma model, contract, route,
+dependency, grant, or policy. The design is
+`docs/architecture/climate-data-foundation.md`.
+
+No Phase 5 sub-phase is started. `5.0` through `5.8` are a proposed sequence, not a
+record of work. Nothing in this section claims a provider adapter, an ingestion job,
+an aggregation, or a climate endpoint exists.
+
+| Item | State |
+|---|---|
+| Climate plane architecture, adapter boundary, storage and read path | designed (§5) |
+| Source evaluation, licensing posture, evidence freshness | designed (§4); evidence dated 2026-11-18 and **not re-tested** |
+| Reconciliation of the 13 existing authorities | designed (§2), with three documented-but-absent items (§3.5) |
+| Implementation sequence, 9 sub-phases | proposed (§8) |
+| Verification strategy | specified (§7); nothing implemented |
+| Decision register | 8 `OPEN-*` items assessed, **none closed** (§9) |
+| Owner decisions | 5 listed (§10) |
+| Migration | **none proposed** — the climate schema is already sufficient for a precipitation outlook |
+
+What was measured rather than assumed, as `migration_owner` on 2026-11-21:
+
+- Seven climate tables exist and are granted as documented: `outlook_cells` (10
+  columns), `forecast_runs` (9), `ingestion_runs` (15), `weather_records` (32),
+  `monthly_outlooks` (23), `climatology_normals` (11), `field_outlook_cells` (11,
+  `FORCE` RLS, no `app_system` grant). Every documented index exists under its
+  documented name, including `weather_records_live_key` (`NULLS NOT DISTINCT`) and
+  `monthly_outlooks_active_key`.
+- `app_api` holds only a **column** `INSERT` on `outlook_cells` (`provider`, `model`,
+  `cell_key`), so a cell's served coordinate must be filled by `app_system` — a
+  two-phase lifecycle no code implements yet.
+- `weather_records_data_class_check` admits only the four forecast classes, and
+  `monthly_outlooks_variable_check` admits only `precipitation`. Both are load-bearing
+  and both constrain what Phase 5 can ingest.
+- `apps/worker/src/main.ts` is a stub; no queue library, Redis client, scheduler, or
+  HTTP client is installed in any workspace package.
+
+Three divergences recorded, not silently patched:
+
+1. `background-processing.md` §10 names `sync_attempts`, a dead-letter surface, and a
+   sweep watermark. **None of those tables exist.**
+2. `tables-climate.md` §1 already anticipates the column-level `outlook_cells` grant
+   correctly; the second phase of the fill has no implementation.
+3. `weather.ts` `valueBase` accepts the broad `evaluationBasisSchema`, which includes
+   `mixed`, while `temporal-and-weather-semantics.md` §4 permits `mixed` only on a
+   container. `enums.ts` already exports the narrow `singleValueEvaluationBasisSchema`
+   that would fix it; the contract does not use it. This is a defect to fix in 5.0,
+   not a documentation change.
+
+What Phase 5 deliberately does **not** do: implement a provider adapter, add a
+worker, add a climate route, add a migration, close an `OPEN-*` item, or claim any
+forecast skill. Months 8–12 remain labelled climatology; BMKG stays disabled by
+default; `bias_corrected` stays `false`.
