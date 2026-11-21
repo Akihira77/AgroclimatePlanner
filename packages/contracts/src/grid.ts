@@ -1,0 +1,516 @@
+import { canonicalJson } from "./canonical.js";
+import { sha256Hex } from "./hash.js";
+
+/**
+ * Grid resolution and cell identity — `docs/architecture/climate-data-foundation.md`
+ * §5.2.2–§5.2.7.
+ *
+ * Six things stay separate, because merging them is the defect this module exists
+ * to prevent: the requested coordinate, the grid definition, the selected cell,
+ * the served coordinate, the interpolation flag, and the serialized `cellKey`.
+ * This module knows the first three. It never sees a served coordinate and it
+ * cannot rebuild one from a key.
+ *
+ * Every identity computation is integer micro-degrees. A `number` appears only in
+ * the returned `i`/`j` indices and in `spatialResolutionKm`, never as a
+ * coordinate.
+ */
+
+const MICRO = 1_000_000;
+const GLOBAL_SPAN_MICRO = 360 * MICRO;
+/** Five integer digits ≈ 99 999°, enough for any longitude representation. */
+const MAX_INTEGER_DIGITS = 5;
+
+/**
+ * A canonical decimal string: `0`, `-90`, `0.25`, `-6.210000`. No exponent, no
+ * leading `+`, no bare `.5`, at most six fractional digits.
+ */
+const DECIMAL_PATTERN = /^-?(0|[1-9]\d*)(?:\.(\d{1,6}))?$/;
+
+/**
+ * v1 supports one orientation only: rows grow northward and columns grow
+ * eastward from the south-west anchor of cell `(0, 0)`. A north-to-south or
+ * east-to-west axis is a different resolver, not a negative step, because a
+ * negative step would silently reverse the half-open interval rule as well.
+ */
+export const SUPPORTED_GRID_ORIENTATIONS = ["south-west"] as const;
+export type GridOrientation = (typeof SUPPORTED_GRID_ORIENTATIONS)[number];
+
+export type GridDomain = "global" | "bounded";
+
+export interface GridSpecInput {
+  readonly gridId: string;
+  readonly originLat: string;
+  readonly originLon: string;
+  readonly stepLat: string;
+  readonly stepLon: string;
+  readonly latRange: readonly [string, string];
+  readonly lonDomain: GridDomain;
+  readonly lonRange?: readonly [string, string];
+  readonly orientation: string;
+  readonly spatialResolutionKm: number;
+}
+
+export interface GridSpec {
+  readonly gridId: string;
+  readonly originLat: string;
+  readonly originLon: string;
+  readonly stepLat: string;
+  readonly stepLon: string;
+  readonly latRange: readonly [string, string];
+  readonly lonDomain: GridDomain;
+  readonly lonRange?: readonly [string, string];
+  readonly orientation: GridOrientation;
+  readonly rowCount: number;
+  readonly colCount: number;
+  readonly spatialResolutionKm: number;
+  readonly gridSpecHash: string;
+}
+
+export type GridConfigurationErrorCode =
+  | "unsupported_grid_orientation"
+  | "invalid_decimal"
+  | "invalid_step"
+  | "invalid_range"
+  | "invalid_domain"
+  | "precision_exceeds_grid"
+  | "grid_spec_hash_mismatch"
+  | "duplicate_grid_spec"
+  | "unknown_model";
+
+export class GridConfigurationError extends Error {
+  constructor(
+    readonly code: GridConfigurationErrorCode,
+    message: string,
+  ) {
+    super(`${code}: ${message}`);
+    this.name = "GridConfigurationError";
+  }
+}
+
+export type CellResolutionErrorCode = "invalid_coordinate" | "out_of_grid";
+
+export class CellResolutionError extends Error {
+  constructor(
+    readonly code: CellResolutionErrorCode,
+    message: string,
+  ) {
+    super(`${code}: ${message}`);
+    this.name = "CellResolutionError";
+  }
+}
+
+export interface ResolvedGridCell {
+  readonly gridId: string;
+  readonly gridSpecHash: string;
+  readonly i: number;
+  readonly j: number;
+  /** Anchor node of the cell, as a decimal string. Never a served coordinate. */
+  readonly nodeLat: string;
+  readonly nodeLon: string;
+  readonly cellKey: string;
+}
+
+interface Decimal {
+  readonly micro: number;
+  readonly decimals: number;
+}
+
+function readDecimal(value: string, code: GridConfigurationErrorCode): Decimal {
+  const match = DECIMAL_PATTERN.exec(value);
+  if (!match) {
+    throw new GridConfigurationError(code, `"${value}" is not a canonical decimal string`);
+  }
+  const fraction = match[2] ?? "";
+  const negative = value.startsWith("-");
+  const unsigned = negative ? value.slice(1) : value;
+  const [integerPart = ""] = unsigned.split(".");
+  if (integerPart.length > MAX_INTEGER_DIGITS) {
+    throw new GridConfigurationError(code, `"${value}" is out of the supported range`);
+  }
+  const unsignedMicro = Number(integerPart) * MICRO + Number(fraction.padEnd(6, "0"));
+  return {
+    micro: negative ? -unsignedMicro : unsignedMicro,
+    decimals: fraction.length,
+  };
+}
+
+function formatDecimal(micro: number, decimals: number): string {
+  const unit = 10 ** (6 - decimals);
+  if (micro % unit !== 0) {
+    throw new GridConfigurationError(
+      "precision_exceeds_grid",
+      `${micro}µ° cannot be written with ${decimals} decimal places`,
+    );
+  }
+  const negative = micro < 0;
+  const absolute = Math.abs(micro);
+  const integerPart = Math.trunc(absolute / MICRO);
+  const fractionPart = String(Math.trunc((absolute % MICRO) / unit)).padStart(decimals, "0");
+  return `${negative ? "-" : ""}${integerPart}.${fractionPart}`;
+}
+
+/**
+ * Mathematical floor division. `Math.floor(a / b)` is not used: it routes through
+ * a float, and an exact grid boundary is the one input where rounding must not
+ * decide the cell.
+ */
+function floorDiv(a: number, b: number): number {
+  const quotient = Math.trunc(a / b);
+  return a % b !== 0 && a < 0 !== b < 0 ? quotient - 1 : quotient;
+}
+
+interface GridPreimage {
+  readonly cellAnchor: GridOrientation;
+  readonly colCount: number;
+  readonly gridId: string;
+  readonly latMax: string;
+  readonly latMin: string;
+  readonly lonDomain: GridDomain;
+  readonly lonMax?: string;
+  readonly lonMin?: string;
+  readonly originLat: string;
+  readonly originLon: string;
+  readonly rowCount: number;
+  readonly spatialResolutionKm: number;
+  readonly stepLat: string;
+  readonly stepLon: string;
+}
+
+/**
+ * Hash input, deliberately flat. `canonicalJson` refuses an array with no declared
+ * ordering rule, and a grid range is ordered data, not a set — flattening avoids
+ * teaching the shared canonicaliser about a new array kind for one hash.
+ */
+function preimageOf(spec: Omit<GridSpec, "gridSpecHash">): GridPreimage {
+  return spec.lonDomain === "bounded"
+    ? {
+        cellAnchor: spec.orientation,
+        colCount: spec.colCount,
+        gridId: spec.gridId,
+        latMax: spec.latRange[1],
+        latMin: spec.latRange[0],
+        lonDomain: spec.lonDomain,
+        lonMax: spec.lonRange?.[1] ?? "",
+        lonMin: spec.lonRange?.[0] ?? "",
+        originLat: spec.originLat,
+        originLon: spec.originLon,
+        rowCount: spec.rowCount,
+        spatialResolutionKm: spec.spatialResolutionKm,
+        stepLat: spec.stepLat,
+        stepLon: spec.stepLon,
+      }
+    : {
+        cellAnchor: spec.orientation,
+        colCount: spec.colCount,
+        gridId: spec.gridId,
+        latMax: spec.latRange[1],
+        latMin: spec.latRange[0],
+        lonDomain: spec.lonDomain,
+        originLat: spec.originLat,
+        originLon: spec.originLon,
+        rowCount: spec.rowCount,
+        spatialResolutionKm: spec.spatialResolutionKm,
+        stepLat: spec.stepLat,
+        stepLon: spec.stepLon,
+      };
+}
+
+function requireLatticePoint(delta: number, step: number, what: string): void {
+  if (delta % step !== 0) {
+    throw new GridConfigurationError("invalid_range", `${what} is not on the grid lattice`);
+  }
+}
+
+function requireMultipleOf(
+  span: number,
+  step: number,
+  code: GridConfigurationErrorCode,
+  what: string,
+): number {
+  if (span <= 0 || step <= 0 || span % step !== 0) {
+    throw new GridConfigurationError(code, `${what} must be a positive whole number of steps`);
+  }
+  return span / step;
+}
+
+/**
+ * Validates a grid definition and freezes its identity.
+ *
+ * The orientation check runs first, so a provider whose axis is not yet supported
+ * fails as `unsupported_grid_orientation` and not as a confusing range error.
+ */
+export function defineGridSpec(input: GridSpecInput): GridSpec {
+  const orientation = SUPPORTED_GRID_ORIENTATIONS.find(
+    (supported) => supported === input.orientation,
+  );
+  if (!orientation) {
+    throw new GridConfigurationError(
+      "unsupported_grid_orientation",
+      `"${input.orientation}" is not supported; v1 supports ${SUPPORTED_GRID_ORIENTATIONS.join(", ")}`,
+    );
+  }
+  if (input.gridId.trim().length === 0) {
+    throw new GridConfigurationError("invalid_domain", "gridId must not be empty");
+  }
+  if (!(input.spatialResolutionKm > 0) || !Number.isFinite(input.spatialResolutionKm)) {
+    throw new GridConfigurationError("invalid_range", "spatialResolutionKm must be positive");
+  }
+
+  const originLat = readDecimal(input.originLat, "invalid_decimal");
+  const originLon = readDecimal(input.originLon, "invalid_decimal");
+  const stepLat = readDecimal(input.stepLat, "invalid_decimal");
+  const stepLon = readDecimal(input.stepLon, "invalid_decimal");
+  const latMin = readDecimal(input.latRange[0], "invalid_decimal");
+  const latMax = readDecimal(input.latRange[1], "invalid_decimal");
+
+  if (stepLat.micro <= 0 || stepLon.micro <= 0) {
+    throw new GridConfigurationError(
+      "invalid_step",
+      "stepLat and stepLon must be positive; a reversed axis is an unsupported orientation",
+    );
+  }
+  if (latMin.micro < -90 * MICRO || latMax.micro > 90 * MICRO || latMax.micro <= latMin.micro) {
+    throw new GridConfigurationError("invalid_range", "latRange must be inside [-90, 90]");
+  }
+  // Both bounds must be lattice points of the origin. Any lattice point is
+  // allowed, not only the origin: a grid anchored at 0° can legitimately cover
+  // -90°, and its row indices are then negative rather than invalid.
+  requireLatticePoint(latMin.micro - originLat.micro, stepLat.micro, "latRange lower bound");
+  requireLatticePoint(latMax.micro - originLat.micro, stepLat.micro, "latRange upper bound");
+  const rowCount = requireMultipleOf(
+    latMax.micro - latMin.micro,
+    stepLat.micro,
+    "invalid_range",
+    "latRange span",
+  );
+
+  let lonRange: readonly [string, string] | undefined;
+  let colCount: number;
+  if (input.lonDomain === "bounded") {
+    if (!input.lonRange) {
+      throw new GridConfigurationError("invalid_domain", "a bounded grid requires lonRange");
+    }
+    const lonMin = readDecimal(input.lonRange[0], "invalid_decimal");
+    const lonMax = readDecimal(input.lonRange[1], "invalid_decimal");
+    requireLatticePoint(lonMin.micro - originLon.micro, stepLon.micro, "lonRange lower bound");
+    requireLatticePoint(lonMax.micro - originLon.micro, stepLon.micro, "lonRange upper bound");
+    colCount = requireMultipleOf(
+      lonMax.micro - lonMin.micro,
+      stepLon.micro,
+      "invalid_range",
+      "lonRange span",
+    );
+    lonRange = [input.lonRange[0], input.lonRange[1]];
+  } else if (input.lonDomain === "global") {
+    if (input.lonRange) {
+      throw new GridConfigurationError("invalid_domain", "a global grid does not take lonRange");
+    }
+    colCount = requireMultipleOf(GLOBAL_SPAN_MICRO, stepLon.micro, "invalid_step", "a global step");
+  } else {
+    throw new GridConfigurationError(
+      "invalid_domain",
+      `"${String(input.lonDomain)}" is not a longitude domain`,
+    );
+  }
+
+  const withoutHash: Omit<GridSpec, "gridSpecHash"> = {
+    gridId: input.gridId,
+    originLat: input.originLat,
+    originLon: input.originLon,
+    stepLat: input.stepLat,
+    stepLon: input.stepLon,
+    latRange: [input.latRange[0], input.latRange[1]],
+    lonDomain: input.lonDomain,
+    ...(lonRange ? { lonRange } : {}),
+    orientation,
+    rowCount,
+    colCount,
+    spatialResolutionKm: input.spatialResolutionKm,
+  };
+
+  return Object.freeze({
+    ...withoutHash,
+    gridSpecHash: sha256Hex(canonicalJson(preimageOf(withoutHash))),
+  });
+}
+
+/** Fails when a persisted or hand-written spec no longer matches its own hash. */
+export function assertGridSpecIntegrity(spec: GridSpec): void {
+  const recomputed = defineGridSpec({
+    gridId: spec.gridId,
+    originLat: spec.originLat,
+    originLon: spec.originLon,
+    stepLat: spec.stepLat,
+    stepLon: spec.stepLon,
+    latRange: spec.latRange,
+    lonDomain: spec.lonDomain,
+    ...(spec.lonRange ? { lonRange: spec.lonRange } : {}),
+    orientation: spec.orientation,
+    spatialResolutionKm: spec.spatialResolutionKm,
+  });
+  if (recomputed.gridSpecHash !== spec.gridSpecHash) {
+    throw new GridConfigurationError(
+      "grid_spec_hash_mismatch",
+      `gridId "${spec.gridId}" was edited in place; a re-grid is a new model`,
+    );
+  }
+}
+
+export interface GridResolutionRequest {
+  readonly lat: string;
+  readonly lon: string;
+}
+
+/**
+ * Maps a **requested** coordinate to a cell. The returned anchor is computed from
+ * the cell indices; it is never the requested coordinate rounded to display
+ * precision, and it is never the served coordinate.
+ *
+ * `decimals` covers the origin as well as the step: an origin of `0.123456` on a
+ * `0.25` grid needs six places, and deriving precision from the step alone would
+ * collapse distinct cells onto one key.
+ */
+export function resolveGridCell(spec: GridSpec, request: GridResolutionRequest): ResolvedGridCell {
+  const lat = readCoordinate(request.lat);
+  const lon = readCoordinate(request.lon);
+
+  if (lat.micro < microOf(spec.latRange[0]) || lat.micro > microOf(spec.latRange[1])) {
+    throw new CellResolutionError(
+      "out_of_grid",
+      `latitude ${request.lat} is outside ${spec.latRange[0]}..${spec.latRange[1]}`,
+    );
+  }
+
+  const originLatMicro = microOf(spec.originLat);
+  const originLonMicro = microOf(spec.originLon);
+  const stepLatMicro = microOf(spec.stepLat);
+  const stepLonMicro = microOf(spec.stepLon);
+
+  let lonMicro = lon.micro;
+  if (spec.lonDomain === "global") {
+    // Longitude wraps only around a global grid's own origin. Latitude never wraps.
+    while (lonMicro < originLonMicro) lonMicro += GLOBAL_SPAN_MICRO;
+    while (lonMicro >= originLonMicro + GLOBAL_SPAN_MICRO) lonMicro -= GLOBAL_SPAN_MICRO;
+  } else {
+    const lonMin = microOf(spec.lonRange?.[0] ?? spec.originLon);
+    const lonMax = microOf(spec.lonRange?.[1] ?? spec.originLon);
+    if (lonMicro < lonMin || lonMicro > lonMax) {
+      throw new CellResolutionError(
+        "out_of_grid",
+        `longitude ${request.lon} is outside ${spec.lonRange?.[0]}..${spec.lonRange?.[1]}`,
+      );
+    }
+  }
+
+  const rowStart = (microOf(spec.latRange[0]) - originLatMicro) / stepLatMicro;
+  const colStart =
+    spec.lonDomain === "bounded"
+      ? (microOf(spec.lonRange?.[0] ?? spec.originLon) - originLonMicro) / stepLonMicro
+      : 0;
+
+  const i = floorDiv(lat.micro - originLatMicro, stepLatMicro);
+  const j = floorDiv(lonMicro - originLonMicro, stepLonMicro);
+  if (
+    i < rowStart ||
+    i >= rowStart + spec.rowCount ||
+    j < colStart ||
+    j >= colStart + spec.colCount
+  ) {
+    throw new CellResolutionError(
+      "out_of_grid",
+      `cell (${i}, ${j}) is outside the ${spec.rowCount}×${spec.colCount} grid`,
+    );
+  }
+
+  const nodeLatMicro = originLatMicro + i * stepLatMicro;
+  const nodeLonMicro = originLonMicro + j * stepLonMicro;
+  const decimals = Math.max(
+    2,
+    decimalsOf(spec.originLat),
+    decimalsOf(spec.originLon),
+    decimalsOf(spec.stepLat),
+    decimalsOf(spec.stepLon),
+  );
+  const nodeLat = formatDecimal(nodeLatMicro, decimals);
+  const nodeLon = formatDecimal(nodeLonMicro, decimals);
+
+  return Object.freeze({
+    gridId: spec.gridId,
+    gridSpecHash: spec.gridSpecHash,
+    i,
+    j,
+    nodeLat,
+    nodeLon,
+    cellKey: `${nodeLat},${nodeLon}`,
+  });
+}
+
+function readCoordinate(value: string): Decimal {
+  const match = DECIMAL_PATTERN.exec(value);
+  const integerPart = (value.startsWith("-") ? value.slice(1) : value).split(".")[0] ?? "";
+  if (!match || integerPart.length > MAX_INTEGER_DIGITS) {
+    throw new CellResolutionError(
+      "invalid_coordinate",
+      `"${value}" is not a coordinate decimal with at most six places`,
+    );
+  }
+  return readDecimal(value, "invalid_decimal");
+}
+
+function microOf(value: string): number {
+  return readDecimal(value, "invalid_decimal").micro;
+}
+
+function decimalsOf(value: string): number {
+  const match = DECIMAL_PATTERN.exec(value);
+  return match?.[2]?.length ?? 0;
+}
+
+export interface GridRegistryEntry {
+  readonly model: string;
+  readonly spec: GridSpec;
+}
+
+export interface GridRegistry {
+  resolve(model: string, request: GridResolutionRequest): ResolvedGridCell;
+  specFor(model: string): GridSpec;
+  models(): readonly string[];
+}
+
+/**
+ * One `GridSpec` per model, enforced at registration. A second spec for a model
+ * that already has one is a re-grid, and a re-grid is a new `model` string — not
+ * an in-place edit (5.2.5).
+ */
+export function createGridRegistry(entries: readonly GridRegistryEntry[]): GridRegistry {
+  const byModel = new Map<string, GridSpec>();
+  for (const entry of entries) {
+    assertGridSpecIntegrity(entry.spec);
+    if (byModel.has(entry.model)) {
+      throw new GridConfigurationError(
+        "duplicate_grid_spec",
+        `model "${entry.model}" already has a grid spec; a re-grid needs a new model string`,
+      );
+    }
+    byModel.set(entry.model, entry.spec);
+  }
+  return Object.freeze({
+    specFor(model: string): GridSpec {
+      const spec = byModel.get(model);
+      if (!spec) {
+        throw new GridConfigurationError(
+          "unknown_model",
+          `model "${model}" has no validated grid spec`,
+        );
+      }
+      return spec;
+    },
+    resolve(model: string, request: GridResolutionRequest): ResolvedGridCell {
+      return resolveGridCell(this.specFor(model), request);
+    },
+    models(): readonly string[] {
+      return [...byModel.keys()];
+    },
+  });
+}

@@ -1148,16 +1148,17 @@ Phases 4.5 and 4.6 remain **not started**.
 
 ---
 
-## Phase 5 — Climate Data Foundation — **designed, not implemented**
+## Phase 5 — Climate Data Foundation — **5.0 contracts implemented; 5.1–5.8 not started**
 
-Status: **design only.** This phase produced one architecture document plus a
-reconciliation pass over the decision register and the queue design; it added no
-source file, migration, Prisma model, contract, route, dependency, grant, or policy.
-The design is `docs/architecture/climate-data-foundation.md`.
+Status: **5.0 partially implemented.** Phase 5.0 added contract and resolver code
+to `packages/contracts`, with tests. It added no migration, Prisma model, route,
+dependency, grant, policy, worker, provider adapter, queue, or persistence. The
+design is `docs/architecture/climate-data-foundation.md`.
 
-No Phase 5 sub-phase is started. `5.0` through `5.8` are a proposed sequence, not a
-record of work. Nothing in this section claims a provider adapter, an ingestion job,
-an aggregation, or a climate endpoint exists.
+5.0's contract scope is started but not complete: the `OPEN-14` vocabulary freeze
+and the job-lifecycle interface remain. Sub-phases 5.1 through 5.8 are **not
+started**, and nothing here claims a provider adapter, an ingestion job, an
+aggregation, or a climate endpoint exists.
 
 | Item | State |
 |---|---|
@@ -1196,8 +1197,9 @@ Three divergences recorded, not silently patched:
 3. `weather.ts` `valueBase` accepts the broad `evaluationBasisSchema`, which includes
    `mixed`, while `temporal-and-weather-semantics.md` §4 permits `mixed` only on a
    container. `enums.ts` already exports the narrow `singleValueEvaluationBasisSchema`
-   that would fix it; the contract does not use it. This is a defect to fix in 5.0,
-   not a documentation change.
+   that would fix it; the contract did not use it. **Fixed in 5.0** — `valueBase` now
+   uses `singleValueEvaluationBasisSchema`, and a test proves `mixed` is rejected on a
+   single value while remaining legal on a container.
 
 What Phase 5 deliberately does **not** do: implement a provider adapter, add a
 worker, add a climate route, add a migration, close an `OPEN-*` item, or claim any
@@ -1212,13 +1214,27 @@ of it is documentation; no sub-phase moved.
 | Item | Outcome |
 |---|---|
 | Months 8–12 count | Corrected from "eight months" to **five** (`OPEN-18`-independent). A 12-month response always has twelve entries; months 8–12 are `climatology` with `beyond_horizon`, months 0–7 are `pending` when no forecast exists. The temporal contract was not changed |
-| `OPEN-18` | Generic resolver contract **approved**: provider/model-specific, explicit origin/spacing/orientation/revision, decimal-integer arithmetic, re-grid = new `model` string. Five provider grid configurations remain **pending external evidence**; resolver and golden vectors are **not started** |
+| `OPEN-18` | Generic resolver contract **approved and implemented** (see below): provider/model-specific, explicit origin/spacing/orientation/revision, decimal-integer arithmetic, re-grid = new `model` string. Five provider grid configurations remain **pending external evidence** |
 | `Q-P5-1` queue backing | **PostgreSQL-first**, behind a job interface: atomic claim, lease expiry, retry scheduling, in-place `attempt`, idempotency key, dead-letter status, shutdown, observability. No `jobs` table, no code, no dependency |
 | `OPEN-03` Open-Meteo plan | **Deferred**, not closed. No paid-plan commitment; commercial operation conditional on verified licensing and an appropriate plan |
 | `OPEN-05` raw payload retention | **Deferred** for the initial release. `reproducible: false` + `raw_payload_not_retained`; that is not the same as missing provenance |
 | `OPEN-16` weather-record retention | **No automatic pruning** until at least one month of measured 5.4 ingestion; never delete provenance or audit data silently |
 | Register consistency | The disposition counts said 18 DEFERRED / 9 BLOCKED, but the table held seven BLOCKED rows. Recomputed as 2 RESOLVED / 19 DEFERRED / 8 BLOCKED after `OPEN-18` moved; `open-decisions.md` §6 records `Q-P5-1`..`Q-P5-4` without changing the 29-item count |
 
-What remains true: Phase 5 is **designed, not implemented**; `5.0`–`5.8` are a proposed
-sequence with no work started; no migration is proposed by the phase; months 8–12 stay
+What remains true: no migration is proposed by the phase; months 8–12 stay
 climatology; BMKG stays disabled by default; `bias_corrected` stays `false`.
+Sub-phases 5.1–5.8 have no work started.
+
+### Phase 5.0 — contracts and grid resolver — 2026-11-21
+
+| Item | State |
+|---|---|
+| `packages/contracts/src/climate.ts` | **Implemented.** `ForecastRun` identity + row, `IngestionRun` identity + row, `ingestionVersionOf`, `AdapterResult` (five classes), `MonthlyOutlook` + lead-month band rules |
+| `packages/contracts/src/grid.ts` | **Implemented.** `GridSpec`, `defineGridSpec`, `resolveGridCell`, `createGridRegistry`, `gridSpecHash`; integer micro-degree arithmetic; `south-west` orientation only |
+| `packages/contracts/src/provenance.ts` | **Implemented.** `Reproducibility` and `DerivationProvenance`; empty `inputRefs` fails on `inputRefs`, not as "not reproducible" |
+| `packages/contracts/src/weather.ts` | **Fixed.** `valueBase` uses `singleValueEvaluationBasisSchema`; `mixed` is container-only |
+| Tests | `grid.test.ts` (vectors 1–18 of §5.2.7, orientation, lattice, hash, registry) and `climate.test.ts` (bases, identities, adapter classes, reproducibility, month states) |
+| Executed | `pnpm --filter @agroclimate/contracts test` — **304 passed**; `typecheck` and `lint` clean |
+| Not implemented | No adapter, no HTTP client, no queue, no worker runtime, no migration, no Prisma change, no route, no dependency, no persistence. No provider grid is asserted |
+| Still open in 5.0 | `OPEN-14` vocabulary freeze; the job-lifecycle interface (now scoped to 5.3) |
+| Layout deviation | Resolver is `packages/contracts/src/grid.ts`, not `packages/weather-core/cells/`; creating a package for one pure module had no consumer and `weather-core` is 5.1's |

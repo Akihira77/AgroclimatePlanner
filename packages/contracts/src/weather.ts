@@ -1,13 +1,13 @@
 import { z } from "zod";
 import {
   dataAvailabilitySchema,
-  evaluationBasisSchema,
+  singleValueEvaluationBasisSchema,
   isoInstantSchema,
   missingReasonSchema,
   opaqueIdSchema,
   type DataAvailability,
-  type EvaluationBasis,
   type MissingReason,
+  type SingleValueEvaluationBasis,
 } from "./enums.js";
 
 /**
@@ -36,9 +36,15 @@ export interface SourceFreshnessType {
   reason?: MissingReason;
 }
 
-/** Fields every variant carries. `dataClass` is added per variant as a literal. */
+/**
+ * Fields every variant carries. `dataClass` is added per variant as a literal.
+ *
+ * `evaluationBasis` uses the **single-value** enum: `mixed` describes a container
+ * that aggregates several bases and is a modelling bug on one value
+ * (`temporal-and-weather-semantics.md` §4).
+ */
 const valueBase = {
-  evaluationBasis: evaluationBasisSchema,
+  evaluationBasis: singleValueEvaluationBasisSchema,
   dataAvailability: dataAvailabilitySchema,
   amount: z.number().optional(),
   unit: z.string().min(1),
@@ -147,4 +153,4 @@ export type BaselineValue = z.infer<typeof baselineValueSchema>;
 export type DatasetValue = z.infer<typeof datasetValueSchema>;
 export type ObservationValue = z.infer<typeof observationValueSchema>;
 
-export type { EvaluationBasis };
+export type { SingleValueEvaluationBasis };

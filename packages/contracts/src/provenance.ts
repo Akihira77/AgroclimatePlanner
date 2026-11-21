@@ -189,3 +189,36 @@ export const derivationDescriptorSchema = z.discriminatedUnion("artifact", [
   }),
 ]);
 export type DerivationDescriptor = z.infer<typeof derivationDescriptorSchema>;
+
+/**
+ * `reproducible: false` means the **input bytes** are gone, not that the
+ * provenance is gone. A `raw_payload_not_retained` artifact still names its
+ * provider, model, run ids, cell, coordinates, initialisation time, and
+ * derivation version; what it cannot do is re-run the adapter on the original
+ * payload (`climate-data-foundation.md` §5.4, `OPEN-05`).
+ *
+ * The two states are therefore separate fields and separate failures:
+ * - `reproducible` is about the retained payload;
+ * - `inputRefs` is about the provenance that must exist regardless.
+ *
+ * An artifact with no `inputRefs` is a provenance defect and is rejected on
+ * `inputRefs`; it must never be reported as "not reproducible".
+ */
+export const unreproducibleReasonSchema = z.literal("raw_payload_not_retained");
+export type UnreproducibleReason = z.infer<typeof unreproducibleReasonSchema>;
+
+export const reproducibilitySchema = z.discriminatedUnion("reproducible", [
+  z.strictObject({ reproducible: z.literal(true) }),
+  z.strictObject({ reproducible: z.literal(false), reason: unreproducibleReasonSchema }),
+]);
+export type Reproducibility = z.infer<typeof reproducibilitySchema>;
+
+export const derivationProvenanceSchema = z.strictObject({
+  /** Required, and required to be non-empty: provenance is not optional. */
+  inputRefs: z.array(dataInputRefSchema).min(1),
+  inputSnapshotHash: opaqueIdSchema,
+  derivationVersion: z.string().min(1),
+  computedAt: isoInstantSchema,
+  reproducibility: reproducibilitySchema,
+});
+export type DerivationProvenance = z.infer<typeof derivationProvenanceSchema>;

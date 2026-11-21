@@ -73,7 +73,7 @@ part of it.
 | `OPEN-13` | P1 | authentication | after Phase 3 | **none** — resolved 2026-11-20 | nothing: PostgreSQL `app.sessions` was selected (`ADR-005`) and shipped in S5 | nothing on the storage question; the request path that uses the table arrived with `S8`, closing `OPEN-01` | everything — the table exists, is granted, and is verified on canonical |
 | `OPEN-17` | P1 | field snapshot | after Phase 3 | **hard**, for point-shaped fields only | what `areaHa` means for a `POINT`-shaped field | field snapshot creation for point-shaped fields, and every artifact derived from one | the DDL (a `POINT` row is still storable); `POLYGON`/`MULTIPOLYGON` fields end to end |
 | `OPEN-21` | P1 | field snapshot | after Phase 3 | **hard** | the `irrigationAvailable` boolean mapping and three field vocabularies | field → snapshot construction | the DDL — the columns stay unconstrained `text`; every non-snapshot path |
-| `OPEN-18` | P1 | cell resolution | after Phase 3 | **conditional** — generic resolver approved 2026-11-21; per-model grid configuration pending external evidence | the per-provider grid origin, spacing, orientation, and revision | cell identity, and field → cell resolution, for a model whose grid configuration is unvalidated | the DDL (`cell_key` is `text` for exactly this reason), the catalog, every query that reads an already-keyed cell, and the now-approved generic resolver contract |
+| `OPEN-18` | P1 | cell resolution | after Phase 3 | **conditional** — generic resolver implemented and tested 2026-11-21; per-model grid configuration pending external evidence | the per-provider grid origin, spacing, orientation, and revision | cell identity, and field → cell resolution, for a model whose grid configuration is unvalidated | the DDL (`cell_key` is `text` for exactly this reason), the catalog, every query that reads an already-keyed cell, and the now-approved generic resolver contract |
 | `OPEN-26` | P1 | window write | after Phase 3 | **hard** | the six-check `EvidenceSegment` partition validator | persisting a `planting_windows` row | the table, its index, every read path, `suitability_runs`, `ai_briefings` |
 | `OPEN-27` | P1 | worker | after Phase 3 | **hard** | how the worker learns which fields a cell serves | `recompute.windows` — the job that delivers a new forecast to a dashboard | the DDL **and** the grants, which ship the documented default: no `app_system` grant on a tenant-owned table |
 | `OPEN-11` | P1 | AI slice | after Phase 3 | **hard** | the `ClimateBriefing` body shape | writing or validating an `ai_briefings` row | the `ai_briefings` DDL; the table is createable exactly as specified, it simply cannot yet hold a valid document |
@@ -259,8 +259,14 @@ operator discipline. The full contract is `docs/architecture/climate-data-founda
 
 **Still open:** the five provider grid configurations — origin, spacing, and axis
 orientation — which need documentation or one measured request→served pair.
-**Still unbuilt:** the resolver, its twelve golden vectors, and every field→cell
-write.
+**Built:** `packages/contracts/src/grid.ts` — `defineGridSpec`, `resolveGridCell`,
+`createGridRegistry`, `gridSpecHash`, integer micro-degree arithmetic, `south-west`
+orientation only. Eighteen synthetic golden vectors executed in
+`packages/contracts/src/grid.test.ts`, including the F-01 origin-precision cases and
+the F-02 orientation rejection.
+
+**Still unbuilt:** every field→cell write, and every real provider grid. The
+resolver exists; a model cannot ingest until its configuration is validated.
 
 **Revised would-be-settled-by:** a validated `GridSpec` per model, not a resolution
 figure.

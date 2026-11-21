@@ -342,19 +342,19 @@ configurations remain pending external evidence** and are not asserted here.
 #### 5.2.2 `GridSpec` — the only shape a resolver accepts
 
 ```ts
-// packages/weather-core/cells/grid-spec.ts — design sketch, not yet written
+// packages/contracts/src/grid.ts — implemented
 interface GridSpec {
   readonly gridId: string; // stable id of *this definition*, e.g. "synthetic-1deg"
-  readonly originLat: DecimalString; // node of index (0, 0)
-  readonly originLon: DecimalString;
-  readonly stepLat: DecimalString; // positive; row spacing
-  readonly stepLon: DecimalString; // positive; column spacing
-  readonly latRange: [DecimalString, DecimalString];
+  readonly originLat: string; // node of index (0, 0)
+  readonly originLon: string;
+  readonly stepLat: string; // positive; row spacing
+  readonly stepLon: string; // positive; column spacing
+  readonly latRange: readonly [string, string]; // both bounds are lattice points
   readonly lonDomain: "global" | "bounded";
-  readonly lonRange?: [DecimalString, DecimalString]; // required when bounded
-  readonly rows?: number; // required when bounded
-  readonly cols?: number; // required when bounded
-  readonly cellAnchor: "south-west"; // v1: the only supported anchor
+  readonly lonRange?: readonly [string, string]; // required when bounded
+  readonly orientation: "south-west"; // v1: the only supported orientation
+  readonly rowCount: number; // derived: (latMax - latMin) / stepLat
+  readonly colCount: number; // derived: 360 / stepLon, or (lonMax - lonMin) / stepLon
   readonly spatialResolutionKm: number;
   readonly gridSpecHash: string; // sha256 of the canonical JSON of every other field
 }
@@ -369,10 +369,19 @@ Rules:
 2. **Orientation is a resolver property, not a sign trick.** `stepLat` and
    `stepLon` are positive; the anchor names the corner. A provider with a
    north-to-south axis needs a resolver implementation, not a negative step.
-3. **v1 supports regular lat/lon grids only.** A curvilinear or genuinely reduced
+3. **v1 supports one orientation: `south-west`.** Rows grow northward and columns
+   grow eastward from `(originLat, originLon)`; a cell owns
+   `[node, node + step)` on both axes. A north-to-south or east-to-west axis is a
+   different resolver, not a negative step, and `defineGridSpec` rejects it with
+   the typed `unsupported_grid_orientation` code. Nothing is silently flipped.
+4. **v1 supports regular lat/lon grids only.** A curvilinear or genuinely reduced
    grid that cannot be expressed as `GridSpec` must fail as `provider_changed`
    rather than be approximated by a rectangle.
-4. **`gridId` binds one-to-one to `model`.** The registry refuses to bind two
+5. **A range bound must be a lattice point of the origin.** `(latMin - originLat)`
+   and `(latMax - originLat)` must be whole multiples of `stepLat`, and the same
+   for a bounded lon range. A grid anchored at 0° may therefore cover −90° with
+   negative row indices; an offset lattice is rejected as `invalid_range`.
+6. **`gridId` binds one-to-one to `model`.** The registry refuses to bind two
    specs to one model, and `gridSpecHash` is asserted per model in a test. Editing
    a spec in place therefore fails the suite; a real re-grid creates a new `model`
    string (5.2.5).
@@ -387,10 +396,10 @@ resolve(spec, requestedLat, requestedLon):
      lonDomain = "bounded" → reject unless lon is inside lonRange
   4. i = floorDiv(latµ - originLatµ, stepLatµ)
      j = floorDiv(lonµ - originLonµ, stepLonµ)
-  5. bounded grids: reject unless i ∈ [0, rows) and j ∈ [0, cols)
+  5. bounded grids: reject unless i and j are inside the range's lattice window
   6. nodeLatµ = originLatµ + i × stepLatµ
      nodeLonµ = originLonµ + j × stepLonµ
-  7. key = serialise(nodeLatµ, nodeLonµ, decimals(spec))
+  7. key = serialise(nodeLatµ, nodeLonµ, decimals(spec))   // origin and step
   8. return { i, j, nodeLat, nodeLon, key, gridSpecHash }
 ```
 
@@ -415,9 +424,11 @@ provider distinguishes. Latitude is never wrapped.
 
 `cellKey = "<lat>,<lon>"`, produced by one formatter:
 
-- `decimals = max(2, decimalsOf(stepLat), decimalsOf(stepLon))`. A step needing more
-  places than the resulting format allows is a configuration error, rejected at
-  registry load, not at ingest.
+- `decimals = max(2, decimalsOf(originLat), decimalsOf(originLon), decimalsOf(stepLat), decimalsOf(stepLon))`.
+  The **origin** participates: an origin of `0.123456` on a `0.25` grid needs six
+  places, and deriving precision from the step alone would collapse distinct cells
+  onto one key. A value needing more places than six is rejected at registry load,
+  not at ingest. (Review finding **F-01**.)
 - Fixed-point, no exponent, no leading `+`, no spaces, negative allowed:
   `-6.25,106.75`.
 - The value comes from the **integer node coordinate**, never from rounding the
@@ -464,11 +475,15 @@ Until a row is validated, the resolver exists but that model cannot ingest. That
 `BLOCKED_EXTERNAL_INPUT` in the decision register, not a design gap, and it is why
 5.2's acceptance test is written against synthetic grids.
 
-#### 5.2.7 Golden-vector specification (required test, not yet written)
+#### 5.2.7 Golden-vector specification (implemented)
 
 Every vector is `(grid, input) → (i, j, key)`. The grids are **synthetic and
 labelled as such**; none is a claim about a real provider. `origin` and `step` are
 degrees, `domain` is `global` or `bounded`.
+
+Vectors 1–18 are executed in `packages/contracts/src/grid.test.ts`. Vectors 13–16
+exist because of review finding **F-01** (serialization precision), 17 because of
+**F-02** (axis orientation).
 
 | # | Grid: origin / step / domain | Input | `(i, j)` | Key | Served (synthetic) | Proves |
 |---|---|---|---|---|---|---|
@@ -480,10 +495,16 @@ degrees, `domain` is `global` or `bounded`.
 | 6 | `(-90,-180)` / `0.05,0.05` / bounded | `(-6.21, 106.79)` | `(1675, 5735)` | `-6.25,106.75` | `-6.25,106.75` | non-zero origin, negative latitude, floor not trunc |
 | 7 | `(0,0)` / `0.25,0.25` / global | `(-6.21, 106.79)` | `(-25, 427)` | `-6.25,106.75` | `-6.25,106.75` | one resolution |
 | 8 | `(0,0)` / `0.4,0.4` / global | `(-6.21, 106.79)` | `(-16, 266)` | `-6.40,106.40` | `-6.40,106.40` | a different resolution for the same input yields a different cell |
-| 9 | `(0,0)` / `1,1` / global | `(-0.1, -0.1)` | `(-1, -1)` | `-1.00,-1.00` | `-1.00,-1.00` | truncation would give `0.00,0.00` |
+| 9 | `(0,0)` / `1,1` / bounded `(-180,180)` | `(-0.1, -0.1)` | `(-1, -1)` | `-1.00,-1.00` | `-1.00,-1.00` | truncation would give `0.00,0.00`; bounded so wrapping does not apply |
 | 10 | `(0,0)` / `1,1` / global | `(0, 359.5)` and `(0, -0.5)` | `(0, 359)` | `0.00,359.00` | `0.00,359.00` | longitude wrapping, both inputs agree |
 | 11 | `(0,0)` / `1,1` / bounded, `latRange=(-90,90)`, `lonRange=(0,10)` | `(91, 0)` and `(0, 400)` | — | typed `out_of_grid` | — | invalid input produces no cell |
 | 12 | same origin/step, different `gridId` | `(0.5, 0.5)` | same `(0,0)` | same key | `0.00,0.00` | a revision is a new **model**, not a new key format |
+| 13 | origin `0.123456` / `0.25,0.25` / bounded `(0.123456,10.123456)`×`(0,10)` | `(0.2, 0.2)` | `(0, 0)` | `0.123456,0.000000` | `0.123456,0.000000` | **F-01**: the origin needs more places than the step; two decimals would have written `0.12` |
+| 14 | origin `10.5` / `0.25,0.25` / bounded `(10.5,12.5)`×`(10.5,12.5)` | `(10.6, 10.6)` | `(0, 0)` | `10.50,10.50` | `10.50,10.50` | **F-01**: a non-zero fractional origin stays exact |
+| 15 | origin `-10.5` / `0.25,0.25` / bounded `(-10.5,10.5)` | `(-0.6, -0.6)` | `(39, 39)` | `-0.75,-0.75` | `-0.75,-0.75` | **F-01**: negative origin and negative anchor |
+| 16 | vector 6's grid, re-resolved at vector 6's anchor | `(-6.25, 106.75)` | `(1675, 5735)` | `-6.25,106.75` | `-6.25,106.75` | **F-01**: serialization round-trips without losing the integer micro-degree node |
+| 17 | any grid with `orientation: "north-west"` | `(0.5, 0.5)` | — | typed `unsupported_grid_orientation` | — | **F-02**: an unsupported axis is rejected, never flipped by a negative step |
+| 18 | origin `0` / `0.25,0.25` / bounded `(0.1,10)` | `(0.5, 0.5)` | — | typed `invalid_range` | — | a range bound that is not a lattice point is a configuration error |
 
 Every synthetic grid is node-serving, so `served` equals the anchor. A live provider
 that interpolates returns a different served coordinate with
@@ -839,13 +860,28 @@ a pure abstraction layer. Dependency graph:
 |---|---|
 | Objective | every decision, contract, and test fixture that 5.1–5.8 depends on exists, is executable, and is recorded in the register — and no provider-specific implementation is started |
 | Prerequisites | this document approved; the 2026-11-21 owner decisions recorded in `docs/data-model/open-decisions.md` |
-| Scope | `docs/data-model/open-decisions.md` (record `OPEN-18`, `Q-P5-1`, `OPEN-03`, `OPEN-05`, `OPEN-16`, plus `OPEN-14` vocabulary); `packages/contracts/src/weather.ts` (`ForecastRun` / `IngestionRun` row contracts, `valueBase` → `singleValueEvaluationBasisSchema`); `packages/contracts/src/climate.ts` (new: `AdapterResult`, `GridSpec`, `ResolvedCell`, `MonthlyOutlook`); `packages/database/src/climate.ts` (row types only, no query); `packages/weather-core/cells/` (resolver contract + synthetic golden fixtures); `apps/worker/src/queue/contract.ts` (job lifecycle interface, no backing) |
-| Contracts | `ForecastRun`, `IngestionRun`, `AdapterResult`, `GridSpec`, `CellKey`, `ResolvedCell`, `Job` (claim / lease / retry / dead-letter / idempotency), `MonthlyOutlook`; frozen `temporal_resolution` and `aggregation_level` vocabularies; the deferred-retention reproducibility shape |
+| Scope | **Delivered:** `packages/contracts/src/climate.ts` (run identities, `AdapterResult`, `MonthlyOutlook`), `packages/contracts/src/grid.ts` (resolver, registry, `gridSpecHash`), `packages/contracts/src/provenance.ts` (reproducibility shape), `packages/contracts/src/weather.ts` (`valueBase` → `singleValueEvaluationBasisSchema`), plus `climate.test.ts` / `grid.test.ts`. **Not delivered:** `packages/weather-core/cells/` (weather-core is 5.1's package, not created here), `apps/worker/src/queue/contract.ts` (the job interface belongs to 5.3), `packages/database/src/climate.ts` (no row types needed yet), and the `OPEN-14` vocabulary freeze |
+| Contracts | `ForecastRun` (+ natural identity), `IngestionRun` (+ `ingestionVersionOf`), `AdapterResult` (five classes), `GridSpec`, `GridRegistry`, `ResolvedGridCell`, `MonthlyOutlook` (+ `OutlookMonth` band rules), `DerivationProvenance` / `Reproducibility`. `ResolvedCell` is reused from `provenance.ts` rather than duplicated |
 | Database impact | **none.** The `jobs` table belongs to 5.3, not 5.0 |
-| Tests | contract tests and golden vectors for every new schema; resolver vectors 1–12 of §5.2.7 against synthetic grids; a registry assertion that one `GridSpec` binds one `model` and its `gridSpecHash` matches the committed fixture; the existing 239 contract tests stay green |
-| Acceptance | a fake adapter's `WeatherValue` type-checks with no `any`; a single value carrying `evaluationBasis: "mixed"` is **rejected**; all twelve resolver vectors pass, including negative-floor and longitude-wrap cases; `reproducible: false` + `raw_payload_not_retained` validates while `reproducible: false` without a reason does not; the queue interface expresses claim, lease expiry, retry, dead-letter, and idempotency without importing Redis or a queue library |
+| Tests | `grid.test.ts` executes vectors 1–18 of §5.2.7, orientation rejection, lattice rejection, hash-mismatch detection, a one-model-one-spec registry, and coordinate rejection. `climate.test.ts` covers `mixed` rejection, run identity and version derivation, the five adapter classes, the `reproducible` / `inputRefs` distinction, and the monthly bands. `pnpm --filter @agroclimate/contracts test`: **304 passed**, including the pre-existing suite |
+| Acceptance | met: `mixed` is **rejected** on a single value; vectors 1–18 pass, including negative-floor, longitude-wrap, and origin-precision cases; `reproducible: false` needs a reason and empty `inputRefs` fails on `inputRefs`; **not met yet:** the queue interface, which moved to 5.3 |
 | Dependencies | — |
-| Risks | freezing a vocabulary too early (`OPEN-14`) — mitigate by freezing only the five values the storage CHECK already implies; contract churn while 5.1 is written — mitigate by versioning the adapter and normalizer constants in 5.1, not the row contracts |
+| Risks | freezing a vocabulary too early (`OPEN-14`) — still deferred, not guessed at; contract churn while 5.1 is written — mitigate by versioning adapter and normalizer constants in 5.1, not the row contracts |
+
+Two layout deviations from the original scope, both deliberate:
+
+1. **The resolver lives in `packages/contracts/src/grid.ts`, not
+   `packages/weather-core/cells/`.** Creating a package for one pure module would
+   have introduced a workspace boundary with no consumer; `weather-core` is still
+   5.1's package. `grid.ts` depends only on `canonical.ts` and `hash.ts`, so moving
+   it later is a file move, not a rewrite.
+2. **`ForecastRun` / `IngestionRun` live in `climate.ts`, not `weather.ts`.** They
+   are the climate plane's identity contracts; `weather.ts` stays the value
+   contract. `valueBase` was changed there as planned.
+
+`AdapterResult` also grew from the §5.1 success sketch into the five-class
+discriminated union of §5.1.1: a result type that cannot express `rate_limited`
+would force the adapter to throw, which loses the classification the queue needs.
 
 ### 8.1 Phase 5.1 — adapter and normalization foundation
 
@@ -987,7 +1023,7 @@ register says so and the deliverable exists.
 
 | ID | Decision | Rationale | Scope | Status | Revisit condition |
 |---|---|---|---|---|---|
-| `OPEN-18` | A provider/model-specific deterministic grid resolver; grid origin, spacing, orientation, and revision are explicit inputs; a change that alters identity requires a new `model` string | A universal `floor(lat / resolution)` assumes a zero origin, square cells, and one axis orientation, none of which is established for any provider; and an in-place rule change would silently re-point historical cells | The generic resolver contract and the serialization rule (§5.2.2–§5.2.5). **Not** any provider's actual grid constants | **Generic contract approved.** Provider grid configuration pending external evidence. Resolver and golden vectors **not started** | A provider re-grid, which creates a new `model` string; or a grid that cannot be expressed as `GridSpec`, which becomes a resolver implementation |
+| `OPEN-18` | A provider/model-specific deterministic grid resolver; grid origin, spacing, orientation, and revision are explicit inputs; a change that alters identity requires a new `model` string | A universal `floor(lat / resolution)` assumes a zero origin, square cells, and one axis orientation, none of which is established for any provider; and an in-place rule change would silently re-point historical cells | The generic resolver contract and the serialization rule (§5.2.2–§5.2.5). **Not** any provider's actual grid constants | **Generic contract delivered.** Resolver, registry, and vectors 1–18 implemented and tested in `packages/contracts`; v1 accepts `south-west` only. Provider grid configuration pending external evidence | A provider re-grid, which creates a new `model` string; or a grid that cannot be expressed as `GridSpec`, which becomes a resolver implementation |
 | `Q-P5-1` | PostgreSQL is the initial queue backing, using row locking and `FOR UPDATE SKIP LOCKED` behind a narrow job interface | PostgreSQL is already required; Redis and BullMQ would be new infrastructure with no operational evidence yet; the documented job semantics survive a backing swap | Job claiming, leases, retries, attempts, idempotency, dead-letter state, observability, transaction boundaries, and shutdown (§8.3) | **Owner-approved architecture decision.** No `jobs` table, no queue code, no dependency. Implementation is 5.3 | Measured contention or polling cost on the `jobs` table; a multi-region worker requirement; or a queue feature (scheduling at scale, fan-out) that is expensive to express in SQL |
 | `OPEN-03` | Do not commit to a paid Open-Meteo plan yet; commercial operation is conditional on verified licensing and an appropriate commercial plan; the free tier is not used for commercial operation; self-hosting is not assumed to resolve licensing or redistribution terms | Price, quota, attribution, and permitted use are unresolved, and a plan chosen before 5.4 exists would be a guess | Commercial deployment legality and any `raw_payload_ref` retention. Not the schema, not the adapter | **Deferred** pending commercial and cost evaluation. Not closed | Before any commercial deployment; after pricing, quotas, attribution, and permitted-use terms are reviewed |
 | `OPEN-05` | Defer durable raw-payload retention for the initial release; normalized records carry sufficient provenance to identify origin and transformation; artifacts that cannot be reproduced record `reproducible: false` with a machine-readable reason; no full-reproducibility claim | An object store is new infrastructure with its own access control, and the provider terms that would make retention lawful are unsettled; the honesty cost is already representable | `ingestion_runs.raw_payload_ref`, object storage, and the `reproducible` claim. Not the normalized row, which is the system of record | **Owner-approved deferral.** No store, no writer. Reopening is a later phase | A lawful paid or self-hosted plan, known storage cost, and a verification run that must re-derive a score |
@@ -998,7 +1034,7 @@ register says so and the deliverable exists.
 | ID | Item | Status |
 |---|---|---|
 | `OPEN-02` | BMKG written permission | **External evidence.** The flag stays off; days 0–3 fall back to labelled Open-Meteo |
-| `OPEN-14` | Freeze the five `temporal_resolution` and five `aggregation_level` values | **Assigned to 5.0**; the columns are unconstrained `text`, and an unfrozen vocabulary is a silent re-labelling risk |
+| `OPEN-14` | Freeze the five `temporal_resolution` and five `aggregation_level` values | **Assigned to 5.0, not yet delivered**; the columns are unconstrained `text`, and an unfrozen vocabulary is a silent re-labelling risk |
 | `OPEN-15` | `area_weighted` weight set | **Already decided** as `centroid` for v1; the policy stays accepted-but-unimplemented |
 | `OPEN-21` | Field snapshot vocabularies | **Deferred to Phase 6**; blocks snapshots, not climate reads |
 | `Q-P5-2` | Operational history storage (`sync_attempts`, dead-letter, watermark) | **Deferred**; structured logs + `ingestion_runs.error` first. None of those tables exists |
@@ -1020,8 +1056,9 @@ lead-time shape, ensemble null boundary).
 
 ### 10.1 Recorded, 2026-11-21
 
-1. **`OPEN-18`** — generic grid-resolver contract approved; provider grid
-   configurations pending evidence; implementation not started.
+1. **`OPEN-18`** — generic grid-resolver contract approved and now implemented
+   with tests; the five provider grid configurations are still pending evidence,
+   so no real model can resolve yet.
 2. **`Q-P5-1`** — PostgreSQL-first queue, behind an interface; no queue table or
    code exists.
 3. **`OPEN-03`** — no paid plan commitment; commercial use conditional on verified
@@ -1050,7 +1087,8 @@ fallback or does not run.
 - No API contract, no route, no response envelope.
 - No authentication, RLS, or tenant-transaction behaviour.
 - No dependency, and no new package (the two new packages are *proposed*, §8.1).
-- No phase status: Phase 5 remains **designed, not implemented**.
+- No phase status: Phase 5.0's contracts and resolver are **implemented and tested**;
+  sub-phases 5.1–5.8 are **not started**.
 - `ADR-001`, `provenance-contract.md`, `tables-climate.md`,
   `temporal-and-weather-semantics.md`, and `data-flow.md` are cited, not edited.
   `background-processing.md` is edited only to record the queue backing decision and

@@ -48,9 +48,10 @@ Notes:
 
 - `cell_key` is `text` because the grid rule is per model and unchanged from what
   the resolver computes. Storing it as a tuple of integers would freeze one rule
-  for grids that do not share it. The generic resolver contract is approved
-  (2026-11-21); the provider grid configuration for each model is still `OPEN`
-  (no model has a published grid origin, spacing, and axis).
+  for grids that do not share it. The generic resolver is implemented and tested
+  (2026-11-21) and writes `"<lat>,<lon>"` with enough decimal places to preserve
+  both the origin and the step; the provider grid configuration for each model is
+  still `OPEN` (no model has a published grid origin, spacing, and axis).
 - `served_lat`/`served_lon` are *the last value observed for this cell*. The
   authoritative per-record coordinate is on `weather_records`
   (`requested_lat`/`requested_lon`, `served_lat`/`served_lon`), which is why a
