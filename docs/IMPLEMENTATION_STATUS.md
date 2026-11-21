@@ -822,3 +822,40 @@ What this does **not** mean:
   names `updated_at`. Registration is the raw `INSERT … RETURNING id` above.
 - **S4 is committed and pushed** (`b9a27c6`, `cf0d1c2`). What remains outside this
   repository is the owner's canonical database application, not the code.
+
+## Phase 4 — Tenant-scoped Farm & Field
+
+### Phase 4.1 — domain contracts, **design only**
+
+Status: **designed, not implemented.** No source file, migration, grant, policy, role, or
+dependency was added. The document is `docs/architecture/farm-field-domain-contracts.md`.
+
+Phases 4.2–4.6 remain **not started**. Nothing below claims their work.
+
+| Item | State |
+|---|---|
+| Domain definitions for Farm and Field | designed (§3) |
+| Invariants, each assigned to contract / database / derived | designed (§5) |
+| Tenant API surface, 10 endpoints | designed (§6) |
+| Contract schemas (`farm`, `field`, `geometry`, `pageMeta`) | **proposed, not written** (§7) |
+| Tenant isolation behaviour, including nested access | designed (§9.4) |
+| Implementation sequence 4.2–4.6 | proposed (§13) |
+| Migration | **none needed** — `farms`/`fields` were applied in Phase 2.2.3 |
+| Open owner decisions | `Q1`–`Q8` (§12) |
+
+What the design rests on, verified rather than assumed: `app.farms` and `app.fields` exist with
+`FORCE` RLS and `app_api` RW grants (`20261118020000_tenant_tables`); the composite FK
+`(farm_id, user_id) → farms (id, user_id)` makes a cross-tenant parent a `23503`, not a row;
+`withTenant` is transaction-local and rejects nesting (`tenant.ts`); contracts enforce
+`strictObject` + a branded `*_NOT_FOUND` family, so `FARM_NOT_FOUND`/`FIELD_NOT_FOUND` need no
+enum change; `api-conventions.md` §5 already fixes `?page&pageSize` (max 100) and `?sort=`, and
+**no code implements it yet**.
+
+Scope decision recorded: the contract accepts `POLYGON` only and the database is left unchanged.
+`OPEN-17` (`POINT` ⇒ `area_ha = 0`, which `FieldSnapshotPayload.areaHa` rejects) therefore stays
+open rather than resolved by this phase, and `Q1` asks the owner whether point fields are a v1
+requirement.
+
+Three `ST_GeomFromGeoJSON` behaviours were checked against the applied database while writing
+the design, and they justify contract-side checks rather than duplication: an unclosed ring is
+silently closed, a `crs` member is silently ignored, and 3D positions are accepted.
