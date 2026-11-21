@@ -323,16 +323,8 @@ describe("reproducibility versus provenance", () => {
 
 describe("MonthlyOutlook", () => {
   it("maps lead months 1–12 to the binding bands", () => {
-    expect(permittedMonthlyDataClasses(1)).toEqual([
-      "weather_forecast",
-      "subseasonal_forecast",
-      "seasonal_forecast",
-    ]);
-    expect(permittedMonthlyDataClasses(2)).toEqual([
-      "weather_forecast",
-      "subseasonal_forecast",
-      "seasonal_forecast",
-    ]);
+    expect(permittedMonthlyDataClasses(1)).toEqual(["seasonal_forecast"]);
+    expect(permittedMonthlyDataClasses(2)).toEqual(["seasonal_forecast"]);
     expect(permittedMonthlyDataClasses(3)).toEqual(["seasonal_forecast"]);
     expect(permittedMonthlyDataClasses(7)).toEqual(["seasonal_forecast"]);
     expect(permittedMonthlyDataClasses(8)).toEqual(["climatology"]);
@@ -698,8 +690,7 @@ describe("12-month horizon — F-03", () => {
   };
 
   const entryFor = (leadMonth: number) => {
-    const dataClass =
-      leadMonth <= 2 ? "weather_forecast" : leadMonth <= 7 ? "seasonal_forecast" : "climatology";
+    const dataClass = leadMonth <= 7 ? "seasonal_forecast" : "climatology";
     const isClimatology = dataClass === "climatology";
     return {
       leadMonth,
@@ -828,7 +819,7 @@ describe("12-month horizon — F-03", () => {
   });
 });
 
-describe("Monthly classification vs daily bands", () => {
+describe("Monthly source capability — a month needs a monthly product", () => {
   const forecastMonth = (leadMonth: number, dataClass: string) => ({
     leadMonth,
     month: calendarMonthOf("2026-11-01", leadMonth),
@@ -842,50 +833,65 @@ describe("Monthly classification vs daily bands", () => {
     spreadUnavailableReason: null,
   });
 
-  it("accepts every product class that can cover lead month 1", () => {
-    for (const dataClass of ["weather_forecast", "subseasonal_forecast", "seasonal_forecast"]) {
-      expect(outlookMonthSchema.safeParse(forecastMonth(1, dataClass)).success).toBe(true);
+  it("accepts the seasonal product across every month it can cover", () => {
+    for (let leadMonth = 1; leadMonth <= 7; leadMonth += 1) {
+      expect(
+        outlookMonthSchema.safeParse(forecastMonth(leadMonth, "seasonal_forecast")).success,
+      ).toBe(true);
     }
   });
 
-  it("accepts a seasonal product at lead month 2, which runs past day 45", () => {
-    expect(outlookMonthSchema.safeParse(forecastMonth(2, "seasonal_forecast")).success).toBe(true);
+  it("rejects weather_forecast for a calendar month, whose horizon is 16 days", () => {
+    for (const leadMonth of [1, 2, 3, 7]) {
+      expect(
+        outlookMonthSchema.safeParse(forecastMonth(leadMonth, "weather_forecast")).success,
+      ).toBe(false);
+    }
   });
 
-  it("accepts a subseasonal product at lead month 2", () => {
-    expect(outlookMonthSchema.safeParse(forecastMonth(2, "subseasonal_forecast")).success).toBe(
-      true,
-    );
+  it("rejects subseasonal_forecast, which has no monthly product", () => {
+    for (const leadMonth of [1, 2, 3, 7]) {
+      expect(
+        outlookMonthSchema.safeParse(forecastMonth(leadMonth, "subseasonal_forecast")).success,
+      ).toBe(false);
+    }
   });
 
-  it("rejects short-range classes once the seasonal band starts", () => {
-    expect(outlookMonthSchema.safeParse(forecastMonth(3, "weather_forecast")).success).toBe(false);
-    expect(outlookMonthSchema.safeParse(forecastMonth(3, "subseasonal_forecast")).success).toBe(
-      false,
-    );
-    expect(outlookMonthSchema.safeParse(forecastMonth(3, "seasonal_forecast")).success).toBe(true);
+  it("rejects the blocked annual outlook", () => {
+    expect(outlookMonthSchema.safeParse(forecastMonth(9, "annual_outlook")).success).toBe(false);
+  });
+
+  it("accepts climatology only where the seasonal product cannot reach", () => {
+    expect(outlookMonthSchema.safeParse(forecastMonth(7, "climatology")).success).toBe(false);
+    expect(
+      outlookMonthSchema.safeParse({
+        ...forecastMonth(8, "climatology"),
+        evaluationBasis: "climatology",
+        missingReason: "beyond_horizon",
+        baselineVersion: "ERA5:1991-2020:v1",
+      }).success,
+    ).toBe(true);
   });
 
   it("represents one source product per month, not a blend", () => {
     // The row has a single `dataClass`; a multi-class month is unrepresentable, which
-    // is the documented rule (`climate-data-foundation.md` §5.5 rule 4).
+    // is the documented rule (`climate-data-foundation.md` §5.5 rule 4) and `Q-P5-5`.
     const blended = {
-      ...forecastMonth(2, "subseasonal_forecast"),
-      dataClasses: ["seasonal_forecast"],
+      ...forecastMonth(2, "seasonal_forecast"),
+      dataClasses: ["subseasonal_forecast"],
     };
     expect(outlookMonthSchema.safeParse(blended).success).toBe(false);
   });
 
-  it("keeps a partially covered month out of the forecast classes only by refusing a value", () => {
-    const partial = {
-      ...forecastMonth(2, "subseasonal_forecast"),
-      valueMm: null,
+  it("keeps a month without a monthly product valueless, not classed", () => {
+    const noMonthlyProduct = {
+      ...forecastMonth(2, "seasonal_forecast"),
       dataClass: null,
-      evaluationBasis: "monthly",
+      valueMm: null,
       missingReason: "below_coverage_threshold",
       ensembleSpreadMm: null,
       spreadUnavailableReason: "below_coverage_threshold",
     };
-    expect(outlookMonthSchema.safeParse(partial).success).toBe(true);
+    expect(outlookMonthSchema.safeParse(noMonthlyProduct).success).toBe(true);
   });
 });

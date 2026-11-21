@@ -309,23 +309,23 @@ export type AdapterResult = z.infer<typeof adapterResultSchema>;
  * Lead month is **1-based and inclusive: 1–12**. Exactly twelve entries describe
  * the rolling outlook; there is no month 0 and no month 13.
  *
- * The bands follow `temporal-and-weather-semantics.md` §3. A calendar month is not
- * a 30-day window: lead month 1 covers days 0–45 only in part, and lead month 2 runs
- * past day 45. `weather_forecast`, `subseasonal_forecast`, and `seasonal_forecast`
- * are therefore all permitted at lead months 1–2, each naming the **single** source
- * product that supplied the month (`climate-data-foundation.md` §5.5 rule 4). The
- * class is not blended and not inferred from the day bands.
+ * The bands follow `temporal-and-weather-semantics.md` §3 and are a **source
+ * capability** test, not an inference from the daily bands. A calendar month is
+ * 28–31 days, so a class is permitted only when one documented product supplies a
+ * monthly quantity for the whole month:
+ *
+ * - `seasonal_forecast` — SEAS5 monthly rows are observed (`monthly=` returns 6–7
+ *   rows). This is the only forecast product with a monthly product.
+ * - `climatology` — a 1991–2020 monthly normal.
+ *
+ * `weather_forecast` (16 d) and `subseasonal_forecast` (EC46, 46 d, and **no**
+ * monthly product: `models=ecmwf_ec46&monthly=…` returns 0 rows) cannot supply a
+ * whole calendar month. A month built from their daily values would need a
+ * daily→monthly aggregation rule and a coverage threshold, neither of which exists;
+ * that is `Q-P5-6`, not a class this contract may accept.
  */
 export const MONTHLY_OUTLOOK_BANDS = [
-  {
-    fromLeadMonth: 1,
-    toLeadMonth: 2,
-    // A calendar month is not a 30-day window: lead month 2 runs past day 45, so a
-    // month there may be sourced from the seasonal product as well as the two
-    // short-range products (`climate-data-foundation.md` §5.5 rule 4).
-    permitted: ["weather_forecast", "subseasonal_forecast", "seasonal_forecast"],
-  },
-  { fromLeadMonth: 3, toLeadMonth: 7, permitted: ["seasonal_forecast"] },
+  { fromLeadMonth: 1, toLeadMonth: 7, permitted: ["seasonal_forecast"] },
   { fromLeadMonth: 8, toLeadMonth: 12, permitted: ["climatology"] },
 ] as const satisfies ReadonlyArray<{
   fromLeadMonth: number;

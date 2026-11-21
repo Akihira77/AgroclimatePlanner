@@ -685,26 +685,45 @@ What Phase 5 must add is the **aggregation boundary**, stated as four rules:
 3. **Monthly is a month key (`date`, day 1) and never a 30-day span.** Aggregation
    from daily to monthly uses the calendar month in Jakarta, and the monthly
    outlook's `month` column is written with `EXTRACT(DAY) = 1` (schema CHECK).
-4. **Class is chosen per month, in the documented order**, and never blended:
-   a live SEAS5 month within TTL → `seasonal_forecast`; else EC46 covering the month
-   → `subseasonal_forecast`; else the month is genuinely beyond the seasonal horizon
-   → `climatology` with `missing_reason = 'beyond_horizon'`; else the month is
-   `pending` / `ingest_failed` / `provider_unavailable` with **no** value.
+4. **A month is supplied by one product that has a monthly quantity**, and the
+   class names that product:
+   a live SEAS5 monthly row within TTL → `seasonal_forecast`; else the month is
+   genuinely beyond the seasonal horizon → `climatology` with
+   `missing_reason = 'beyond_horizon'`; else the month is `pending` /
+   `ingest_failed` / `provider_unavailable` with **no** value.
+
+   This is a **capability** rule, not an ordering preference. The observed
+   provider evidence decides it:
+
+   | Class | Reach | Monthly product | A whole calendar month? |
+   |---|---|---|---|
+   | `weather_forecast` | 16 d | none | no |
+   | `subseasonal_forecast` | 46 d | none — `models=ecmwf_ec46&monthly=…` returns **0 rows** | no |
+   | `seasonal_forecast` | 7 mo | SEAS5 monthly, 6–7 rows observed | **yes** |
+   | `annual_outlook` | 8–13 mo | Set VII, access unverified | not permitted |
+   | `climatology` | any | 1991–2020 normal | **yes** |
+
+   So a subseasonal month would have to be aggregated from EC46 daily values,
+   which needs a coverage threshold and an aggregation rule that do not exist
+   (`Q-P5-6`). The earlier "EC46 covering the month → `subseasonal_forecast`"
+   branch assumed a monthly product that the provider does not return; it is
+   corrected here rather than left to be discovered by an adapter.
 
    The class names the **source product** for that month, not a per-day band and
-   not the evaluation basis. A calendar month is not a 30-day window: lead month 2
-   crosses day 45, so a month there can only be fully answered by the seasonal
-   product, and a month assembled from short-range days may be labelled
-   `weather_forecast`. The permitted set per lead month is in
-   `temporal-and-weather-semantics.md` §3; `weather_forecast`,
-   `subseasonal_forecast`, and `seasonal_forecast` are all permitted at lead months
-   1–2 for exactly this reason.
+   not the evaluation basis, and a calendar month is not a 30-day window.
 
    A month whose days come from two products is **not** representable:
-   `monthly_outlooks` has one `data_class` and the contract has one field. Whether
-   to support that, and how, is `Q-P5-5` — not decided here. Partial coverage
-   stays honest the other way: below the coverage threshold the month has no value
-   at all (`below_coverage_threshold`), never a value with a misleading class.
+   `monthly_outlooks` has one `data_class` and the contract has one field.
+   Whether to support that, and how, is `Q-P5-5` — not decided here. Partial
+   coverage stays honest the other way: below the coverage threshold the month
+   has no value at all (`below_coverage_threshold`), never a value with a
+   misleading class.
+
+   **`monthly_outlooks.data_coverage_percent` is deliberately unpopulated in
+   5.0.** A provider-supplied monthly quantity has no day-level coverage to
+   report, and the contract does not carry the field. It becomes meaningful only
+   if daily→monthly aggregation is adopted (`Q-P5-6`); the column stays nullable
+   for that reason and no migration is needed.
 
 The month cell therefore reports two independent axes: forecast availability and
 climatology availability. `monthly_outlooks` has no `data_availability` column, so
@@ -923,7 +942,7 @@ a pure abstraction layer. Dependency graph:
 | Scope | **Delivered:** `packages/contracts/src/climate.ts` (run identities, `AdapterResult`, `MonthlyOutlook`), `packages/contracts/src/grid.ts` (resolver, registry, `gridSpecHash`), `packages/contracts/src/provenance.ts` (reproducibility shape), `packages/contracts/src/weather.ts` (`valueBase` → `singleValueEvaluationBasisSchema`), plus `climate.test.ts` / `grid.test.ts`. **Not delivered:** `packages/weather-core/cells/` (weather-core is 5.1's package, not created here), `apps/worker/src/queue/contract.ts` (the job interface belongs to 5.3), `packages/database/src/climate.ts` (no row types needed yet), and the `OPEN-14` vocabulary freeze |
 | Contracts | `ForecastRun` (+ natural identity), `IngestionRun` (+ `ingestionVersionOf`), `AdapterResult` (five classes), `GridSpec`, `GridRegistry`, `ResolvedGridCell`, `MonthlyOutlook` (+ `OutlookMonth` band rules), `DerivationProvenance` / `Reproducibility`. `ResolvedCell` is reused from `provenance.ts` rather than duplicated |
 | Database impact | **none.** The `jobs` table belongs to 5.3, not 5.0 |
-| Tests | `grid.test.ts` executes vectors 1–18 of §5.2.7, orientation rejection, lattice rejection, hash-mismatch detection, a one-model-one-spec registry, coordinate rejection, and the F-06 immutability cases (input copy, frozen nested ranges, frozen registry value). `climate.test.ts` covers `mixed` rejection, run identity and version derivation, the five adapter classes, the `reproducible` / `inputRefs` distinction, the F-04 coverage invariants, the F-05 month cross-field rules, the F-03 twelve-month horizon, the F-07 count-authority cases, and month classification against the daily bands. `pnpm --filter @agroclimate/contracts test`: **353 passed**, including the pre-existing suite |
+| Tests | `grid.test.ts` executes vectors 1–18 of §5.2.7, orientation rejection, lattice rejection, hash-mismatch detection, a one-model-one-spec registry, coordinate rejection, and the F-06 immutability cases (input copy, frozen nested ranges, frozen registry value). `climate.test.ts` covers `mixed` rejection, run identity and version derivation, the five adapter classes, the `reproducible` / `inputRefs` distinction, the F-04 coverage invariants, the F-05 month cross-field rules, the F-03 twelve-month horizon, the F-07 count-authority cases, and the monthly source-capability cases. `pnpm --filter @agroclimate/contracts test`: **354 passed**, including the pre-existing suite |
 | Acceptance | met: `mixed` is **rejected** on a single value; vectors 1–18 pass, including negative-floor, longitude-wrap, and origin-precision cases; `reproducible: false` needs a reason and empty `inputRefs` fails on `inputRefs`; a complete result at less than 100% is rejected; a duplicate, missing, or out-of-order lead month is rejected; a mutated `GridSpec` range is impossible; **not met yet:** the queue interface, which moved to 5.3 |
 | Dependencies | — |
 | Risks | freezing a vocabulary too early (`OPEN-14`) — still deferred, not guessed at; contract churn while 5.1 is written — mitigate by versioning adapter and normalizer constants in 5.1, not the row contracts |
@@ -950,7 +969,7 @@ new file, dependency, or sub-phase.
 
 | Finding | Correction |
 |---|---|
-| **F-03** | `leadMonth` is 1-based, `1–12` inclusive. `MONTHLY_OUTLOOK_BANDS` is `1–2` (`weather_forecast`, `subseasonal_forecast`, or `seasonal_forecast` — a month there crosses day 45), `3–7` (`seasonal_forecast`), `8–12` (`climatology`). `monthlyOutlookHorizonSchema` enforces exactly twelve entries, in order, one per lead month, each bound to `calendarMonthOf(firstMonth, leadMonth)` — a pure year-rollover-safe resolver. Zero-based numbering is gone from every public contract |
+| **F-03** | `leadMonth` is 1-based, `1–12` inclusive. `MONTHLY_OUTLOOK_BANDS` is `1–7` (`seasonal_forecast`) and `8–12` (`climatology`) after the source-capability correction below; the 1–2 band no longer admits short-range classes. `monthlyOutlookHorizonSchema` enforces exactly twelve entries, in order, one per lead month, each bound to `calendarMonthOf(firstMonth, leadMonth)` — a pure year-rollover-safe resolver. Zero-based numbering is gone from every public contract |
 | **F-04** | `coveragePercentOf` is the single rounding rule (basis points, half away from zero); `requestedCells ≥ 1` removes the zero-request case instead of defining it; `complete` requires 100%, `partial` requires an unanswered cell; counts and percentage must agree |
 | **F-05** | `outlookMonthSchema` cross-checks `dataClass` against `evaluationBasis`: climatology only with the climatology basis, forecast only with the monthly basis, pending with the monthly basis and no value. Every issue carries the offending path |
 | **F-06** | `defineGridSpec` copies and freezes `latRange`/`lonRange`, freezes the spec, and the registry stores a re-defined frozen spec rather than the caller's object |

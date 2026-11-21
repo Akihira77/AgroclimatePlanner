@@ -298,7 +298,7 @@ Notes:
 | `anomaly_percent` | `double precision` | yes | — | same anomaly as a percentage of the comparison base |
 | `baseline_version` | `text` | yes | — | e.g. `ERA5:1991-2020:v1`; required when a baseline was used at all |
 | `model_climate_offset_mm` | `double precision` | yes | — | disclosed offset, **only** for `baseline_difference` |
-| `data_coverage_percent` | `double precision` | yes | — | `CHECK (BETWEEN 0 AND 100)`; share of days with a genuine value |
+| `data_coverage_percent` | `double precision` | yes | — | `CHECK (BETWEEN 0 AND 100)`; share of days with a genuine value. **`NULL` in 5.0** — a month comes from a provider monthly quantity, not from assembled days (`Q-P5-6`) |
 | `ensemble_spread_mm` | `double precision` | yes | — | `CHECK (>= 0)`; `NULL` when unavailable |
 | `spread_unavailable_reason` | `text` | yes | — | required when spread is `NULL` and members were expected |
 | `derivation_version` | `text` | no | — | assembly rule-set version |

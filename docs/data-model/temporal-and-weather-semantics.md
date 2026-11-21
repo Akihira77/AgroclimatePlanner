@@ -75,30 +75,39 @@ not a display preference.
 | ~46 d – ~7 mo | `seasonal_forecast` | `ecmwf_seas5` (6 monthly rows by default, 7 if `forecast_days ≥ 200`) |
 | ~8–13 mo | `annual_outlook` | ECMWF Set VII only (licence + GRIB PoC still pending) |
 
-A month is an aggregate of days, so the monthly outlook uses a **1-based lead
-month, `1–12` inclusive**. There is no lead month 0 and no lead month 13; exactly
+A monthly outlook describes a calendar month — not a 30-day span and not a slice
+of the daily bands — so it uses a **1-based lead month, `1–12` inclusive**. There is no lead month 0 and no lead month 13; exactly
 twelve entries describe the horizon.
 
-| Lead month | Covering day band | Permitted `dataClass` |
+| Lead month | Permitted `dataClass` | Product that supplies it |
 |---|---|---|
-| 1–2 | starts inside days 0–45, but **crosses day 45** | `weather_forecast`, `subseasonal_forecast`, **or** `seasonal_forecast` — the class names the one product that supplied the month |
-| 3–7 | beyond subseasonal, within seasonal | `seasonal_forecast` |
-| 8–12 | beyond seasonal | `climatology` — the 1991–2020 normal, labelled as such |
+| 1–7 | `seasonal_forecast` | SEAS5 monthly rows — the observed monthly product |
+| 8–12 | `climatology` | a 1991–2020 monthly normal, labelled `beyond_horizon` |
 | — | beyond 12 | no entry; there is no month 13 |
 
-A calendar month is **not** a 30-day window. Lead month 1 starts at day 0 but a
-31-day month still ends at day 30; lead month 2 runs from roughly day 30 to day
-60, so it crosses the day 45 boundary and part of it can only be answered by the
-seasonal product. The monthly class is therefore *not* the day band of its first
-day, and it is not inferred from day counts at all.
+A calendar month is **not** a 30-day window, so the monthly class is not the day
+band of its first day and is not inferred from day counts at all. The class is
+permitted only when **one product supplies a monthly quantity for that month**:
+
+| Class | Max reach | Monthly product | Can it supply a whole calendar month? |
+|---|---|---|---|
+| `weather_forecast` | 16 d | none | **no** — a month is 28–31 days |
+| `subseasonal_forecast` | 46 d | **none**: `models=ecmwf_ec46&monthly=…` returns 0 rows | **no** — only days 0–45, and no monthly statistic |
+| `seasonal_forecast` | 7 months | SEAS5 monthly, observed 6–7 rows | **yes**, lead months 1–7 |
+| `annual_outlook` | 8–13 months | Set VII, access unverified | **not permitted** until the licence and GRIB proof of concept succeed |
+| `climatology` | any month | 1991–2020 normal | **yes**, labelled as a normal |
 
 **One product per month.** The class on a month names the single source product
-that supplied that month's value, chosen by the documented order in
-`climate-data-foundation.md` §5.5 rule 4 (live seasonal within TTL → subseasonal
-→ climatology). Day bands may differ within the month; classes never blend,
-because `monthly_outlooks` has one `data_class` column and one value. A month
-assembled from more than one product is not representable and is not permitted
-(`Q-P5-5` in `open-decisions.md`).
+that supplied that month's value, per `climate-data-foundation.md` §5.5 rule 4.
+Classes never blend, because `monthly_outlooks` has one `data_class` column and
+one value; a month assembled from more than one product is `Q-P5-5`.
+
+**A month from daily values is deferred.** `weather_forecast` and
+`subseasonal_forecast` could only produce a month by aggregating daily values,
+which needs a coverage threshold and an aggregation rule that do not exist.
+`Q-P5-6` records that decision; until it is made, such a month has no value and no
+class (`pending`, `ingest_failed`, `below_coverage_threshold`), and the runtime
+that would assemble it does not exist.
 
 `leadMonth` is derived from the entry's `month` and the outlook's `firstMonth`
 (pure calendar arithmetic, year rollover included); the contract stores the
