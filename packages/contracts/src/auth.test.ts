@@ -4,6 +4,7 @@ import {
   countCodePoints,
   emailSchema,
   hasUnpairedSurrogate,
+  loginRequestSchema,
   normalizeEmail,
   passwordByteLength,
   passwordSchema,
@@ -137,5 +138,53 @@ describe("registerRequestSchema", () => {
       role: "admin",
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe("loginRequestSchema", () => {
+  it("normalises the email exactly as registration does", () => {
+    const parsed = loginRequestSchema.parse({
+      email: "  User@Example.com ",
+      password: "anything at all",
+    });
+    expect(parsed.email).toBe("user@example.com");
+  });
+
+  it("keeps the password exact, with no trimming", () => {
+    const password = "  spaced password  ";
+    expect(loginRequestSchema.parse({ email: "a@b.example", password }).password).toBe(password);
+  });
+
+  it("does not apply the registration minimum length", () => {
+    // A short password is simply wrong, and must reach verification so it gets
+    // the same 401 as any other wrong password.
+    expect(loginRequestSchema.safeParse({ email: "a@b.example", password: "short" }).success).toBe(
+      true,
+    );
+  });
+
+  it("rejects an empty password and an oversized one", () => {
+    expect(loginRequestSchema.safeParse({ email: "a@b.example", password: "" }).success).toBe(
+      false,
+    );
+    expect(
+      loginRequestSchema.safeParse({
+        email: "a@b.example",
+        password: "a".repeat(PASSWORD_MAX_UTF8_BYTES + 1),
+      }).success,
+    ).toBe(false);
+  });
+
+  it("rejects an unpaired surrogate and unknown keys", () => {
+    expect(
+      loginRequestSchema.safeParse({ email: "a@b.example", password: "a\uD800" }).success,
+    ).toBe(false);
+    expect(
+      loginRequestSchema.safeParse({
+        email: "a@b.example",
+        password: "correct horse battery staple",
+        userId: "01930000-0000-7000-8000-0000000000aa",
+      }).success,
+    ).toBe(false);
   });
 });

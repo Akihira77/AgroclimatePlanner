@@ -61,6 +61,7 @@ describe("FixedWindowRateLimiter", () => {
 
     const refused = instance.consume("1.2.3.4");
     assert.equal(refused.allowed, false);
+    assert.equal(refused.refusal, "quota");
     assert.equal(refused.remaining, 0);
     assert.ok(refused.retryAfterSeconds >= 1);
   });
@@ -72,6 +73,7 @@ describe("FixedWindowRateLimiter", () => {
     assert.equal(first.limit, 3);
     assert.equal(first.remaining, 2);
     assert.equal(first.retryAfterSeconds, 0);
+    assert.equal(first.refusal, null);
     assert.ok(first.resetAtEpochSeconds > 0);
   });
 
@@ -97,28 +99,74 @@ describe("FixedWindowRateLimiter", () => {
     assert.equal(instance.consume("2.2.2.2").allowed, true);
   });
 
-  it("drops expired entries instead of growing without bound", () => {
-    const { instance, time } = limiter({ limit: 1, maxKeys: 3 });
-
+  it("keeps an existing client's counter when the map is full", () => {
+    const { instance, time } = limiter({ limit: 2, maxKeys: 2 });
     instance.consume("a");
     instance.consume("b");
-    instance.consume("c");
-    assert.equal(instance.size, 3);
+    assert.equal(instance.size, 2);
 
-    time.advance(AUTH_RATE_WINDOW_MS + 1);
-    instance.consume("d");
+    // `a` already has a bucket: it is served from it, and stays refused on quota
+    // rather than being re-admitted as a new client.
+    instance.consume("a");
+    const third = instance.consume("a");
+    assert.equal(third.allowed, false);
+    assert.equal(third.refusal, "quota");
+    assert.equal(instance.size, 2);
 
-    assert.equal(instance.size <= 3, true);
-    assert.equal(instance.size, 1, "expired buckets should have been swept");
+    // The counter is intact: a fresh window is the only thing that resets it.
+    time.advance(AUTH_RATE_WINDOW_MS);
+    const afterReset = instance.consume("a");
+    assert.equal(afterReset.allowed, true);
+    assert.equal(afterReset.remaining, 1);
   });
 
-  it("evicts the least recently reset bucket when the cap is reached with live entries", () => {
+  it("cannot be reset by hammering it while the map is full", () => {
+    const { instance } = limiter({ limit: 1, maxKeys: 2 });
+    instance.consume("victim");
+    instance.consume("other");
+
+    for (let index = 0; index < 50; index += 1) {
+      const decision = instance.consume("victim");
+      assert.equal(decision.allowed, false);
+      assert.equal(decision.refusal, "quota");
+    }
+
+    assert.equal(instance.size, 2);
+  });
+
+  it("refuses an unseen client instead of evicting an active one", () => {
     const { instance } = limiter({ limit: 1, maxKeys: 2 });
     instance.consume("a");
     instance.consume("b");
 
-    instance.consume("c");
-    assert.equal(instance.size, 2, "storage must stay bounded");
+    const refused = instance.consume("c");
+    assert.equal(refused.allowed, false);
+    assert.equal(refused.refusal, "capacity");
+    assert.equal(refused.remaining, 0);
+    assert.ok(refused.retryAfterSeconds >= 1);
+    assert.equal(instance.size, 2);
+
+    // `a` and `b` still own their slots and their counts.
+    assert.equal(instance.consume("a").refusal, "quota");
+    assert.equal(instance.consume("b").refusal, "quota");
+  });
+
+  it("reclaims expired buckets when capacity is needed", () => {
+    const { instance, time } = limiter({ limit: 1, maxKeys: 2 });
+    instance.consume("a");
+    instance.consume("b");
+    assert.equal(instance.consume("c").refusal, "capacity");
+
+    time.advance(AUTH_RATE_WINDOW_MS + 1);
+    const admitted = instance.consume("c");
+    assert.equal(admitted.allowed, true);
+    assert.equal(instance.size, 1, "expired buckets should have been swept");
+  });
+
+  it("never exceeds maxKeys", () => {
+    const { instance } = limiter({ limit: 1, maxKeys: 3 });
+    for (let index = 0; index < 100; index += 1) instance.consume(`client-${index}`);
+    assert.equal(instance.size, 3);
   });
 
   it("counts a burst of synchronous calls deterministically", () => {
@@ -178,6 +226,29 @@ describe("AuthRateLimitGuard", () => {
 
     assert.equal(guard.canActivate(context(undefined)), true);
     assert.throws(() => guard.canActivate(context(undefined)));
+  });
+
+  it("refuses a new client at capacity with the same 429 and a Retry-After", () => {
+    // Capacity is an overload safeguard, not a quota. The public answer is the
+    // same `RATE_LIMITED` the exception filter already maps, because "not now" is
+    // the only thing the client can act on.
+    const instance = new FixedWindowRateLimiter({ limit: 1, windowMs: 60_000, maxKeys: 1 });
+    const guard = new AuthRateLimitGuard(instance);
+
+    assert.equal(guard.canActivate(context("10.0.0.1")), true);
+
+    const refused = context("10.0.0.2");
+    assert.throws(
+      () => guard.canActivate(refused),
+      (error) => {
+        assert.equal(error.getStatus(), 429);
+        assert.equal(error.getResponse().code, "RATE_LIMITED");
+        return true;
+      },
+    );
+    assert.ok(Number(refused.response.headers.get("Retry-After")) >= 1);
+    assert.equal(refused.response.headers.get("RateLimit-Remaining"), "0");
+    assert.equal(instance.size, 1);
   });
 });
 

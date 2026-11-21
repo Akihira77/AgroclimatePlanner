@@ -457,10 +457,10 @@ approvals, one amendment `IG-5-A1`, one later gate `IG-12`).
 | S4 — `auth_boundary` migration | **committed and pushed** | `b9a27c6`, `cf0d1c2` | `20261118040000_auth_boundary`: two column grants and two policies on `app.users`; `db:verify` 419 assertions, 0 FAIL, 0 SKIP after the corrective pass |
 | S5 — `sessions` migration | **implemented, committed, pushed, and applied to the canonical development database** | `8fb2270` | `20261118050000_sessions`: eight columns, three CHECKs (`D-1`, `D-2`, expiry order), unique `token_hash`, the two `D-3` indexes, `ENABLE`+`FORCE` RLS, two policies, three column grants to `app_auth`, `purge_expired_sessions()` (`SECURITY DEFINER`, pinned `search_path`, `EXECUTE` to `app_system` only); Prisma `Session` model + `User.sessions`. Canonical `127.0.0.1:5442` is at 5/5 (`db:bootstrap` first, then `db:migrate` applying `auth_boundary` + `sessions`); canonical evidence: `db:verify` 493 PASS / 0 FAIL / 0 SKIP, `db:verify:probes` 12/12, `test:schema` 13/13, `test:rls` 39/39, `pnpm test` 87 API + 34 database. Isolated project `agroclimate-db-s5-check` (5545) reproduced the same numbers. Pre-deployment backup: `/tmp/opencode/agroclimate-canonical-pre-s4-s5.dump` |
 | S6 — privilege verification | **implemented, committed, pushed, and verified on canonical** | `e9d1621` | `db:verify` 493 → **499** PASS / 0 FAIL / 0 SKIP (four `23514` deadline probes, clamped-extension equality, PUBLIC has no privilege on `app.sessions`); new `test/rls/auth-boundary.test.mjs` — **49 cases**, real roles, denials exact at `42501`, `23514`/`23503` separately, 21 non-authentication tables enumerated from `pg_tables` (count asserted); `test:schema` 13 → **22**; `test:rls` **88** (39 unchanged isolation + 49 boundary); all three suites green on canonical and on a fresh isolated project (`agroclimate-s6-fresh`, port 5546, own volume, removed afterwards). `OPEN-13` resolved on that evidence. |
-| S7 — registration and credential verification | **implemented and verified locally; IG-6 parameters still conditional; not committed** | — | `POST /v1/auth/register` exists and creates a user; credential verification with a dummy hash is **not yet implemented** (it lands with S8's login). Decisions: `IG-1`/`IG-2`/`IG-3`/`IG-7`/`IG-10` approved, `IG-4` approved with its revised rule, `IG-6` **conditional** — `docs/review/phase-3.2-s7-owner-decisions.md` *Amendment 1*. Delivered: `registerRequestSchema` + `normalizeEmail` + code-point/byte password rule in `packages/contracts`; Argon2id via `@node-rs/argon2@2.2.2` with configuration-driven cost (`ARGON2_MEMORY_KIB`/`ARGON2_TIME_COST`/`ARGON2_PARALLELISM`, defaults `19456`/`2`/`1`); in-process fixed-window limiter, 30 req/min/IP, before hashing and lookup; `insertRegisteredUser` in `packages/database` writing through `app_auth` and returning five safe columns; unique violations mapped to `409 CONFLICT` without a prior existence check; explicit 16 KiB body limit. Tests: contracts 208, api 118, database unit 34, `test:schema` 22, `test:rls` 88, `test:integration` 6 (real `app_auth`, including concurrent duplicate and 42501 denials for `app_api`). Benchmark: local latency-only run 2026-11-21 (`m=19456,t=2,p=1`, concurrency 1, no memory limit) — hash p95 16.2 ms, verify p95 16.0 ms, peak RSS 76.1 MiB; it does **not** satisfy `IG-6`. No session, cookie, token, or CSRF exists |
+| S7 — registration and credential verification | **implemented, verified, committed, pushed** | `7eef8ce` | `POST /v1/auth/register` exists and creates a user; credential verification with a dummy hash is **not yet implemented** (it lands with S8's login). Decisions: `IG-1`/`IG-2`/`IG-3`/`IG-7`/`IG-10` approved, `IG-4` approved with its revised rule, `IG-6` **conditional** — `docs/review/phase-3.2-s7-owner-decisions.md` *Amendment 1*. Delivered: `registerRequestSchema` + `normalizeEmail` + code-point/byte password rule in `packages/contracts`; Argon2id via `@node-rs/argon2@2.2.2` with configuration-driven cost (`ARGON2_MEMORY_KIB`/`ARGON2_TIME_COST`/`ARGON2_PARALLELISM`, defaults `19456`/`2`/`1`); in-process fixed-window limiter, 30 req/min/IP, before hashing and lookup; `insertRegisteredUser` in `packages/database` writing through `app_auth` and returning five safe columns; unique violations mapped to `409 CONFLICT` without a prior existence check; explicit 16 KiB body limit. Tests: contracts 208, api 118, database unit 34, `test:schema` 22, `test:rls` 88, `test:integration` 6 (real `app_auth`, including concurrent duplicate and 42501 denials for `app_api`). Benchmark: local latency-only run 2026-11-21 (`m=19456,t=2,p=1`, concurrency 1, no memory limit) — hash p95 16.2 ms, verify p95 16.0 ms, peak RSS 76.1 MiB; it does **not** satisfy `IG-6`. No session, cookie, token, or CSRF exists |
 
 @106@
-| S8 — login, session flow, guard, `/me`, logout | blocked | — | needs S7's registration (now implemented) plus the credential-verification helper, which S8 adds. Gates `IG-8`/`IG-9` **approved 2026-11-21** (`docs/adr/ADR-006-session-transport-and-csrf.md`), so the gate set is closed. Owns `POST /v1/auth/login`, session token generation and SHA-256 storage, the session cookie, CSRF, the authentication guard, `/me`, logout, and login-side rate limiting |
+| S8 — login, session flow, guard, `/me`, logout | **implemented and verified locally, except the CSRF synchronizer token** | — | `POST /v1/auth/login`, `GET /v1/auth/me`, `POST /v1/auth/logout`, `AuthGuard`, the `__Host-` session cookie, and login-side rate limiting are implemented and tested against a real database. Credential lookup reads `password_hash` through `app_auth` with no `withTenant` and no `app.user_id`, which is what `OPEN-01` required. **Not implemented: the `IG-9` synchronizer token** — `ADR-006` §D2.2 `Origin` validation is implemented, §D2.1 is specified only, in `docs/review/s8-csrf-token-design-proposal.md`, because token storage needs a migration and a grant change this phase was scoped without. `S8` is therefore **not complete** |
 | S9 — docs reconciliation | partially done | — | `ADR-004`/`ADR-005` accepted, `ADR-006` accepted 2026-11-21 (`IG-8`/`IG-9`, *Amendment 3*); `entity-catalog` now carries `sessions` (23 tables) and `IMPLEMENTATION_STATUS` records S3–S6 — done in `e9d1621`. `api-conventions` now documents registration and the S7/S8 split (§8.1), and §8 carries the approved cookie and CSRF wording. Still absent: the `auth-deferred.md` pointer (`consistency-checklist.md` §6.1) |
 
 Gates this phase answered: `AG-1`, `AG-2`, `IG-5`, `IG-11`, plus `IG-5-A1` and
@@ -496,6 +496,60 @@ prior `SELECT`, and the response omits `createdAt` because the grant does not co
 boundary. `IG-10` remains deferred and a public-deployment blocker; no mail infrastructure
 exists. `IG-6` remains conditional — the local run has no memory limit and no concurrency
 4, so it cannot satisfy the resource criterion.
+
+**Update, 2026-11-21 (S8).** Login, session validation, the guard, `/me`, and logout are
+implemented; `POST /v1/auth/login` reads the credential through `app_auth` and is verified
+against the real roles, so `OPEN-01`'s remaining condition is met — see the *S8 verification*
+section below. Two gates moved: `IG-8` is implemented, `IG-9` is **partially** implemented
+(`Origin` yes, synchronizer token no). S7's post-commit corrections landed in the same pass
+and are listed there.
+
+### S8 verification, 2026-11-21
+
+Uncommitted work in the tree at the time of writing; the numbers below are from this
+working tree, not from a commit.
+
+| Check | Command | Result |
+|---|---|---|
+| Workspace build | `pnpm build` | exit 0 — 5/5 tasks |
+| Workspace typecheck | `pnpm typecheck` | exit 0 — 7/7 tasks |
+| Workspace lint | `pnpm lint` | exit 0 — 5/5 tasks |
+| Workspace tests | `pnpm test` | exit 0 — contracts **213**, api **166**, database **34** |
+| Schema suite | `pnpm --filter @agroclimate/database test:schema` | **22 passed** |
+| RLS suite | `pnpm --filter @agroclimate/database test:rls` | **88 passed** |
+| Real-role integration | `NODE_ENV=development pnpm --filter @agroclimate/database test:integration` | **24 passed** |
+| Prettier | `pnpm format:check` | exit 0 |
+| Whitespace | `git diff --check` | exit 0 |
+
+What the real-database suite proves that a double cannot: the session insert writes only
+the granted columns and the database owns `created_at`; both deadlines are computed from
+`now()` and land at exactly 30 and 90 days; `app_auth` is refused `42501` when it tries to
+rewrite `token_hash`, `user_id`, `absolute_expires_at`, or `created_at`, and when it tries
+to `DELETE`; `app_api` is refused `42501` on every session statement and on
+`SELECT password_hash`; and two concurrent extensions produce exactly one update, because
+the throttle is rechecked inside the `UPDATE` predicate.
+
+Session boundaries are also asserted at the SQL level: a row past its sliding deadline and
+a row past its absolute deadline are both rejected while the row remains present, and a
+revoked row never resolves. The fixtures that age a row rewrite `created_at` together with
+the deadlines, because `sessions_expiry_order_check` (`expires_at > created_at`) correctly
+refuses a row whose deadlines precede its own creation.
+
+`OPEN-01`'s remaining condition is now met: `POST /v1/auth/login` reads `password_hash`
+through `app_auth`, the lookup needs no `app.user_id`, and `findAuthUserByEmail` is
+covered by an integration test that asserts `current_user = app_auth` and
+`current_setting('app.user_id') = NULL`. `IG-10` and `IG-6` are unchanged.
+
+### S7 corrections applied with S8
+
+| Defect | Correction |
+|---|---|
+| `FixedWindowRateLimiter` evicted a live bucket to admit an unseen client, which could reset the requesting client's own counter | an existing bucket is always served from; an unseen client at capacity is refused (`429`, `Retry-After` pointing at the earliest real reset); only expired buckets are swept |
+| `isUniqueViolation` treated every `23505` as a duplicate address | matched on `users_email_key` by constraint name, read structurally from wherever the driver nested it; an unattributable violation stays an internal error |
+| `verifyPassword` returned `false` for every throw, turning a native failure into a silent `401` | a PHC shape check separates `MalformedPasswordHashError` from an operational failure, which propagates; the auth service maps the first to the uniform failure after doing the dummy work |
+| No `Origin` validation existed | exact-match middleware on `POST`/`PUT`/`PATCH`/`DELETE`, ahead of the body parsers, answering `403 FORBIDDEN` with the standard envelope and the request id |
+| CORS could not carry the session cookie | `credentials: true`, `X-CSRF-Token` allowed, rate-limit headers exposed; still an exact allowlist |
+| The S7 row above said "not committed" | corrected |
 
 What S2 deliberately does not contain: an auth endpoint, session issuance, an
 `app_auth` role, a grant, a policy, or a migration. (This paragraph describes S2 at the

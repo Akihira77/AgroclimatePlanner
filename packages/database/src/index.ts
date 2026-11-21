@@ -12,11 +12,15 @@ import { PrismaClient } from "./generated/prisma/client.js";
 export { PrismaClient } from "./generated/prisma/client.js";
 export { Prisma } from "./generated/prisma/client.js";
 export {
+  EMAIL_UNIQUE_CONSTRAINT,
   EmailAlreadyRegisteredError,
+  findAuthUserByEmail,
   insertRegisteredUser,
-  isUniqueViolation,
+  isEmailUniqueViolation,
 } from "./auth-registration.js";
-export type { RegisteredUser } from "./auth-registration.js";
+export type { AuthUserRecord, RegisteredUser } from "./auth-registration.js";
+export { extendSession, findActiveSession, insertSession, revokeSession } from "./auth-sessions.js";
+export type { ActiveSession, IssuedSession } from "./auth-sessions.js";
 export { createTenantScope, normaliseTenantId, TenantContextError } from "./tenant.js";
 export type { TenantScope, TenantTransaction } from "./tenant.js";
 

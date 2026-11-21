@@ -42,13 +42,37 @@ export function testDatabase() {
     duplicateEmails: new Set(),
     /** Milliseconds the auth insert spends before answering, for timing assertions. */
     insertDelayMs: 0,
+    /** Credential rows the auth client can find by email. Keyed by normalized email. */
+    users: new Map(),
+    /** Session rows the auth client can resolve by token hash. */
+    sessions: new Map(),
+    /** Token hashes whose sliding deadline was actually extended. */
+    extensions: [],
+    /** Every statement the auth client served, for "did it even ask?" assertions. */
+    authStatements: [],
   };
 
-  /** Shaped like the wrapped raw-query failure: `P2010` carrying SQLSTATE 23505. */
-  const uniqueViolation = () =>
+  /**
+   * Shaped like the failure Prisma 7 actually produced for a raw insert: `P2010`
+   * with the driver error nested under `meta.driverAdapterError.cause`, where the
+   * SQLSTATE and the constraint name live. The name is what the mapping matches —
+   * `23505` alone is not enough on a table with a second unique constraint.
+   */
+  const uniqueViolation = (constraint = "users_email_key") =>
     Object.assign(new Error("Unique constraint failed on the fields: (`email`)"), {
       code: "P2010",
-      meta: { code: "23505", message: "duplicate key value violates unique constraint" },
+      meta: {
+        driverAdapterError: {
+          name: "DriverAdapterError",
+          cause: {
+            originalCode: "23505",
+            originalMessage: `duplicate key value violates unique constraint "${constraint}"`,
+            kind: "UniqueConstraintViolation",
+            constraint: { index: constraint },
+            table: "users",
+          },
+        },
+      },
     });
 
   const tenantClient = () => ({
@@ -80,33 +104,123 @@ export function testDatabase() {
   });
 
   /**
-   * The auth client. It answers exactly one statement shape — the registration
-   * insert — and never a transaction, so a handler that reached for the tenant
-   * pool would fail here instead of silently passing.
+   * The auth client. It answers the five statement shapes the authentication
+   * service issues, and never a transaction — a handler that reached for the
+   * tenant pool fails here instead of silently passing.
+   *
+   * The shapes are recognised by their SQL, and the values arrive positionally,
+   * exactly as Prisma's tagged template passes them.
    */
   const authClient = () => ({
     async $queryRaw(strings, ...values) {
       const sql = Array.isArray(strings) ? strings.join("?") : String(strings);
-      if (!/INSERT INTO app\.users/.test(sql)) {
-        throw new Error(`unexpected auth statement: ${sql}`);
+      state.authStatements.push(sql);
+
+      if (/INSERT INTO app\.users/.test(sql)) {
+        if (state.insertDelayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, state.insertDelayMs));
+        }
+
+        const [email, passwordHash] = values;
+        if (state.duplicateEmails.has(email)) throw uniqueViolation();
+
+        const user = {
+          id: randomUUID(),
+          email,
+          passwordHash,
+          role: "owner",
+          locale: "id",
+          timezone: "Asia/Jakarta",
+        };
+        state.users.set(email, user);
+        state.inserts.push({ email, passwordHash });
+        // The real query returns five columns and no hash.
+        const { passwordHash: _ignored, ...safe } = user;
+        return [safe];
       }
 
-      if (state.insertDelayMs > 0) {
-        await new Promise((resolve) => setTimeout(resolve, state.insertDelayMs));
+      if (/FROM app\.users/.test(sql) && /WHERE email/.test(sql)) {
+        const user = state.users.get(values[0]);
+        return user === undefined ? [] : [user];
       }
 
-      const [email, passwordHash] = values;
-      if (state.duplicateEmails.has(email)) throw uniqueViolation();
+      if (/INSERT INTO app\.sessions/.test(sql)) {
+        const [userId, tokenHash] = values;
+        const now = Date.now();
+        const session = {
+          id: randomUUID(),
+          userId,
+          tokenHash,
+          expiresAt: now + 30 * 24 * 60 * 60 * 1000,
+          absoluteExpiresAt: now + 90 * 24 * 60 * 60 * 1000,
+          revokedAt: null,
+          lastSeenAt: now,
+        };
+        state.sessions.set(tokenHash, session);
+        return [
+          {
+            id: session.id,
+            expires_at: new Date(session.expiresAt),
+            absolute_expires_at: new Date(session.absoluteExpiresAt),
+          },
+        ];
+      }
 
-      const user = {
-        id: randomUUID(),
-        email,
-        role: "owner",
-        locale: "id",
-        timezone: "Asia/Jakarta",
-      };
-      state.inserts.push({ email, passwordHash });
-      return [user];
+      if (/FROM app\.sessions s/.test(sql)) {
+        const session = state.sessions.get(values[0]);
+        if (session === undefined) return [];
+        const now = Date.now();
+        if (
+          session.revokedAt !== null ||
+          session.expiresAt <= now ||
+          session.absoluteExpiresAt <= now
+        ) {
+          return [];
+        }
+        const user = [...state.users.values()].find((entry) => entry.id === session.userId);
+        if (user === undefined) return [];
+        return [
+          {
+            sessionId: session.id,
+            userId: session.userId,
+            expires_at: new Date(session.expiresAt),
+            absolute_expires_at: new Date(session.absoluteExpiresAt),
+            email: user.email,
+            role: user.role,
+            locale: user.locale,
+            timezone: user.timezone,
+          },
+        ];
+      }
+
+      if (/UPDATE app\.sessions/.test(sql) && /revoked_at = now\(\)/.test(sql)) {
+        const session = state.sessions.get(values[0]);
+        if (session === undefined || session.revokedAt !== null) return [];
+        session.revokedAt = Date.now();
+        return [{ id: session.id }];
+      }
+
+      if (/UPDATE app\.sessions/.test(sql) && /last_seen_at = now\(\)/.test(sql)) {
+        const session = state.sessions.get(values[0]);
+        if (session === undefined) return [];
+        const now = Date.now();
+        const active =
+          session.revokedAt === null && session.expiresAt > now && session.absoluteExpiresAt > now;
+        const throttlePassed = now - session.lastSeenAt > 5 * 60 * 1000;
+        if (!active || !throttlePassed) return [];
+
+        session.lastSeenAt = now;
+        session.expiresAt = Math.min(now + 30 * 24 * 60 * 60 * 1000, session.absoluteExpiresAt);
+        state.extensions.push(session.tokenHash);
+        return [
+          {
+            expires_at: new Date(session.expiresAt),
+            absolute_expires_at: new Date(session.absoluteExpiresAt),
+          },
+        ];
+      }
+
+      throw new Error(`unexpected auth statement: ${sql}`);
     },
     async $disconnect() {
       state.disconnected += 1;
@@ -146,4 +260,35 @@ export async function startApp(options = {}) {
   const url = await app.getUrl();
 
   return { app, config, database, base: url.replace("[::1]", "127.0.0.1") };
+}
+
+/** Seeds a credential row, as if registration had created it. */
+export function seedUser(database, { email, passwordHash, role = "owner" }) {
+  const user = {
+    id: randomUUID(),
+    email,
+    passwordHash,
+    role,
+    locale: "id",
+    timezone: "Asia/Jakarta",
+  };
+  database.state.users.set(email, user);
+  return user;
+}
+
+/** Seeds a session row, defaulting to an active window. */
+export function seedSession(database, { userId, tokenHash, ...overrides }) {
+  const now = Date.now();
+  const session = {
+    id: randomUUID(),
+    userId,
+    tokenHash,
+    expiresAt: now + 30 * 24 * 60 * 60 * 1000,
+    absoluteExpiresAt: now + 90 * 24 * 60 * 60 * 1000,
+    revokedAt: null,
+    lastSeenAt: now,
+    ...overrides,
+  };
+  database.state.sessions.set(tokenHash, session);
+  return session;
 }

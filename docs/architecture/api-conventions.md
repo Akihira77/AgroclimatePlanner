@@ -244,7 +244,7 @@ GET    /health  |  /health/ready
 ## 8. Auth and authorization
 
 - Session cookie: `__Host-agroclimate_session`, host-only (`Domain` unset), `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`; server-side session table; sliding expiry 30 d, absolute 90 d. Only `sha256(token)` is stored, and the raw token never appears in a response body. Approved 2026-11-21 (`IG-8`, `ADR-006`). Delivered in S8; the table exists since S5.
-- CSRF: synchronizer token bound to the authenticated session, sent as `X-CSRF-Token` and validated server-side, plus exact `Origin` validation against `CORS_ORIGINS` on `POST`, `PUT`, `PATCH`, and `DELETE`. Registration, login, and logout are covered by `Origin` validation, because no authenticated session exists to bind a token to yet. `SameSite=Lax` is defence in depth, never the mechanism. Approved 2026-11-21 (`IG-9`, `ADR-006`); this replaces the earlier "double-submit token on non-GET" wording. S8.
+- CSRF: synchronizer token bound to the authenticated session, sent as `X-CSRF-Token` and validated server-side, plus exact `Origin` validation against `CORS_ORIGINS` on `POST`, `PUT`, `PATCH`, and `DELETE`. Registration, login, and logout are covered by `Origin` validation, because no authenticated session exists to bind a token to yet. `SameSite=Lax` is defence in depth, never the mechanism. Approved 2026-11-21 (`IG-9`, `ADR-006`); this replaces the earlier "double-submit token on non-GET" wording. **S8 implements the `Origin` half only**; the synchronizer token is specified in `docs/review/s8-csrf-token-design-proposal.md` and is not implemented, because its storage needs a migration and a grant change. `IG-9` is partially satisfied.
 - Authorization: ownership checked at the controller boundary, mirrored by Postgres RLS. A `404` is returned for another user's resource — never `403`, which leaks existence.
 - Roles: `owner` (everything on own data), `admin` (catalog and profile publishing, read-only on other users' farms). No per-field granularity in v1.
 
@@ -292,11 +292,35 @@ Credential verification (S7, internal — no route):
   no session row, no token. Session issuance is S8's, and this function is the only place
   a password is compared.
 
-`POST /v1/auth/login` and everything that makes a session usable are **S8**: token
-generation and SHA-256 storage, the session cookie, CSRF, the guard, `/me`, and logout.
-Until S8 ships, no account has a usable authenticated session. The login contract, when
-it exists, is: rate limit before the lookup, the same normalisation, uniform `401`
-`UNAUTHENTICATED` on failure, and the token only in the cookie — never in the body.
+### 8.2 Login, sessions, and logout (S8)
+
+- `POST /v1/auth/login` takes `{ email, password }`. The email rule and normalisation are
+  registration's, shared from `packages/contracts`. The password rule is **not**
+  registration's: any non-empty password up to 1024 UTF-8 bytes reaches verification, no
+  minimum, because a length failure answered with `400` and a wrong password answered with
+  `401` would make the response depend on the password that was submitted.
+- Rate limited **before** the lookup and before hashing, against the same 30 req/min/IP
+  quota `register` uses — one quota per client across the auth surface, not one per route.
+  A refused request costs no Argon2 run and no query.
+- `200` with `{ id, email, role, locale, timezone }`. `201` would claim a new addressable
+  resource was created; login authenticates.
+- Uniform failure: unknown address, wrong password, and an unreadable stored hash are
+  `401 UNAUTHENTICATED`, same message, same envelope, and the same Argon2id work — an
+  unknown address is verified against a process-wide dummy hash. A native or resource
+  failure is **not** a `401`; it propagates as an internal error.
+- The token is 32 CSPRNG bytes, base64url, 43 characters, opaque. Only `sha256(token)`
+  lowercase hex is stored; the raw value appears only in the `Set-Cookie` header.
+- Deadlines are computed in SQL from `now()`, never from JavaScript: `expires_at`
+  = `now() + 30 days`, `absolute_expires_at` = `now() + 90 days`.
+- `GET /v1/auth/me` returns the safe user representation from the session the guard
+  validated. A missing, malformed, unknown, revoked, or expired session is one `401`, and
+  the cookie is cleared when the session is unusable.
+- `POST /v1/auth/logout` is `204` for every input — absent, malformed, active, already
+  revoked — revokes by setting `revoked_at` (never deletes), and clears the cookie with
+  the attributes it was set with.
+- Sliding expiry is extended at most once per five minutes, atomically, and clamped to
+  `absolute_expires_at` by `LEAST(...)`. The cookie's `Expires` always mirrors the
+  database's deadline, so it can never outlive the row.
 
 Passwords are hashed with Argon2id (`IG-6`): a fresh 16-byte random salt per hash,
 32-byte output, PHC string encoding, and parameters held in one configuration constant.
@@ -320,7 +344,11 @@ registrant — a blocker before public deployment.
   store (Redis) is **not** approved.
 - Read endpoints: 300 req/min/user.
 - `POST /agronomy/evaluate` and `POST /ai/briefing`: 20/hour/user, because both are compute-costly and neither is needed at dashboard speed.
-- Responses include `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`.
+- Responses include `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`. The
+  limiter tracks at most 10,000 client addresses; that bound is an overload safeguard, not
+  a quota. An address that already has a bucket is always served from it, and an unseen
+  address at capacity is refused with the same `429`, never admitted by evicting somebody
+  else's live counter. Only expired buckets are reclaimed.
 
 ## 10. Versioning of semantics, not just routes
 

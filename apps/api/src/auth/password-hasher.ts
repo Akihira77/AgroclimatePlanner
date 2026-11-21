@@ -30,8 +30,49 @@ export const ARGON2_OUTPUT_BYTES = 32;
  */
 const ARGON2ID = 2 as Algorithm;
 
+/**
+ * Every hash this project writes matches this shape: Argon2id, version 19, the
+ * three cost fields, a 22-character base64 salt (16 bytes) and a 43-character
+ * base64 digest (32 bytes), no padding.
+ *
+ * It is a *shape* check, not a validity check — proving a PHC string is
+ * cryptographically well-formed is the library's job. Its purpose is to separate
+ * two outcomes that `@node-rs/argon2` reports with the same exception class: a
+ * stored value that is not a hash at all (a truncated column, a NULL coerced to
+ * text, a plaintext pasted into the wrong field) and a native failure while
+ * verifying a real hash.
+ */
+const WELL_FORMED_HASH =
+  /^\$argon2id\$v=19\$m=\d{1,7},t=\d{1,3},p=\d{1,3}\$[A-Za-z0-9+/]{22}\$[A-Za-z0-9+/]{43}$/;
+
+/**
+ * A stored value that cannot be verified, as distinct from a wrong password.
+ *
+ * It is thrown rather than returned so the caller cannot accidentally treat it as
+ * "no match" without deciding what to do. The authentication service turns it into
+ * the same public failure as a wrong password *after* performing the dummy
+ * verification, which keeps the response and its cost uniform.
+ */
+export class MalformedPasswordHashError extends Error {
+  override readonly name = "MalformedPasswordHashError";
+}
+
+export function isWellFormedPasswordHash(value: string): boolean {
+  return WELL_FORMED_HASH.test(value);
+}
+
 export interface PasswordHasher {
   hashPassword(password: string): Promise<string>;
+  /**
+   * `true` for a match, `false` for a mismatch.
+   *
+   * Throws `MalformedPasswordHashError` when the stored value is not a hash, and
+   * lets any other failure propagate: a native-library or resource failure must
+   * surface as an internal error, not as "wrong password". The previous version
+   * swallowed everything, which would have turned an operational fault into a
+   * silent `401` for every user at once — a failure that looks like a working
+   * login form rejecting correct credentials.
+   */
   verifyPassword(passwordHash: string, password: string): Promise<boolean>;
 }
 
@@ -50,19 +91,12 @@ export function createPasswordHasher(config: PasswordHashingConfig): PasswordHas
 
     /**
      * Verification reads the parameters from the stored PHC string, which is the
-     * property that makes a future cost increase safe: old hashes keep verifying.
-     *
-     * A malformed hash returns `false` rather than throwing. The alternative leaks
-     * a distinction between "no such hash" and "wrong password" into the caller's
-     * control flow, and S8's uniform-failure rule is easier to keep when the
-     * primitive itself has one failure value.
+     * property that makes a future cost increase safe: old hashes keep verifying
+     * under the parameters they were created with.
      */
     async verifyPassword(passwordHash: string, password: string): Promise<boolean> {
-      try {
-        return await verify(passwordHash, password);
-      } catch {
-        return false;
-      }
+      if (!isWellFormedPasswordHash(passwordHash)) throw new MalformedPasswordHashError();
+      return verify(passwordHash, password);
     },
   };
 }

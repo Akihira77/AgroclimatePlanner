@@ -47,6 +47,35 @@ describe("request id, headers, CORS, cookies, proxy trust", () => {
     assert.notEqual(response.headers.get("content-security-policy"), null);
   });
 
+  it("allows credentials for the configured origin only", async () => {
+    // The web app is a separate origin (`ADR-006`), so the session cookie is sent
+    // only when the preflight grants credentials — and never for a wildcard or an
+    // unlisted origin.
+    const allowed = await fetch(`${base}/health`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: "http://localhost:5173",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "content-type,x-csrf-token",
+      },
+    });
+
+    assert.equal(allowed.status, 204);
+    assert.equal(allowed.headers.get("access-control-allow-origin"), "http://localhost:5173");
+    assert.equal(allowed.headers.get("access-control-allow-credentials"), "true");
+    assert.notEqual(allowed.headers.get("access-control-allow-origin"), "*", "never a wildcard");
+
+    const allowedHeaders = (
+      allowed.headers.get("access-control-allow-headers") ?? ""
+    ).toLowerCase();
+    assert.ok(allowedHeaders.includes("x-csrf-token"), allowedHeaders);
+
+    const exposed = (allowed.headers.get("access-control-expose-headers") ?? "").toLowerCase();
+    for (const header of ["x-request-id", "ratelimit-limit", "retry-after"]) {
+      assert.ok(exposed.includes(header), `${header} should be readable by the browser`);
+    }
+  });
+
   it("allows a configured origin and refuses an unlisted one", async () => {
     const allowed = await fetch(`${base}/health`, {
       method: "OPTIONS",

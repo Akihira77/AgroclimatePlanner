@@ -10,10 +10,13 @@ const FAST_HASHING = { passwordHashing: { memoryCostKib: 8, timeCost: 1, paralle
 
 const VALID_PASSWORD = "correct horse battery staple";
 
+/** `Origin` is mandatory on state-changing requests (`ADR-006` D2.2). */
+const ORIGIN = "http://localhost:5173";
+
 async function register(base, body, headers = {}) {
   return fetch(`${base}/v1/auth/register`, {
     method: "POST",
-    headers: { "content-type": "application/json", ...headers },
+    headers: { "content-type": "application/json", origin: ORIGIN, ...headers },
     body: JSON.stringify(body),
   });
 }

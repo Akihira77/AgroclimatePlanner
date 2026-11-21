@@ -15,7 +15,7 @@ Severity describes **scope**, not urgency:
 constraints, indexes, policies, and grants; all of them can be created today,
 which is exactly why the severity of every item that blocks anything is P1 with a
 named subsystem rather than a phase-wide stop. A blocker is never widened to P0 to
-signal that it matters — `OPEN-01` matters a great deal and still does not stop
+signal that it matters — an item that blocks an entire subsystem still does not stop
 a migration from applying.
 
 **The register is 29 items: 14 P1 and 15 P2.** The 14 are classified by what they
@@ -51,7 +51,7 @@ Two columns describe impact, and they are independent of severity:
 
 | Value | Means | Example |
 |---|---|---|
-| **hard** | no implementation path exists; the affected slice cannot be written at all | `OPEN-01` — nothing can read a credential |
+| **hard** | no implementation path exists; the affected slice cannot be written at all | — (no entry currently sits at this severity: `OPEN-01` was the last, closed 2026-11-21) |
 | **conditional** | the path exists and works until a named condition enters scope, and then it stops | `OPEN-28` — the threat model holds until a leaked DSN is in scope |
 | **mitigated** | a degraded path ships and is labelled as degraded; the decision improves it, it does not stop it | `OPEN-02` — the BMKG band falls back to labelled Open-Meteo |
 | **none** | the DDL half is settled by omission, so nothing is blocked; only a vocabulary or contract remains open | `OPEN-09` — `D26` ships `plantings` without the default and without the index |
@@ -69,8 +69,8 @@ part of it.
 | ID | Sev | Category | Applies | Blocking | What is unresolved | Blocked | Continues independently |
 |---|---|---|---|---|---|---|---|
 | `OPEN-09` | P1 | catalog vocabulary | after Phase 3 (vocabulary only) | **none** — `D26` omits the DDL | whether the planting status vocabulary spells `active` | the `plantings.status` default and `plantings_active_idx`, both **deliberately not created** in Phase 3 | the `plantings` table without a default, `harvests`, every other table and index |
-| `OPEN-01` | P1 | authentication | after Phase 3 | **hard** for the slice: the mechanism (`ADR-004`, S3/S4/S6) is decided and shipped, the login endpoint that reads a credential through it is not | login, session issuance, and therefore every authenticated request | the DDL, the catalog, the weather plane, all RLS policies and grants |
-| `OPEN-13` | P1 | authentication | after Phase 3 | **none** — resolved 2026-11-20 | nothing: PostgreSQL `app.sessions` was selected (`ADR-005`) and shipped in S5 | nothing on the storage question; the request path that uses the table stays `OPEN-01` | everything — the table exists, is granted, and is verified on canonical |
+| `OPEN-01` | P1 | authentication | after Phase 3 | **none** — resolved 2026-11-21: the mechanism (`ADR-004`, S3/S4/S6) is shipped, and `POST /v1/auth/login` reads a credential through `app_auth` (`S8`, real-role integration test) | nothing now; it blocked login, session issuance, and every authenticated request | the DDL, the catalog, the weather plane, all RLS policies and grants |
+| `OPEN-13` | P1 | authentication | after Phase 3 | **none** — resolved 2026-11-20 | nothing: PostgreSQL `app.sessions` was selected (`ADR-005`) and shipped in S5 | nothing on the storage question; the request path that uses the table arrived with `S8`, closing `OPEN-01` | everything — the table exists, is granted, and is verified on canonical |
 | `OPEN-17` | P1 | field snapshot | after Phase 3 | **hard**, for point-shaped fields only | what `areaHa` means for a `POINT`-shaped field | field snapshot creation for point-shaped fields, and every artifact derived from one | the DDL (a `POINT` row is still storable); `POLYGON`/`MULTIPOLYGON` fields end to end |
 | `OPEN-21` | P1 | field snapshot | after Phase 3 | **hard** | the `irrigationAvailable` boolean mapping and three field vocabularies | field → snapshot construction | the DDL — the columns stay unconstrained `text`; every non-snapshot path |
 | `OPEN-18` | P1 | cell resolution | after Phase 3 | **hard** | the `cell_key` rounding rule, per model | writing a cell identity, and field → cell resolution for any model whose rule is undefined | the DDL (`cell_key` is `text` for exactly this reason), the catalog, every query that reads an already-keyed cell |
@@ -122,7 +122,7 @@ Reading the matrix:
   fallback is specified and labelled. A register that quietly dropped it would be
   the same defect in the other direction.
 
-### 1.2 `OPEN-01` — the authentication lookup — **P1**
+### 1.2 `OPEN-01` — the authentication lookup — **RESOLVED 2026-11-21**
 
 The read that happens before a tenant context exists. `app_api` has no grant on
 `app.users`; the table has `FORCE` RLS; `app.user_id` is only set inside
@@ -134,16 +134,18 @@ is not buildable from the current schema.
 `app.users`, two policies, `db:verify` 499 assertions, the `auth-boundary` suite at 49
 real-role cases. On 2026-11-21 the owner confirmed that boundary as final — no
 `BYPASSRLS` shortcut, no new `SECURITY DEFINER` lookup, no tenant context on the auth
-path (*Amendment 3* in `docs/review/phase-3.2-owner-decisions.md`). What remains open is
-the **request path** — no endpoint reads a credential through that boundary yet.
-Registration and credential verification are S7; the login endpoint is S8. Both are
-recorded in `docs/review/phase-3.2-s7-owner-decisions.md` without being implemented.
+path (*Amendment 3* in `docs/review/phase-3.2-owner-decisions.md`).
 
-**Blocks:** the authentication slice — login, session issuance, and therefore
-every authenticated request. It does **not** block table creation, the catalog,
-the weather plane, or any RLS policy.
-**Would be settled by:** a login endpoint that reads a credential through `app_auth`,
-plus the verification that proves it.
+**Closed by the `S8` request path.** `POST /v1/auth/login` reads `password_hash` through
+`findAuthUserByEmail`, which issues a plain `SELECT` on `app.users` through the `app_auth`
+client — no `withTenant`, no `app.user_id`. `packages/database/test/integration/session.test.mjs`
+proves it against the real roles: the connection reports `current_user = app_auth`,
+`current_setting('app.user_id', true)` is `NULL`, the credential row is returned, and
+`app_api` is still refused `42501` on `SELECT password_hash`. Both halves of the gate — the
+mechanism and the read path — are now shipped.
+
+**Blocked:** nothing. It blocked the authentication slice, which now exists.
+**Settled by:** `POST /v1/auth/login` reading a credential through `app_auth`, verified.
 
 ### 1.3 `OPEN-17` — `area_ha` for a `POINT` field — **P1**
 
@@ -383,7 +385,7 @@ and "deferred" were doing too much work:
 | ID | Disposition | Assigned to | Why Phase 3 does not depend on it |
 |---|---|---|---|
 | `OPEN-09` | **DEFERRED** | the first `plantings` writer | the DDL half is settled by omission (`D26`): no default, no partial index |
-| `OPEN-01` | **DEFERRED** | authentication slice (`S7` registration, `S8` login) | decision half closed 2026-11-21: the owner confirmed the dedicated `app_auth` boundary as final (`docs/review/phase-3.2-owner-decisions.md` *Amendment 3*). The registration **write** path is now implemented and verified through `app_auth` (`test:integration`, 2026-11-21), but this row closes only when a login endpoint **reads** a credential through the boundary and the verification proves it. What remains is `S8` code — technical, not a judgement call |
+| `OPEN-01` | **RESOLVED** | — | both halves met: the owner confirmed the `app_auth` boundary as final (`docs/review/phase-3.2-owner-decisions.md` *Amendment 3*), and `POST /v1/auth/login` now reads `password_hash` through it, proven by `packages/database/test/integration/session.test.mjs` (`current_user = app_auth`, `app.user_id` unset, `app_api` still refused `42501`) |
 | `OPEN-13` | **RESOLVED** | — | not applicable now: `ADR-005` accepted, S5 applied canonically, and the S6 `auth-boundary` suite green (49 cases) |
 | `OPEN-17` | **BLOCKED_EXTERNAL_INPUT** | product decision, then the snapshot path | a `POINT` row is storable; only its snapshot is impossible |
 | `OPEN-18` | **DEFERRED** | ingestion; the rule is derivable from each grid's published resolution | `cell_key` is `text`; no constraint depends on its content |
@@ -412,12 +414,15 @@ and "deferred" were doing too much work:
 | `OPEN-25` | **DEFERRED** | writer discipline | a looping supersession chain is a bug, not a state |
 | `OPEN-29` | **DEFERRED** | snapshot builder | the column stores what the contract says it stores |
 
-**Counts:** 1 RESOLVED (`OPEN-13`), 19 DEFERRED, 9 BLOCKED_EXTERNAL_INPUT, 0 NOT_APPLICABLE.
+**Counts:** 2 RESOLVED (`OPEN-01`, `OPEN-13`), 18 DEFERRED, 9 BLOCKED_EXTERNAL_INPUT,
+0 NOT_APPLICABLE.
 
-One item is `RESOLVED`, and it earned the word: an accepted ADR, an applied migration,
-and a real-role suite green on the canonical database, in that order. The other 28 still
-need an owner outside this task — a product decision, a licence, an agronomic vocabulary,
-or a security review.
+Both `RESOLVED` items earned the word, and neither earned it from a decision alone:
+`OPEN-13` from an accepted ADR, an applied migration, and a real-role suite green on the
+canonical database; `OPEN-01` from the confirmed boundary plus a login path that reads a
+credential through it, with a real-role test proving `current_user = app_auth`. The other
+27 still need an owner outside this task — a product decision, a licence, an agronomic
+vocabulary, or a security review.
 
 Note that `RESOLVED` is still not the goal. A phase that resolved `OPEN-17` by assuming a
 500 m radius "for now" would have made the database lie about a plot's area, and that lie

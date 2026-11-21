@@ -181,12 +181,15 @@ every route.
 
 ## Explicit limitations
 
-1. **Not implemented.** No cookie, no token, no `Origin` check, no `X-CSRF-Token`
-   handling exists. `S8` must not be treated as started because this ADR is accepted.
-2. **The CSRF token retrieval mechanism is undecided.** D2.1 fixes the constraints; `S8`
-   design must propose the shape (a `GET` endpoint, a field on the login response, or a
-   value inside an existing envelope) and the owner records it. Token length, encoding,
-   storage form, and rotation policy are likewise `S8` design details, not approvals.
+1. **Partially implemented (2026-11-21).** `S8` implements D1 (the cookie) and D2.2
+   (`Origin` validation); D2.1 (the synchronizer token) is **not** implemented, so no
+   `X-CSRF-Token` is read and `IG-9` is partially satisfied. Acceptance of this ADR
+   remains an approval, not a delivery claim.
+2. **The CSRF token retrieval mechanism is proposed, not approved.** D2.1 fixes the
+   constraints; the shape — a session-bound column, a `GET /v1/auth/csrf` endpoint, 32
+   bytes base64url, plaintext storage, no rotation — is in
+   `docs/review/s8-csrf-token-design-proposal.md` and needs an owner decision, because it
+   costs a migration and a column grant that this phase was scoped without.
 3. **`Origin` validation assumes correct proxy behaviour.** If a deployment terminates TLS
    at a proxy, the API must see the real client `Origin`; the existing `TRUST_PROXY`
    handling already refuses an unconditional `true` (`runtime-config.ts`), and this ADR

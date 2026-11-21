@@ -1,11 +1,8 @@
-import { randomUUID } from "node:crypto";
-
 import type { ArgumentsHost, ExceptionFilter } from "@nestjs/common";
 import { Catch, HttpException, Logger } from "@nestjs/common";
-import type { ErrorCode, ErrorResponse, ValidationIssue } from "@agroclimate/contracts";
+import type { ErrorCode, ValidationIssue } from "@agroclimate/contracts";
 import {
   errorCodeSchema,
-  errorResponseSchema,
   notFoundErrorCodeSchema,
   validationDetailsSchema,
 } from "@agroclimate/contracts";
@@ -15,24 +12,7 @@ import type { RuntimeConfig } from "../config/runtime-config.js";
 import type { ApiRequest } from "./request-id.middleware.js";
 import { REQUEST_ID_HEADER } from "./request-id.middleware.js";
 import { ValidationFailedException } from "./validation-failed.exception.js";
-
-/**
- * Fixed copy per code. Taking the message from the exception would mean an
- * arbitrary `Error` — or a Prisma error whose text contains the failing SQL —
- * could reach a client, so the message is ours and the exception contributes
- * nothing unless the code itself validated.
- */
-const MESSAGES: Readonly<Record<string, string>> = {
-  VALIDATION_FAILED: "Permintaan tidak valid.",
-  UNAUTHENTICATED: "Sesi tidak ditemukan atau sudah berakhir.",
-  FORBIDDEN: "Tidak diizinkan.",
-  CONFLICT: "Permintaan bertabrakan dengan keadaan data saat ini.",
-  INSUFFICIENT_DATA: "Data yang dibutuhkan belum mencukupi.",
-  RATE_LIMITED: "Batas permintaan terlampaui.",
-  PROVIDER_UNAVAILABLE: "Nilai cuaca tidak tersedia dan tidak ada cadangan yang diizinkan.",
-  DEPENDENCY_UNAVAILABLE: "Ketergantungan layanan tidak tersedia.",
-  INTERNAL_ERROR: "Terjadi kesalahan pada server.",
-};
+import { errorResponseBody, requestIdOf } from "./api-error.js";
 
 /**
  * The status each singleton code implies. Used to reject an explicit code whose
@@ -128,7 +108,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
     const request = http.getRequest<ApiRequest>();
     const response = http.getResponse<Response>();
 
-    const requestId = request.requestId ?? randomUUID();
+    const requestId = requestIdOf(request.requestId);
     if (request.requestId === undefined) response.setHeader(REQUEST_ID_HEADER, requestId);
 
     const resolved = this.resolve(exception);
@@ -137,7 +117,9 @@ export class ApiExceptionFilter implements ExceptionFilter {
       this.logFailure(requestId, resolved.status, resolved, exception);
     }
 
-    response.status(resolved.status).json(this.body(resolved, requestId));
+    response
+      .status(resolved.status)
+      .json(errorResponseBody(resolved.code, requestId, resolved.details));
   }
 
   /**
@@ -171,28 +153,6 @@ export class ApiExceptionFilter implements ExceptionFilter {
       .join(" ");
 
     this.logger.error(line);
-  }
-
-  private body(resolved: Resolved, requestId: string): ErrorResponse {
-    const error: Record<string, unknown> = {
-      code: resolved.code,
-      message: MESSAGES[resolved.code] ?? MESSAGES["INTERNAL_ERROR"],
-      requestId,
-    };
-    if (resolved.details !== undefined) error.details = resolved.details;
-
-    const parsed = errorResponseSchema.safeParse({ error });
-    if (parsed.success) return parsed.data;
-
-    // Unreachable by construction: every field above is already validated. Kept
-    // because sending an invalid envelope is worse than sending a plain one.
-    return {
-      error: {
-        code: "INTERNAL_ERROR",
-        message: MESSAGES["INTERNAL_ERROR"] ?? "Internal error",
-        requestId,
-      },
-    };
   }
 
   private resolve(exception: unknown): Resolved {

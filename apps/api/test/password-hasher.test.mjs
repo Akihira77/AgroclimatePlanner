@@ -4,7 +4,11 @@ import { describe, it } from "node:test";
 
 import { parseOptions } from "@node-rs/argon2";
 
-import { createPasswordHasher } from "../dist/auth/password-hasher.js";
+import {
+  createPasswordHasher,
+  isWellFormedPasswordHash,
+  MalformedPasswordHashError,
+} from "../dist/auth/password-hasher.js";
 import { parseRuntimeConfig } from "../dist/config/runtime-config.js";
 
 /**
@@ -57,8 +61,30 @@ describe("password hashing", () => {
     assert.equal(await hasher.verifyPassword(digest, "correct horse battery staple"), true);
   });
 
-  it("returns false instead of throwing on a malformed hash", async () => {
-    assert.equal(await hasher.verifyPassword("not-a-phc-string", "whatever"), false);
+  it("throws a classified error when the stored value is not a hash", async () => {
+    // Distinct from a wrong password: the authentication service turns this into
+    // the same public failure only after doing the dummy work, and an unexpected
+    // native failure must stay distinguishable from both.
+    for (const malformed of [
+      "",
+      "not-a-phc-string",
+      "plaintextpassword",
+      "$argon2i$v=19$m=8,t=1,p=1$c2hvcnQ$c2hvcnQ",
+      "$argon2id$v=19$m=8,t=1,p=1$c2hvcnQ$c2hvcnQ",
+      "a".repeat(96),
+    ]) {
+      await assert.rejects(
+        () => hasher.verifyPassword(malformed, "whatever"),
+        MalformedPasswordHashError,
+        `expected a classification for ${JSON.stringify(malformed)}`,
+      );
+      assert.equal(isWellFormedPasswordHash(malformed), false);
+    }
+  });
+
+  it("recognises the hashes it writes", async () => {
+    const digest = await hasher.hashPassword("correct horse battery staple");
+    assert.equal(isWellFormedPasswordHash(digest), true, digest);
   });
 
   it("does not hash Unicode-normalised or trimmed input", async () => {

@@ -12,6 +12,7 @@ import helmet from "helmet";
 import { AppModule } from "./app.module.js";
 import type { RuntimeConfig } from "./config/runtime-config.js";
 import { ApiExceptionFilter } from "./http/api-exception.filter.js";
+import { originValidation } from "./http/origin.middleware.js";
 import { requestIdMiddleware } from "./http/request-id.middleware.js";
 
 export interface CreateApplicationOptions {
@@ -59,32 +60,52 @@ export async function createApplication(
 
   const express: Express = app.getHttpAdapter().getInstance();
 
-  // An explicit bound instead of the adapter's implicit 100 KiB default. A
-  // registration body is under 2 KiB by contract; 16 KiB leaves headroom without
-  // making the parser a memory surface.
-  app.useBodyParser("json", { limit: REQUEST_BODY_LIMIT });
-  app.useBodyParser("urlencoded", { extended: false, limit: REQUEST_BODY_LIMIT });
-
   // `true` is rejected by configuration parsing: with it, any caller sets
   // `X-Forwarded-For` and picks their own client IP.
   express.set("trust proxy", config.trustProxy === false ? false : [...config.trustProxy]);
   express.disable("x-powered-by");
 
-  app.use(helmet());
-  // No secret: signed cookies are not part of this phase, and a secret here
-  // would imply a trust decision nobody has made.
-  app.use(cookieParser());
+  // Order is a security property (`ADR-006`), not a preference:
+  //
+  // 1. The request id exists before anything can refuse a request, so the
+  //    correlation id a client is given and the one in an error body agree —
+  //    including for an `Origin` refusal that never reaches a controller.
+  // 2. `Origin` is validated before the body is parsed, so a forged state-changing
+  //    request costs no parsing, no hashing, and no query.
+  // 3. Only then are bodies parsed, with an explicit bound rather than the
+  //    adapter's implicit 100 KiB default.
   app.use(requestIdMiddleware({ trustIncoming: config.trustRequestIdHeader }));
+  app.use(originValidation({ trustedOrigins: config.corsOrigins }));
+  app.useBodyParser("json", { limit: REQUEST_BODY_LIMIT });
+  app.useBodyParser("urlencoded", { extended: false, limit: REQUEST_BODY_LIMIT });
+
+  app.use(helmet());
+  // No secret: the session cookie is opaque and unsigned, by design (`ADR-006`).
+  // Signing would imply a second trust decision nobody has made.
+  app.use(cookieParser());
 
   app.enableCors({
-    // No `origin: true`, no `*`: the allowlist is the policy.
+    // No `origin: true`, no `*`: the allowlist is the policy. Credentialed CORS
+    // requires exactly this — a wildcard origin with credentials is invalid by
+    // specification, and reflecting any origin would defeat the cookie's scope.
     origin: [...config.corsOrigins],
-    // Not enabled. Nothing in this phase issues a cookie, so allowing
-    // credentialed cross-origin requests would only widen the surface.
-    credentials: false,
+    // The web app is a separate origin from the API (`ADR-006`), so the browser
+    // sends the session cookie only if the response allows credentials.
+    credentials: true,
     methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "X-Request-Id", "Idempotency-Key", "If-Match"],
-    exposedHeaders: ["X-Request-Id"],
+    // `X-CSRF-Token` is listed ahead of the synchronizer-token implementation so a
+    // frontend does not need a CORS change on the day it lands; the header alone
+    // grants nothing, because no endpoint reads it yet.
+    allowedHeaders: ["Content-Type", "X-Request-Id", "Idempotency-Key", "If-Match", "X-CSRF-Token"],
+    // The rate limiter's headers are useless to a browser client if CORS hides
+    // them, and `Retry-After` is what a client backs off on.
+    exposedHeaders: [
+      "X-Request-Id",
+      "RateLimit-Limit",
+      "RateLimit-Remaining",
+      "RateLimit-Reset",
+      "Retry-After",
+    ],
     maxAge: 600,
   });
 

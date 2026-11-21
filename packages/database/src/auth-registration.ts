@@ -1,13 +1,15 @@
 import type { PrismaClient } from "./generated/prisma/client.js";
 
 /**
- * Registration writes through the authentication boundary (`ADR-004`).
+ * The authentication boundary's user operations (`ADR-004`).
  *
- * The insert is raw SQL rather than `client.user.create`, and deliberately so:
- * Prisma's `create` returns every column, and `app_auth` has no `SELECT` on
- * `created_at` or `updated_at`, so the generated `RETURNING *` would fail with
- * `42501` after the row had been inserted. Naming the five columns the grant does
- * cover is what keeps the response inside the approved boundary (`H-1`).
+ * Everything here runs through `app_auth` and is written as explicit SQL rather
+ * than Prisma's model API, for one measured reason: the generated queries select
+ * every column, and `app_auth` has no `SELECT` on `created_at` or `updated_at`.
+ * `RETURNING *` fails with `42501` *after* the row was inserted, so a registration
+ * that used `client.user.create` would report a failure that did not happen.
+ * Naming the columns the grant covers is what keeps the read inside the approved
+ * boundary (`H-1`).
  */
 
 /** The columns `app_auth` may read back: no timestamps. */
@@ -20,12 +22,24 @@ export interface RegisteredUser {
 }
 
 /**
+ * A credential row. This type never leaves the authentication process: it carries
+ * `passwordHash`, and serialising it would be the leak the whole boundary exists
+ * to prevent.
+ */
+export interface AuthUserRecord extends RegisteredUser {
+  readonly passwordHash: string;
+}
+
+/**
  * The duplicate-address signal, kept as its own type so the endpoint maps one
  * condition to `409 CONFLICT` instead of pattern-matching a driver message.
  */
 export class EmailAlreadyRegisteredError extends Error {
   override readonly name = "EmailAlreadyRegisteredError";
 }
+
+/** The one constraint that means "this address is taken". */
+export const EMAIL_UNIQUE_CONSTRAINT = "users_email_key";
 
 /**
  * Inserts the account without a prior existence check (`IG-2`).
@@ -55,35 +69,93 @@ export async function insertRegisteredUser(
     }
     return row;
   } catch (error) {
-    if (isUniqueViolation(error)) throw new EmailAlreadyRegisteredError();
+    if (isEmailUniqueViolation(error)) throw new EmailAlreadyRegisteredError();
     throw error;
   }
 }
 
 /**
- * PostgreSQL `23505` (`unique_violation`), independent of how Prisma wrapped it.
+ * Looks a credential up by the normalized address, through `app_auth`.
  *
- * Prisma 7 reports a failed raw query as `P2010` and nests the driver's own
- * fields — `meta.driverAdapterError.cause.originalCode` — rather than exposing the
- * SQLSTATE at the top level. Older shapes (`meta.code`) and a direct driver error
- * are checked too, because the wrapper is not part of the SQL contract. The
- * constraint name is not matched: `users` has one unique constraint on this path,
- * so the state alone is unambiguous here.
+ * `email` is expected to have been normalised by the shared contract function;
+ * this layer does not normalise, because two places applying the rule is how they
+ * start disagreeing. The lookup is an equality match on the unique index, and it
+ * is the only read on this table that returns `password_hash`.
  */
-export function isUniqueViolation(error: unknown, depth = 0): boolean {
-  if (typeof error !== "object" || error === null || depth > 5) return false;
+export async function findAuthUserByEmail(
+  client: PrismaClient,
+  email: string,
+): Promise<AuthUserRecord | null> {
+  const rows = await client.$queryRaw<AuthUserRecord[]>`
+    SELECT id::text AS id,
+           email,
+           password_hash AS "passwordHash",
+           role,
+           locale,
+           timezone
+      FROM app.users
+     WHERE email = ${email}
+     LIMIT 1
+  `;
 
-  const record = error as Record<string, unknown>;
-  if (record["code"] === "23505" || record["originalCode"] === "23505") return true;
+  return rows[0] ?? null;
+}
 
-  const meta = record["meta"];
-  if (typeof meta === "object" && meta !== null) {
-    const nested = meta as Record<string, unknown>;
-    if (nested["code"] === "23505") return true;
-    if (nested["driverAdapterError"] !== undefined) {
-      if (isUniqueViolation(nested["driverAdapterError"], depth + 1)) return true;
-    }
+/**
+ * `true` only for a violation of `users_email_key`.
+ *
+ * The earlier version treated every SQLSTATE `23505` as a duplicate address. That
+ * was wrong for a table with two unique constraints: `app.users` also has a
+ * primary key, so an unrelated collision would have been reported to the caller as
+ * `409` for an address that was never taken.
+ *
+ * The constraint identity is read structurally from wherever the driver put it —
+ * `pg` exposes `error.constraint`, Prisma 7 nests it at
+ * `meta.driverAdapterError.cause.constraint.index` — and matched by name.
+ *
+ * **When the name cannot be found, the answer is `false`.** An unattributable
+ * unique violation becomes an internal error, which is honest; guessing "email"
+ * would be the bug this function was fixed to remove. No message text is parsed:
+ * `originalMessage` is a human string, and a constraint name cannot be derived
+ * from it safely.
+ */
+export function isEmailUniqueViolation(error: unknown): boolean {
+  const found = { unique: false, constraints: new Set<string>() };
+  collect(error, 0, found);
+  return found.unique && found.constraints.has(EMAIL_UNIQUE_CONSTRAINT);
+}
+
+interface Found {
+  unique: boolean;
+  constraints: Set<string>;
+}
+
+/** Bounded depth: the shapes are known, and an unbounded walk is a cycle risk. */
+function collect(value: unknown, depth: number, found: Found): void {
+  if (depth > 6 || typeof value !== "object" || value === null) return;
+
+  if (Array.isArray(value)) {
+    for (const item of value) collect(item, depth + 1, found);
+    return;
   }
 
-  return record["cause"] !== undefined && isUniqueViolation(record["cause"], depth + 1);
+  const record = value as Record<string, unknown>;
+
+  if (
+    record["code"] === "23505" ||
+    record["originalCode"] === "23505" ||
+    record["sqlState"] === "23505"
+  ) {
+    found.unique = true;
+  }
+
+  for (const key of ["constraint", "index", "constraintName", "name"] as const) {
+    const candidate = record[key];
+    if (typeof candidate === "string") found.constraints.add(candidate);
+  }
+
+  for (const key of ["meta", "cause", "driverAdapterError", "constraint"] as const) {
+    const nested = record[key];
+    if (nested !== undefined && nested !== null) collect(nested, depth + 1, found);
+  }
 }

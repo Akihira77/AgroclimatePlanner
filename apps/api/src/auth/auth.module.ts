@@ -6,6 +6,8 @@ import { AuthDatabaseModule } from "../database/auth-database.module.js";
 import type { DatabaseClientFactory } from "../database/database.module.js";
 import { AUTH_RATE_LIMITER, PASSWORD_HASHER } from "../tokens.js";
 import { AuthController } from "./auth.controller.js";
+import { AuthGuard } from "./auth.guard.js";
+import { AuthService } from "./auth.service.js";
 import { createPasswordHasher } from "./password-hasher.js";
 import {
   AUTH_RATE_LIMIT,
@@ -16,12 +18,13 @@ import {
 } from "./rate-limit.guard.js";
 
 /**
- * S7's authentication surface. Scoped, not global: the auth database pool must
- * not be reachable from modules that serve tenant data, and vice versa.
+ * The authentication surface (`S7` registration, `S8` login and sessions). Scoped,
+ * not global: the auth database pool must not be reachable from modules that serve
+ * tenant data, and vice versa.
  *
- * The limiter is one instance per process, which is the approved v1 behaviour —
- * a per-module instance would multiply the effective quota if the module were
- * ever imported twice.
+ * The limiter is one instance per process and one instance per module — a
+ * per-route instance would multiply the effective quota, which is why registration
+ * and login share this provider instead of each constructing their own.
  */
 @Module({})
 export class AuthModule {
@@ -45,6 +48,8 @@ export class AuthModule {
             }),
         },
         AuthRateLimitGuard,
+        AuthService,
+        AuthGuard,
       ],
     };
   }

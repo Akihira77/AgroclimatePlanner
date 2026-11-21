@@ -123,6 +123,41 @@ export const registerRequestSchema = z.strictObject({
 export type RegisterRequest = z.infer<typeof registerRequestSchema>;
 
 /**
+ * The login password rule deliberately does **not** reuse `passwordSchema`.
+ *
+ * The minimum length is a registration policy, not an input shape: applying it
+ * here would answer a too-short password with `400` and a wrong one with `401`,
+ * so the failure a caller sees would depend on the password they submitted. Login
+ * has one public failure (`401 UNAUTHENTICATED`), and it is reached by verifying,
+ * not by validating. The upper bound and the surrogate rule stay, because those
+ * describe bytes that cannot be hashed as supplied, and they bound the work a
+ * request may trigger.
+ */
+export const loginPasswordSchema = z
+  .string()
+  .min(1)
+  .superRefine((password, context) => {
+    if (hasUnpairedSurrogate(password)) {
+      context.addIssue({ code: "custom", message: "password contains an unpaired surrogate" });
+      return;
+    }
+
+    if (passwordByteLength(password) > PASSWORD_MAX_UTF8_BYTES) {
+      context.addIssue({
+        code: "custom",
+        message: `password exceeds ${PASSWORD_MAX_UTF8_BYTES} UTF-8 bytes`,
+      });
+    }
+  });
+
+/** Same email rule and same normalisation as registration (`IG-1`). */
+export const loginRequestSchema = z.strictObject({
+  email: emailSchema,
+  password: loginPasswordSchema,
+});
+export type LoginRequest = z.infer<typeof loginRequestSchema>;
+
+/**
  * The safe registration response (`H-1`). `createdAt` is absent because the
  * `app_auth` grant does not include `created_at`; widening the grant to return it
  * is explicitly forbidden.
