@@ -5,6 +5,11 @@
   implementation**: no contract is changed, no registry instance exists, no centroid
   read exists, no route exists, and no cell is persisted. Every property below is a
   requirement on code that does not exist yet.
+- Current state, so no sentence here is read as a description: the resolver exists
+  (`packages/contracts/src/grid.ts`, eighteen synthetic vectors);
+  `createGridRegistry` is keyed by `model` alone; there is no literal `gridSpecHash`
+  fixture; there is no `SpatialResolution`; no provider grid is configured; and no
+  `field_outlook_cells` row is written by any code.
 - Date: 2026-11-21 (decision and acceptance), recorded here 2026-11-21
 - Depends on: ADR-001 (D8, provider strategy and the per-model rounding rule),
   ADR-002 (monorepo and backend architecture),
@@ -128,6 +133,11 @@ about retained raw bytes; `DerivationProvenance` is about derived artifacts and
 rejects an empty `inputRefs`. A cell identity is a pure function of a pinned
 configuration, so a focused contract is smaller and more truthful than a provenance
 envelope that cannot honestly be filled.
+
+`ResolvedCell` (`provenance.ts:104-112`) is the closer near miss and is also not
+reused: it requires `servedLat`, `servedLon`, and a non-negative `distanceKm`, so no
+value of that type can exist before the first ingest. Reusing it would force exactly
+the fabrication D4 forbids; it keeps its present meaning in field snapshots.
 
 ### D4 — `field_outlook_cells` is written by ingestion, not by resolution
 

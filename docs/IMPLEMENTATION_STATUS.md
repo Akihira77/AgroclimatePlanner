@@ -1270,10 +1270,11 @@ have no work started.
 | Item | State |
 |---|---|
 | Status | **Design only.** No contract change, no registry instance, no centroid read, no route, no persistence, no migration. The six owner decisions are in `climate-data-foundation.md` §5.2.9 and `ADR-007` |
+| Existing code it builds on | resolver + eighteen synthetic vectors + a registry keyed by `model` alone, in `packages/contracts/src/grid.ts`. No `SpatialResolution`, no centroid read, no route, no `outlook_cells` insert |
 | Registry identity | `(provider, model)`, not `model` alone (§5.2.9.1). A deliberate breaking change to `createGridRegistry`: it has no production consumer, so `grid.test.ts` is the blast radius and `CONTRACTS_VERSION` moves when it lands |
 | `gridId` | a label on one definition, not unique and never a lookup key. `gridSpecHash` keeps `gridId` in its preimage because the hash pins a named definition |
 | Result | `SpatialResolution` — `provider`, `model`, `gridId`, `gridSpecHash`, `resolutionAlgorithmVersion`, `evidence`, `requested` ≠ `anchor`, `i`, `j`, `cellKey`. No served coordinate, no `distanceKm`, no `extractionPolicy` (§5.2.9.2) |
-| Longitude | four separate concepts — normalization, domain validation, wrapping, indexing — with a boundary table for `-180`, `180`, `0`, `360`, `-0.5`, `359.5`, and three questions left to the owner (§5.2.9.3, `OPEN-18`) |
+| Longitude | four separate concepts — normalization, domain validation, wrapping, indexing — with a boundary table for `-180`, `180`, `0`, `360`, `-0.5`, `359.5`, and five questions left to the owner: three longitude, the `lonRange` bound, and the `spatialResolutionKm` hash preimage (§5.2.9.3, `OPEN-18`) |
 | Synthetic vs validated | `GridEvidence` lives on the registry entry; `requireValidated` refuses a synthetic entry on an ingest path. No fallback grid, no cross-provider selection |
 | `field_outlook_cells` | **not written in 5.2.** `distance_km` is `NOT NULL` and is a distance to a served coordinate that does not exist yet; `0` is never a placeholder (§5.2.8) |
 | Provider grids | all five still pending. Evidence is graded A (documented), B (measured), C (inferred), with a protocol; grade C never configures a row. Nothing is configured today |

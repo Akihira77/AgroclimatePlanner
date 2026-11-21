@@ -53,7 +53,7 @@ stands at `d7eeff4`.
 | Data classes | `provenance-contract.md` §1; `ADR-001` D9 | Nine `WeatherDataClass` values, `temporalClass` deprecated | **contract typed.** `enums.ts` + `weather.ts` define the enum and four value variants; `weather_records_data_class_check` restricts stored rows to the four forecast classes — verified in the catalogue | No persistence contract for a `WeatherRecord` row (only the value variant); no mapping table from adapter output to `dataClass` |
 | `ForecastRun` identity | `provenance-contract.md` §3; `background-processing.md` §3 | UUIDv7 id, natural key `(provider, model, product, initialized_at)`, upserted | **table exists and is granted** (`forecast_runs`, 9 columns, `app_api` SELECT, `app_system` RW, `forecast_runs_natural_key` + `forecast_runs_recent_idx`) | No TypeScript schema or repository for the row; no upsert helper; no `horizon_end` derivation rule per product |
 | `IngestionRun` identity | `provenance-contract.md` §3; `tables-climate.md` §3 | Unique on `(forecast_run_id, ingestion_version)`; `attempt` is a counter, not identity | **table exists and is granted** (15 columns, `ingestion_runs_identity_key`, `ingestion_runs_running_idx`) | No `ingestion_version` computation, no `target_selector_hash` definition, no status transition helper; `attempt` update path undefined |
-| Cell resolution | `tables-climate.md` §1; `physical-model.md`; `OPEN-18` | `cell_key` is per-model `text`; identity is `(provider, model, cell_key)`; the key is produced by a per-model grid resolver whose origin, spacing, orientation, and revision are explicit inputs (owner-approved 2026-11-21) | **tables exist** (`outlook_cells` 10 columns, `field_outlook_cells` 11 columns with live-uniqueness partial index); **no resolver, and no provider grid constant, exists** | The resolver and its golden vectors (§5.2.7); the five provider grid configurations, all pending external evidence (§5.2.6); field → cell writes |
+| Cell resolution | `tables-climate.md` §1; `physical-model.md`; `OPEN-18` | `cell_key` is `text`; identity is `(provider, model, cell_key)`; the key is produced by a resolver keyed on `(provider, model)` whose origin, spacing, orientation, and revision are explicit inputs (owner-approved 2026-11-21, §5.2.9) | **resolver implemented** in `packages/contracts/src/grid.ts`, with eighteen synthetic vectors; **the registry is still keyed by `model` alone**, `SpatialResolution` does not exist, and no provider grid constant exists | The `(provider, model)` registry migration, `SpatialResolution`, and the literal `gridSpecHash` fixture (§8.2 steps 5.2.1–5.2.4); the five provider grid configurations, all pending external evidence (§5.2.6); field → cell writes |
 | Field → cell mapping | `data-flow.md` §2; `tables-identity.md` §4 | Centroid in v1 (`OPEN-15`); resolution stored, never recomputed on read; a geometry edit supersedes rows | **tables exist and are tenant-scoped with `FORCE` RLS**; no code resolves a field into a cell | The resolution service; the geometry-edit supersession trigger; `field_outlook_cells` writes are not in the Field API |
 | Normalized records | `tables-climate.md` §4 | One row per `(run, cell, variable, valid_at, ensemble_member)`; `value` nullable; never deleted, only superseded | **table exists** (32 columns, 5 indexes, `weather_records_live_key` uses `NULLS NOT DISTINCT`) | The normalizer itself; unit conversion table; the supersession writer; `OPEN-14` vocabulary for `temporal_resolution`/`aggregation_level` |
 | Climatology | `ADR-001` D2; `tables-climate.md` §6 | 1991–2020, CHIRPS preferred, ERA5 as implemented fallback; a rebuild is a new `baseline_version` | **table exists** (`climatology_normals`, 11 columns, unique `(baseline_version, outlook_cell_id, month)`) | The baseline builder; the route to a reachable CHIRPS v3.0 (host timed out 2026-11-18); `baselineHash` computation over a consumed subset |
@@ -217,10 +217,10 @@ provider ──▶ adapter ──▶ raw payload ──▶ normalizer ──▶ 
 |---|---|---|---|
 | Adapter (per provider/product) | `packages/weather-core/src/adapters/*` (**exists**; SEAS5 monthly only) | pure given `(request, now)` except for the injected fetch | request shape, response parse, provider error mapping, attribution |
 | Normalizer | `packages/weather-core/src/normalize/*` (**exists**; monthly only, no unit conversion yet) | **pure** | unit conversion, `dataClass`, validity times, coverage accounting, record assembly |
-| Cell resolution | `packages/weather-core/src/cells/*` (**not written**; the pure logic exists in `@agroclimate/contracts` `grid.ts`) | **pure** | geometry → `cellKey`; served coordinate acceptance; distance |
+| Cell resolution | `packages/weather-core/src/grids/*` (the registry instance; **not written**) + `@agroclimate/contracts` `grid.ts` (the pure resolver; **implemented**) | **pure** | `(provider, model)` → `GridSpec` selection; requested coordinate → `(i, j)`, anchor, `cellKey`. **Never** served coordinates, **never** distance |
 | Ingestion pipeline | `apps/worker/src/ingest/*` | impure | run upsert, transaction, supersession, status transitions |
 | Aggregation | `apps/worker/src/aggregate/*` + `packages/climate-core/aggregate/*` (the documented `climate-core`) | pure core, impure writer | daily/weekly/monthly rollup, anomaly, coverage, spread |
-| Persistence | `packages/database/src/climate.ts` (new; not importable from `weather-core`) | impure | typed access to the six global tables + `field_outlook_cells` |
+| Persistence | `packages/database/src/climate.ts` (new; not importable from `weather-core`) | impure | typed access to the six global tables, and to `field_outlook_cells` for the ingest-side mapping write |
 | Read path | `apps/api/src/climate/*` (new module) | impure, read-only | `GET /v1/climate/outlook`, freshness computation |
 
 Two rules that shape every file above:
@@ -419,6 +419,10 @@ provider response ──▶ served_lat / served_lon  (recorded, never derived)
              ──▶ field_outlook_cells (fieldId, provider, model, cell, distance, elevationDelta)
 ```
 
+The last line is the **ingest** step, not the resolver. `field_outlook_cells` needs
+`distance_km`, measured from the provider's served coordinate, so resolution stops at
+the `outlook_cells` identity and writes no mapping row (§5.2.8).
+
 #### 5.2.1 Six concepts, never merged
 
 Conflating any two of these is the defect this section exists to prevent.
@@ -433,7 +437,8 @@ Conflating any two of these is the defect this section exists to prevent.
 | `cellKey` | the serializer | `outlook_cells.cell_key` | parsed back to recover a coordinate |
 
 `OPEN-18` is therefore narrower than "write down a rounding rule": the generic
-resolver contract is decided, and the per-model grid constants are not.
+resolver contract and the registry identity are decided, and the per-`(provider,
+model)` grid constants are not.
 
 **`OPEN-18` — owner decision 2026-11-21.** The generic contract is **approved**:
 cell identity is computed by a provider/model-specific deterministic resolver whose
@@ -569,7 +574,8 @@ point still has cells at anchors; the interpolation is recorded on the record, a
 - Old `outlook_cells` rows and old `field_outlook_cells` rows keep their model and
   keep their meaning. They are not rewritten. A field re-resolves under the new
   model on its next write, and `field_outlook_cells_live_key` supersedes the old
-  resolution rather than updating it.
+  resolution rather than updating it. The mapping row itself is written by ingest,
+  not by resolution (§5.2.8).
 - `UNIQUE (provider, model, cell_key)` therefore keeps meaning "one identity per
   provider and model per cell" across revisions, because the revision is part of the
   model string.
@@ -740,6 +746,12 @@ before any hash is persisted. Consequence to state plainly: two byte-identical
 lattices under different `gridId`s hash differently. That is intended — they are two
 reviewed definitions — and it does not affect `cellKey`, which carries only the node.
 
+**Status.** None of this exists yet. The registry in `grid.ts` is keyed by `model`
+alone, and the literal `gridSpecHash` fixture that would make an in-place edit fail
+the suite is absent — the suite proves the hash is a function of its fields, not that
+it equals a pinned value. Steps 5.2.1 and 5.2.2 add the fixture and the key
+migration; until then every sentence above is a requirement, not a description.
+
 Compatibility: this is a **deliberate breaking change** to `createGridRegistry`, not
 an extension. There is no production consumer today (`grep` finds `resolveGridCell`,
 `createGridRegistry`, `specFor` only in the test file), so the blast radius is
@@ -794,6 +806,12 @@ is neither — it is a pure function of a pinned configuration — so a focused
 provenance envelope with an empty `inputRefs`, which `provenance.ts:204-205` rejects
 anyway.
 
+`ResolvedCell` is the near miss, and it is deliberately not used: it exists
+(`provenance.ts:104-112`) but requires `servedLat`, `servedLon`, and a non-negative
+`distanceKm`, so a value of that type cannot exist before the first ingest. Reusing
+it would force exactly the fabrication §5.2.8 forbids. `SpatialResolution` is a new,
+smaller type; `ResolvedCell` keeps its present meaning in field snapshots.
+
 ##### 5.2.9.3 Longitude: four separate questions
 
 | Concept | Question it answers | Scope |
@@ -820,6 +838,10 @@ edge `180`) excludes it, because a cell owns `[node, node + step)`: there, `180`
 `out_of_grid` and the antimeridian must be requested as `-180`. That asymmetry is a
 consequence of the half-open rule, not a second wrapping rule.
 
+The `bounded [0, 360)` column records what the resolver does with that configuration
+today. It is **not** a recommendation that a provider's `[0, 360)` convention must be
+modelled that way — that choice is question 3 below and is not made.
+
 What is deliberately **not** decided here (owner approval required, recorded in
 `OPEN-18`):
 
@@ -830,15 +852,17 @@ What is deliberately **not** decided here (owner approval required, recorded in
    (antimeridian folding) instead of failing as the exclusive upper edge. Both are
    defensible; they must not both be implemented.
 3. How a provider whose convention is `[0, 360)` is expressed: a `global` domain with
-   `originLon = 0` (today's only route) or a bounded `[0, 360)` grid, which
-   `defineGridSpec` accepts but does not bound (`grid.ts:295-309`).
-4. Whether `spatialResolutionKm` belongs in the hash preimage. It is a descriptive
+   `originLon = 0` (today's only route) or a bounded `[0, 360)` grid.
+4. Whether `lonRange` gains the absolute bound that `latRange` already has
+   (`grid.ts:278`), so `["0", "400"]` stops being a legal configuration
+   (`grid.ts:295-309`).
+5. Whether `spatialResolutionKm` belongs in the hash preimage. It is a descriptive
    figure (`tables-climate.md`: "36 for EC46/SEAS5, ≈28 for ERA5"), not part of the
-   lattice, yet it is hashed. Correcting a published resolution figure therefore
-   changes `gridSpecHash` and, under the one-spec-per-pair rule, forces a new model
-   string although no cell identity changed. Today's answer — it stays, because the
-   hash pins the whole reviewed definition — should be stated as a choice, not left
-   implicit.
+   lattice, yet it is hashed today. Correcting a published resolution figure
+   therefore changes `gridSpecHash` and, under the one-spec-per-pair rule, forces a
+   new model string although no cell identity changed. Keeping it is defensible — the
+   hash pins the whole reviewed definition — but it must be a stated choice, and no
+   answer is recorded yet.
 
 Approved, and not re-opened: wrapping stays around the grid's own origin; latitude is
 never wrapped; a regional grid stays `bounded`, because wrapping it would merge two
@@ -1214,7 +1238,7 @@ a pure abstraction layer. Dependency graph:
 | Scope | **Delivered:** `packages/contracts/src/climate.ts` (run identities, `AdapterResult`, `MonthlyOutlook`), `packages/contracts/src/grid.ts` (resolver, registry, `gridSpecHash`), `packages/contracts/src/provenance.ts` (reproducibility shape), `packages/contracts/src/weather.ts` (`valueBase` → `singleValueEvaluationBasisSchema`), plus `climate.test.ts` / `grid.test.ts`. **Not delivered:** `packages/weather-core/cells/` (weather-core is 5.1's package, not created here), `apps/worker/src/queue/contract.ts` (the job interface belongs to 5.3), `packages/database/src/climate.ts` (no row types needed yet), and the `OPEN-14` vocabulary freeze |
 | Contracts | `ForecastRun` (+ natural identity), `IngestionRun` (+ `ingestionVersionOf`), `AdapterResult` (five classes), `GridSpec`, `GridRegistry`, `ResolvedGridCell`, `MonthlyOutlook` (+ `OutlookMonth` band rules), `DerivationProvenance` / `Reproducibility`. `ResolvedCell` is reused from `provenance.ts` rather than duplicated |
 | Database impact | **none.** The `jobs` table belongs to 5.3, not 5.0 |
-| Tests | `grid.test.ts` executes vectors 1–18 of §5.2.7, orientation rejection, lattice rejection, hash-mismatch detection, a one-model-one-spec registry, coordinate rejection, and the F-06 immutability cases (input copy, frozen nested ranges, frozen registry value). `climate.test.ts` covers `mixed` rejection, run identity and version derivation, the five adapter classes, the `reproducible` / `inputRefs` distinction, the F-04 coverage invariants, the F-05 month cross-field rules, the F-03 twelve-month horizon, the F-07 count-authority cases, and the monthly source-capability cases. `pnpm --filter @agroclimate/contracts test`: **354 passed**, including the pre-existing suite |
+| Tests | `grid.test.ts` executes vectors 1–18 of §5.2.7, orientation rejection, lattice rejection, hash-mismatch detection, a one-`model`-one-spec registry (the pre-5.2 key; step 5.2.2 replaces it with `(provider, model)`), coordinate rejection, and the F-06 immutability cases (input copy, frozen nested ranges, frozen registry value). `climate.test.ts` covers `mixed` rejection, run identity and version derivation, the five adapter classes, the `reproducible` / `inputRefs` distinction, the F-04 coverage invariants, the F-05 month cross-field rules, the F-03 twelve-month horizon, the F-07 count-authority cases, and the monthly source-capability cases. `pnpm --filter @agroclimate/contracts test`: **354 passed**, including the pre-existing suite |
 | Acceptance | met: `mixed` is **rejected** on a single value; vectors 1–18 pass, including negative-floor, longitude-wrap, and origin-precision cases; `reproducible: false` needs a reason and empty `inputRefs` fails on `inputRefs`; a complete result at less than 100% is rejected; a duplicate, missing, or out-of-order lead month is rejected; a mutated `GridSpec` range is impossible; **not met yet:** the queue interface, which moved to 5.3 |
 | Dependencies | — |
 | Risks | freezing a vocabulary too early (`OPEN-14`) — still deferred, not guessed at; contract churn while 5.1 is written — mitigate by versioning adapter and normalizer constants in 5.1, not the row contracts |
@@ -1254,8 +1278,8 @@ Capability status after 5.0, stated so no reader infers more than exists:
 
 | Capability | Status |
 |---|---|
-| Generic `GridSpec` resolver | **Implemented** — `packages/contracts/src/grid.ts` |
-| Generic grid hash and registry | **Implemented** — `gridSpecHash`, `createGridRegistry` |
+| Generic `GridSpec` resolver | **Implemented** — `packages/contracts/src/grid.ts`, eighteen synthetic vectors |
+| Generic grid hash and registry | **Implemented, model-keyed.** `gridSpecHash` and `createGridRegistry`; keyed by `model` alone until 5.2.2, and no literal hash fixture exists yet |
 | Golden grid resolver tests | **Implemented** — vectors 1–18 plus F-06 immutability |
 | Provider-specific grid configurations | **Pending external evidence** — all five |
 | Field-to-cell resolution service | **Not implemented** |
@@ -1289,13 +1313,27 @@ Capability status after 5.0, stated so no reader infers more than exists:
 | Objective | the resolver exists and is proven; 5.2 adds provider/model selection, a reproducible result, and the centroid read, so a field yields a deterministic cell identity. It does **not** create the field → cell mapping |
 | Prerequisites | 5.0 (resolver), 5.1 (grid metadata) |
 | Scope | the registry instance and its synthetic entry in `packages/weather-core/src/grids/` (the resolver stays in `@agroclimate/contracts` — no second implementation, no `weather-core/cells/`); `SpatialResolution` in `packages/contracts`; `upsertCell` in `packages/database/src/climate.ts` and `selectFieldAnchor` in `fields.ts`; `POST /v1/fields/:id/resolve-cell`. **No** `field_outlook_cells` write (§5.2.8) |
-| Contracts | `SpatialResolution`, `GridKey`, `GridRegistry`, `GridEvidence` (§5.2.9); `ResolvedGridCell` is reused unchanged. No `CellKey`, no `ResolvedCell`, no `distanceKm`: the audit's names for these were never implemented |
+| Contracts | `SpatialResolution`, `GridKey`, `GridRegistry`, `GridEvidence` (§5.2.9); `ResolvedGridCell` is reused unchanged. The existing `ResolvedCell` (`provenance.ts:104-112`) is left alone — it requires served coordinates and a `distanceKm`, so it cannot hold a pre-ingest result. No `CellKey` is added, no second `ResolvedCell`, and no `distanceKm` |
 | Database impact | none new. `outlook_cells` identity only — three columns, `GRANT INSERT (provider, model, cell_key)` (`migration.sql:737`). No table, column, grant, RLS or migration change. No `field_outlook_cells` row: `distance_km` is `NOT NULL` and needs a served coordinate that does not exist yet |
 | Tests | the eighteen vectors of §5.2.7 unchanged; a literal `gridSpecHash` per registered spec; registry keyed by `(provider, model)` — duplicate pair rejected, unknown pair rejected, one `gridId` on two pairs accepted, two providers sharing one model string independent; synthetic entries refused by `requireValidated`; the result keeps requested ≠ anchor and carries no served coordinate; `ST_Centroid` → six-decimal anchor |
 | Acceptance | all eighteen vectors still pass; editing the hash preimage or a spec field fails the fixture; the same field anchor always resolves to the same `cellKey`; an unknown pair **fails** with `unknown_model` and mints no cell; a synthetic entry cannot reach an ingest path; `field_outlook_cells` is untouched; no cross-tenant anchor is readable |
 | Dependencies | 5.0, 5.1 |
 | Risks | the centroid of a large plot falling near a grid boundary (two cells differ by one step), documented and unsolved while `OPEN-15` is undecided; no real model resolves until its grid configuration reaches §5.2.6 grade A + B, so 5.2 lands while 5.4 waits on evidence |
 | Deferred to 5.4 | the `field_outlook_cells` row, `distance_km`, `elevation_delta_m`, supersession on geometry edit — every one of them needs the served coordinate |
+
+**Implementation sequence.** Nothing below is implemented. The step numbers are the
+ones other sections cite.
+
+| Step | Objective | Files | Acceptance | Depends on |
+|---|---|---|---|---|
+| 5.2.1 | pin `gridSpecHash` with a literal fixture | `packages/contracts/src/grid.test.ts` | editing the resolver's preimage or a spec field fails the suite | — |
+| 5.2.2 | registry key → `(provider, model)`; add `evidence`, `requireValidated`; drop model-only lookup | `packages/contracts/src/grid.ts` | duplicate pair rejected; unknown pair rejected; one `gridId` on two pairs accepted; two providers sharing one model string independent; `CONTRACTS_VERSION` bumped | 5.2.1 |
+| 5.2.3 | `SpatialResolution` + `resolutionAlgorithmVersion` | `packages/contracts/src/grid.ts` | requested ≠ anchor; no served coordinate; hash and evidence present | 5.2.2 |
+| 5.2.4 | registry instance with one labelled synthetic entry | `packages/weather-core/src/grids/{registry,synthetic}.ts` | unknown pair fails; a synthetic entry is not ingestion-eligible | 5.2.2 |
+| 5.2.5 | field anchor via `ST_Centroid(geom)` inside `withTenant` | `packages/database/src/fields.ts` | known square → known six-decimal anchor; a cross-tenant field is invisible | — |
+| 5.2.6 | `upsertCell` — three columns, `ON CONFLICT DO NOTHING` | `packages/database/src/climate.ts` (new) | a second resolve reuses the cell id; no fourth column attempted | 5.2.4 |
+| 5.2.7 | `POST /v1/fields/:id/resolve-cell` | `apps/api/src/field/*` | 200 twice identical; unknown pair and out-of-grid are typed failures that mint nothing; no mapping row | 5.2.4–5.2.6 |
+| 5.2.8 | reconcile status and §8.1 after the code lands | `IMPLEMENTATION_STATUS.md`, this document | no section claims an unimplemented guarantee | all |
 
 ### 8.3 Phase 5.3 — run lifecycle and worker runtime
 
@@ -1410,7 +1448,7 @@ register says so and the deliverable exists.
 
 | ID | Decision | Rationale | Scope | Status | Revisit condition |
 |---|---|---|---|---|---|
-| `OPEN-18` | A provider/model-specific deterministic grid resolver; grid origin, spacing, orientation, and revision are explicit inputs; a change that alters identity requires a new `model` string | A universal `floor(lat / resolution)` assumes a zero origin, square cells, and one axis orientation, none of which is established for any provider; and an in-place rule change would silently re-point historical cells | The generic resolver contract and the serialization rule (§5.2.2–§5.2.5). **Not** any provider's actual grid constants | **Generic contract delivered.** Resolver, registry, and vectors 1–18 implemented and tested in `packages/contracts`; v1 accepts `south-west` only. Provider grid configuration pending external evidence | A provider re-grid, which creates a new `model` string; or a grid that cannot be expressed as `GridSpec`, which becomes a resolver implementation |
+| `OPEN-18` | A provider/model-specific deterministic grid resolver; grid origin, spacing, orientation, and revision are explicit inputs; a change that alters identity requires a new `model` string within the same `provider` | A universal `floor(lat / resolution)` assumes a zero origin, square cells, and one axis orientation, none of which is established for any provider; and an in-place rule change would silently re-point historical cells | The generic resolver contract, the serialization rule, and the `(provider, model)` registry identity (§5.2.2–§5.2.5, §5.2.9). **Not** any provider's actual grid constants | **Generic contract delivered; identity layer designed.** Resolver and vectors 1–18 implemented and tested in `packages/contracts`; v1 accepts `south-west` only. The registry exists but is still keyed by `model` alone, and no literal `gridSpecHash` fixture exists — both are 5.2 steps 5.2.1–5.2.2. Provider grid configuration pending external evidence | A provider re-grid, which creates a new `model` string; or a grid that cannot be expressed as `GridSpec`, which becomes a resolver implementation |
 | `Q-P5-1` | PostgreSQL is the initial queue backing, using row locking and `FOR UPDATE SKIP LOCKED` behind a narrow job interface | PostgreSQL is already required; Redis and BullMQ would be new infrastructure with no operational evidence yet; the documented job semantics survive a backing swap | Job claiming, leases, retries, attempts, idempotency, dead-letter state, observability, transaction boundaries, and shutdown (§8.3) | **Owner-approved architecture decision.** No `jobs` table, no queue code, no dependency. Implementation is 5.3 | Measured contention or polling cost on the `jobs` table; a multi-region worker requirement; or a queue feature (scheduling at scale, fan-out) that is expensive to express in SQL |
 | `OPEN-03` | Do not commit to a paid Open-Meteo plan yet; commercial operation is conditional on verified licensing and an appropriate commercial plan; the free tier is not used for commercial operation; self-hosting is not assumed to resolve licensing or redistribution terms | Price, quota, attribution, and permitted use are unresolved, and a plan chosen before 5.4 exists would be a guess | Commercial deployment legality and any `raw_payload_ref` retention. Not the schema, not the adapter | **Deferred** pending commercial and cost evaluation. Not closed | Before any commercial deployment; after pricing, quotas, attribution, and permitted-use terms are reviewed |
 | `OPEN-05` | Defer durable raw-payload retention for the initial release; normalized records carry sufficient provenance to identify origin and transformation; artifacts that cannot be reproduced record `reproducible: false` with a machine-readable reason; no full-reproducibility claim | An object store is new infrastructure with its own access control, and the provider terms that would make retention lawful are unsettled; the honesty cost is already representable | `ingestion_runs.raw_payload_ref`, object storage, and the `reproducible` claim. Not the normalized row, which is the system of record | **Owner-approved deferral.** No store, no writer. Reopening is a later phase | A lawful paid or self-hosted plan, known storage cost, and a verification run that must re-derive a score |

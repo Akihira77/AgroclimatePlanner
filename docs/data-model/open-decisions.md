@@ -233,36 +233,45 @@ additive migration once the vocabulary is decided, with no data rewrite — no r
 can exist before then. `D26` is a decision about the DDL, not about the
 vocabulary, and the vocabulary is still open.
 
-### `OPEN-18` — `cell_key` grid resolver per model — **P1**
+### `OPEN-18` — cell identity resolver per `(provider, model)` — **P1**
 
 `outlook_cells.cell_key` is `text` because the rounding rule is per model, and
 `ADR-001` D8 says "a fixed, documented rounding rule per model" — but **no model's
 rule is written down**. The DDL does not need it (a `text` column accepts any
 key); the first ingest does, because it must compute a key from coordinates.
 
-**Blocks:** writing a cell identity, and field → cell resolution, for any model
-whose grid configuration is unvalidated. **Does not block:** the `outlook_cells` and
-`field_outlook_cells` DDL, the catalog, or any query that reads a cell that is
-already keyed.
+**Blocks:** writing a cell identity, and field → cell resolution, for any
+`(provider, model)` whose grid configuration is unvalidated. **Does not block:** the
+`outlook_cells` and `field_outlook_cells` DDL, the catalog, or any query that reads a
+cell that is already keyed.
 **Corrected in 2.3.x.1:** this entry previously said "Phase 3's write path needs
 it". Phase 3 as recorded in the phase tracker is DDL only, so it does not.
-**Owner decision 2026-11-21 — the generic half is resolved.** Cell identity is
+
+**Owner decision 2026-11-21 — the generic half is approved.** Cell identity is
 computed by a provider/model-specific deterministic resolver; the grid origin,
 spacing, orientation, and revision are explicit inputs. A universal
 `floor(lat / resolution)` is refused because it assumes a zero origin, square cells,
 and one axis orientation, none of which is established for any provider. Identity is
 never derived from a served coordinate and never reconstructed from the key. A grid
 change that alters identity requires a **new `model` string inside the same
-`provider`**, enforced by a one-spec-per-`(provider, model)` registry plus a
-**literal** `gridSpecHash` fixture rather than by operator discipline. The full
-contract is `docs/architecture/climate-data-foundation.md` §5.2; the registry
-identity and the resolution result are §5.2.9 and `docs/adr/ADR-007-spatial-registry-identity.md`.
+`provider`**. The full contract is `docs/architecture/climate-data-foundation.md`
+§5.2, with the registry identity and the resolution result in §5.2.9 and
+`docs/adr/ADR-007-spatial-registry-identity.md`.
 
-**Corrected 2026-11-21 (5.2 design pass).** Two claims in the paragraph above were
-design, not fact. The registry is still keyed by `model` alone
-(`grid.ts:491-518`), and no literal `gridSpecHash` fixture exists — the suite proves
-the hash is a function of its fields, so an edit to the preimage passes every test.
-Both are 5.2 work (§8.2 steps 5.2.1–5.2.4), not closed items.
+**Approved, not yet built — the design is a requirement, not an implementation.**
+Four pieces are missing, and until they land the statements above are intentions:
+
+| Piece | Current fact (2026-11-21) | 5.2 step |
+|---|---|---|
+| registry key | `createGridRegistry` is keyed by `model` alone (`grid.ts:491-518`); two providers cannot address the same model string independently | 5.2.2 |
+| literal hash fixture | **absent.** `assertGridSpecIntegrity` recomputes the hash and the suite proves it changes when a field changes, so an edit to the resolver's preimage passes every test | 5.2.1 |
+| result contract | no `SpatialResolution`. `ResolvedCell` (`provenance.ts:104-112`) is a field-snapshot cell that **requires** `servedLat`, `servedLon`, and `distanceKm`, so it cannot describe a pre-ingest resolution | 5.2.3 |
+| registry instance, provider constants | none exist | 5.2.4 |
+
+Earlier revisions of this entry, of §5.2.2, and of §5.2.5 stated the `(provider,
+model)` registry and the literal fixture as if they were in force. They are not; the
+correction is recorded here so the history stays visible instead of being silently
+rewritten.
 
 **Owner decision 2026-11-21 — the field-mapping boundary is resolved.**
 `field_outlook_cells.distance_km` is `NOT NULL` and is a distance from the anchor to
@@ -273,23 +282,19 @@ never substituted for the served coordinate. The mapping row belongs to the inge
 that learns the served coordinate, or to a later migration that makes the column
 nullable — not to a fabricated value.
 
-**Still open:** the five provider grid configurations — origin, spacing, axis
-orientation, longitude convention, node-vs-interpolation behaviour. Evidence is
-graded: **A** documented grid definition, **B** measured request→served pairs under
-the §5.2.6 protocol, **C** inferred from a resolution figure or an approximate
-coordinate. **C never configures a row, and one measured pair is not enough** — an
-interpolating endpoint says nothing about the lattice, and a pair that lands on a
-plausible lattice is consistent with every origin in the same congruence class. The
-one Open-Meteo pair that lands exactly on a 0.25° lattice
-(`-6.25/106.75`, `weather-source-matrix.md:163`) is graded **C** because the same
-research calls it an interpolated point.
-**Built:** `packages/contracts/src/grid.ts` — `defineGridSpec`, `resolveGridCell`,
-`createGridRegistry`, `gridSpecHash`, integer micro-degree arithmetic, `south-west`
-orientation only. Eighteen synthetic golden vectors executed in
-`packages/contracts/src/grid.test.ts`, including the F-01 origin-precision cases and
-the F-02 orientation rejection.
+**Still open — provider evidence (owner approval outside the repository).** The five
+configurations — `ecmwf_ifs025`, `ecmwf_ec46`, `ecmwf_seas5`, the ERA5 archive, and
+CHIRPS v3.0 — need origin, spacing, axis orientation, longitude convention, and
+node-vs-interpolation behaviour. Evidence is graded: **A** documented grid definition,
+**B** measured request→served pairs under the §5.2.6 protocol, **C** inferred from a
+resolution figure or an approximate coordinate. **C never configures a row, and one
+measured pair is not enough** — an interpolating endpoint says nothing about the
+lattice, and a pair that lands on a plausible lattice is consistent with every origin
+in the same congruence class. The one Open-Meteo pair that lands exactly on a 0.25°
+lattice (`-6.25/106.75`, `weather-source-matrix.md:163`) is graded **C** because the
+same research calls it an interpolated point.
 
-**Still open inside the resolver (owner approval required, 2026-11-21):**
+**Still open — five resolver and configuration questions (owner approval required):**
 
 1. Does generic coordinate validation reject `|lon| > 180` before wrapping? Today it
    does not — `400` resolves to a cell — and tightening it invalidates the `359.5`
@@ -297,21 +302,30 @@ the F-02 orientation rejection.
 2. On a grid whose origin makes `180` the exclusive upper edge, should the
    antimeridian fold to the lower edge instead of failing?
 3. Is a provider whose convention is `[0, 360)` expressed as a `global` domain with
-   `originLon = 0`, or as a bounded `[0, 360)` grid? `defineGridSpec` accepts the
-   latter, but `lonRange` has no absolute bound while `latRange` does
-   (`grid.ts:278` vs `grid.ts:295-309`), so `["0","400"]` is currently a legal
-   configuration.
-4. `cellKey` format and `gridId` in the hash stay as they are: the key is
-   `nodeLat,nodeLon` and `UNIQUE (provider, model, cell_key)` already carries the
-   other two components; the hash keeps `gridId` because it pins a named definition.
-5. `spatialResolutionKm` is in the hash preimage although it is descriptive, not part
-   of the lattice. Correcting a published resolution figure changes the hash and
-   therefore (under the one-spec-per-`(provider, model)` rule) forces a new model
-   string with no change in cell identity. Keeping it is defensible — the hash pins
-   the whole reviewed definition — but it should be a stated choice.
+   `originLon = 0`, or as a bounded `[0, 360)` grid?
+4. Should `lonRange` gain the absolute bound that `latRange` already has? Today
+   `["0", "400"]` is a legal configuration, because `latRange` is clamped
+   (`grid.ts:278`) and `lonRange` is not (`grid.ts:295-309`).
+5. Should `spatialResolutionKm` stay in the hash preimage? It is descriptive rather
+   than part of the lattice, so correcting a published resolution figure changes
+   `gridSpecHash` and — under the one-spec-per-`(provider, model)` rule — forces a new
+   model string although no cell identity changed. Keeping it is defensible, because
+   the hash pins the whole reviewed definition, but it has to be a stated choice.
 
-**Still unbuilt:** every field→cell write, and every real provider grid. The
-resolver exists; a model cannot ingest until its configuration is validated.
+**Decided, not open:** `cellKey` stays `nodeLat,nodeLon`, because
+`UNIQUE (provider, model, cell_key)` already carries the other two components;
+`gridId` stays in the hash preimage; the hash algorithm does not change.
+
+**Built:** `packages/contracts/src/grid.ts` — `defineGridSpec`, `resolveGridCell`,
+`createGridRegistry`, `gridSpecHash`, integer micro-degree arithmetic, `south-west`
+orientation only. Eighteen synthetic golden vectors executed in
+`packages/contracts/src/grid.test.ts`, including the F-01 origin-precision cases and
+the F-02 orientation rejection. The resolver is real; the identity layer above it is
+design.
+
+**Still unbuilt:** the `(provider, model)` registry, `SpatialResolution`, every
+field→cell write, and every real provider grid. A model cannot ingest until its
+configuration reaches grade A + B.
 
 **Revised would-be-settled-by:** a validated `GridSpec` per `(provider, model)` with
 grade A + B evidence, not a resolution figure and not one measured pair.
