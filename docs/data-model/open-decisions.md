@@ -73,7 +73,7 @@ part of it.
 | `OPEN-13` | P1 | authentication | after Phase 3 | **none** — resolved 2026-11-20 | nothing: PostgreSQL `app.sessions` was selected (`ADR-005`) and shipped in S5 | nothing on the storage question; the request path that uses the table arrived with `S8`, closing `OPEN-01` | everything — the table exists, is granted, and is verified on canonical |
 | `OPEN-17` | P1 | field snapshot | after Phase 3 | **hard**, for point-shaped fields only | what `areaHa` means for a `POINT`-shaped field | field snapshot creation for point-shaped fields, and every artifact derived from one | the DDL (a `POINT` row is still storable); `POLYGON`/`MULTIPOLYGON` fields end to end |
 | `OPEN-21` | P1 | field snapshot | after Phase 3 | **hard** | the `irrigationAvailable` boolean mapping and three field vocabularies | field → snapshot construction | the DDL — the columns stay unconstrained `text`; every non-snapshot path |
-| `OPEN-18` | P1 | cell resolution | after Phase 3 | **hard** | the `cell_key` rounding rule, per model | writing a cell identity, and field → cell resolution for any model whose rule is undefined | the DDL (`cell_key` is `text` for exactly this reason), the catalog, every query that reads an already-keyed cell |
+| `OPEN-18` | P1 | cell resolution | after Phase 3 | **conditional** — generic resolver approved 2026-11-21; per-model grid configuration pending external evidence | the per-provider grid origin, spacing, orientation, and revision | cell identity, and field → cell resolution, for a model whose grid configuration is unvalidated | the DDL (`cell_key` is `text` for exactly this reason), the catalog, every query that reads an already-keyed cell, and the now-approved generic resolver contract |
 | `OPEN-26` | P1 | window write | after Phase 3 | **hard** | the six-check `EvidenceSegment` partition validator | persisting a `planting_windows` row | the table, its index, every read path, `suitability_runs`, `ai_briefings` |
 | `OPEN-27` | P1 | worker | after Phase 3 | **hard** | how the worker learns which fields a cell serves | `recompute.windows` — the job that delivers a new forecast to a dashboard | the DDL **and** the grants, which ship the documented default: no `app_system` grant on a tenant-owned table |
 | `OPEN-11` | P1 | AI slice | after Phase 3 | **hard** | the `ClimateBriefing` body shape | writing or validating an `ai_briefings` row | the `ai_briefings` DDL; the table is createable exactly as specified, it simply cannot yet hold a valid document |
@@ -233,21 +233,37 @@ additive migration once the vocabulary is decided, with no data rewrite — no r
 can exist before then. `D26` is a decision about the DDL, not about the
 vocabulary, and the vocabulary is still open.
 
-### `OPEN-18` — `cell_key` rounding rule per model — **P1**
+### `OPEN-18` — `cell_key` grid resolver per model — **P1**
 
 `outlook_cells.cell_key` is `text` because the rounding rule is per model, and
-`ADR-001` D6 says "a fixed, documented rounding rule per model" — but **no model's
+`ADR-001` D8 says "a fixed, documented rounding rule per model" — but **no model's
 rule is written down**. The DDL does not need it (a `text` column accepts any
 key); the first ingest does, because it must compute a key from coordinates.
 
 **Blocks:** writing a cell identity, and field → cell resolution, for any model
-whose rule is undefined. **Does not block:** the `outlook_cells` and
+whose grid configuration is unvalidated. **Does not block:** the `outlook_cells` and
 `field_outlook_cells` DDL, the catalog, or any query that reads a cell that is
 already keyed.
 **Corrected in 2.3.x.1:** this entry previously said "Phase 3's write path needs
 it". Phase 3 as recorded in the phase tracker is DDL only, so it does not.
-**Would be settled by:** the rounding rule for each of the five grids, derived
-from their published resolutions.
+**Owner decision 2026-11-21 — the generic half is resolved.** Cell identity is
+computed by a provider/model-specific deterministic resolver; the grid origin,
+spacing, orientation, and revision are explicit inputs. A universal
+`floor(lat / resolution)` is refused because it assumes a zero origin, square cells,
+and one axis orientation, none of which is established for any provider. Identity is
+never derived from a served coordinate and never reconstructed from the key. A grid
+change that alters identity requires a **new `model` string**, enforced by a
+one-spec-per-model registry plus a committed `gridSpecHash` test rather than by
+operator discipline. The full contract is `docs/architecture/climate-data-foundation.md`
+§5.2.
+
+**Still open:** the five provider grid configurations — origin, spacing, and axis
+orientation — which need documentation or one measured request→served pair.
+**Still unbuilt:** the resolver, its twelve golden vectors, and every field→cell
+write.
+
+**Revised would-be-settled-by:** a validated `GridSpec` per model, not a resolution
+figure.
 
 ### `OPEN-02` — BMKG written permission — **P1**
 
@@ -261,10 +277,27 @@ whether the plan must be paid or self-hosted, and self-hosting's bucket terms ar
 undocumented. Affects `raw_payload_ref` retention and deployment legality, not
 the schema.
 
+**Owner decision 2026-11-21 — deferred, not closed.** Do not commit to a paid plan
+yet. Commercial operation stays conditional on verified licensing and an appropriate
+commercial plan; the free tier is not used for commercial operation; self-hosting is
+not assumed to resolve licensing or redistribution terms. Price, quota, attribution,
+and permitted use must be evaluated before 5.4 runs on a schedule. **Revisit:** before
+any commercial deployment, or when 5.4 needs a production endpoint.
+
 ### `OPEN-05` — raw payload retention — **P1**
 
 Per-provider licensing (`lifecycle-and-retention.md` §2). Determines whether
 `reproducible` can be `true` for artifacts built on a given provider.
+
+**Owner decision 2026-11-21 — retention deferred for the initial release.** No object
+storage, no `raw_payload_ref` writer, and no assumption that any provider's terms
+permit indefinite payload retention. Normalized records keep enough provenance to
+identify origin and transformation; an artifact built on a non-retained payload
+records `reproducible: false` with the reason `raw_payload_not_retained`. That is a
+statement about the missing input bytes, **not** a statement that provenance is
+missing — an artifact with no `inputRefs` is a separate defect. **Revisit:** when a
+lawful paid or self-hosted plan exists, storage cost is known, and a verification run
+must re-derive a score.
 
 ### `OPEN-11` — the briefing body contract — **P1**
 
@@ -327,7 +360,7 @@ question is not lost.
 | `OPEN-12` | verification/scoring tables (skill metrics, `forecast_scores`) | no table specified; blocks Phase 9, not Phase 3 |
 | `OPEN-14` | `temporal_resolution` / `aggregation_level` vocabulary | enum values named but not frozen |
 | `OPEN-15` | the `area_weighted` weight set | the resolution row cannot describe multi-cell weighting; `centroid` is the v1 policy |
-| `OPEN-16` | `weather_records` growth/retention policy | ~56 000 rows per ensemble run; first real at Phase 4 |
+| `OPEN-16` | `weather_records` growth/retention policy | ~56 000 rows per ensemble run; first real at Phase 5.4. **Owner decision 2026-11-21:** no automatic pruning until at least one month of measured ingestion, and never delete data needed for provenance or audit |
 | `OPEN-19` | `updated_at` trigger | application-maintained today; raw SQL bypasses it |
 | `OPEN-20` | v1 catalog seed scope | which graded thresholds ship in the first published profiles |
 | `OPEN-22` | `fields_geom_gist_idx` justification | no query uses it; drop or keep at Phase 6 |
@@ -388,7 +421,7 @@ and "deferred" were doing too much work:
 | `OPEN-01` | **RESOLVED** | — | both halves met: the owner confirmed the `app_auth` boundary as final (`docs/review/phase-3.2-owner-decisions.md` *Amendment 3*), and `POST /v1/auth/login` now reads `password_hash` through it, proven by `packages/database/test/integration/session.test.mjs` (`current_user = app_auth`, `app.user_id` unset, `app_api` still refused `42501`) |
 | `OPEN-13` | **RESOLVED** | — | not applicable now: `ADR-005` accepted, S5 applied canonically, and the S6 `auth-boundary` suite green (49 cases) |
 | `OPEN-17` | **BLOCKED_EXTERNAL_INPUT** | product decision, then the snapshot path | a `POINT` row is storable; only its snapshot is impossible |
-| `OPEN-18` | **DEFERRED** | ingestion; the rule is derivable from each grid's published resolution | `cell_key` is `text`; no constraint depends on its content |
+| `OPEN-18` | **BLOCKED_EXTERNAL_INPUT** | 5.0/5.2: provider grid validation, then the resolver | the generic resolver contract is approved (2026-11-21); `cell_key` is `text` and no constraint depends on its content |
 | `OPEN-21` | **BLOCKED_EXTERNAL_INPUT** | agronomic decision, then snapshot construction | the columns stay unconstrained `text` |
 | `OPEN-26` | **DEFERRED** | the window engine that produces segments | the table, plus a `jsonb_typeof` array check, is all the schema can honestly do |
 | `OPEN-27` | **BLOCKED_EXTERNAL_INPUT** | worker phase, with a security review of the narrowest read shape | grants ship the default: nothing to `app_system` |
@@ -405,7 +438,7 @@ and "deferred" were doing too much work:
 | `OPEN-12` | **DEFERRED** | Phase 9 verification/scoring | no verification table is specified or created |
 | `OPEN-14` | **DEFERRED** | weather aggregation | the vocabularies are named in a `CHECK`, not frozen |
 | `OPEN-15` | **DEFERRED** | resolution engine, when multi-cell weighting exists | `centroid` is the v1 policy |
-| `OPEN-16` | **DEFERRED** | Phase 4 retention work | an empty table has no growth policy to enforce |
+| `OPEN-16` | **DEFERRED** | after at least one month of 5.4 ingestion, against measured growth | an empty table has no growth policy to enforce; the owner approved no pruning until measured (2026-11-21) |
 | `OPEN-19` | **DEFERRED** | `updated_at` maintenance, when a writer exists | `DEFAULT now()` is applied; no trigger |
 | `OPEN-20` | **DEFERRED** | catalog seed authoring | the catalogs are empty until seeded |
 | `OPEN-22` | **DEFERRED** | Phase 6 spatial queries | the index exists and is unused |
@@ -414,8 +447,11 @@ and "deferred" were doing too much work:
 | `OPEN-25` | **DEFERRED** | writer discipline | a looping supersession chain is a bug, not a state |
 | `OPEN-29` | **DEFERRED** | snapshot builder | the column stores what the contract says it stores |
 
-**Counts:** 2 RESOLVED (`OPEN-01`, `OPEN-13`), 18 DEFERRED, 9 BLOCKED_EXTERNAL_INPUT,
-0 NOT_APPLICABLE.
+**Counts (recomputed from the table, 2026-11-21):** 2 RESOLVED (`OPEN-01`,
+`OPEN-13`), 19 DEFERRED, 8 BLOCKED_EXTERNAL_INPUT, 0 NOT_APPLICABLE. The earlier
+count of 9 BLOCKED_EXTERNAL_INPUT did not match the seven BLOCKED rows in the table;
+`OPEN-18` moved from DEFERRED to BLOCKED_EXTERNAL_INPUT when its generic contract was
+approved, which is the eighth.
 
 Both `RESOLVED` items earned the word, and neither earned it from a decision alone:
 `OPEN-13` from an accepted ADR, an applied migration, and a real-role suite green on the
@@ -427,3 +463,20 @@ vocabulary, or a security review.
 Note that `RESOLVED` is still not the goal. A phase that resolved `OPEN-17` by assuming a
 500 m radius "for now" would have made the database lie about a plot's area, and that lie
 is inside a hash.
+
+## 6. Phase 5 architecture decisions
+
+Four decisions were made during the Phase 5 design review. They are **not** `OPEN-*`
+items — they are recorded here so this file remains the single decision register, and
+they do not change the 29-item count in §1 or §3.
+
+| ID | Decision | Rationale | Scope | Status | Revisit condition |
+|---|---|---|---|---|---|
+| `Q-P5-1` | PostgreSQL is the initial queue backing, using row locking and `FOR UPDATE SKIP LOCKED` behind a narrow job interface | PostgreSQL is already required; Redis and BullMQ would be new infrastructure with no operational evidence; the documented job semantics survive a backing swap. Refines `ADR-002` D2/D7 for the first implementation; see `background-processing.md` §2.1 | Job claiming, leases, retry scheduling, attempts, idempotency, dead-letter state, transaction boundaries, worker shutdown, observability | **Owner-approved architecture decision.** No `jobs` table, no queue code, no dependency. Implementation is Phase 5.3 | Measured contention or polling cost; a multi-region worker requirement; or a queue feature that is expensive to express in SQL |
+| `Q-P5-2` | Structured logs plus `ingestion_runs.error` before any operational-history migration | `sync_attempts`, a dead-letter table, and a sweep watermark are named in `background-processing.md` §10 and **do not exist**; the first question that a log cannot answer should commission the table, not a guess | Per-attempt latency/bytes, dead-letter entries, sweep state | **Deferred** | A question the stored state and logs cannot answer, or a dead-letter count that must be queried rather than grepped |
+| `Q-P5-3` | Temperature outlooks are out of Phase 5 | `monthly_outlooks_variable_check` admits only `precipitation`; temperature needs an assembly rule before a migration | `monthly_outlooks.variable` | **Deferred** | An assembly rule for temperature, and a sub-phase that needs it |
+| `Q-P5-4` | CHIRPS v3.0 is preferred as the climatology baseline once a lawful, reachable route exists; ERA5 is the labelled fallback | `data.chc.ucsb.edu` timed out on 2026-11-18, and GEE's commercial terms are unevaluated | The baseline dataset, not the schema | **External evidence** | A fetched CHIRPS month from a reachable route, with commercial terms confirmed, or a decision to ship ERA5 permanently |
+
+Recording `Q-P5-1` is not implementing it. There is no `jobs` table, no worker runtime, and
+no queue dependency in any workspace package; `background-processing.md` §2.1 states the
+same limit in the same words.

@@ -46,10 +46,11 @@ Indexes: `outlook_cells_grid_key` covers every lookup (by grid triple).
 
 Notes:
 
-- `cell_key` is `text` because the rounding rule is per model and unchanged from
-  what the adapter computes. Storing it as a tuple of integers would freeze one
-  rule for grids that do not share it, and the documented rule for each model is
-  still `OPEN` in the research (no model has a published cell-key format yet).
+- `cell_key` is `text` because the grid rule is per model and unchanged from what
+  the resolver computes. Storing it as a tuple of integers would freeze one rule
+  for grids that do not share it. The generic resolver contract is approved
+  (2026-11-21); the provider grid configuration for each model is still `OPEN`
+  (no model has a published grid origin, spacing, and axis).
 - `served_lat`/`served_lon` are *the last value observed for this cell*. The
   authoritative per-record coordinate is on `weather_records`
   (`requested_lat`/`requested_lon`, `served_lat`/`served_lon`), which is why a
@@ -162,7 +163,7 @@ Indexes:
 
 Notes:
 
-- `attempt` is updated **in place** on the row: a BullMQ retry is the same logical
+- `attempt` is updated **in place** on the row: a retry is the same logical
   ingest. The unique key deliberately excludes it.
 - Re-normalising stored payloads bumps `normalizer_version`, which changes
   `ingestion_version` and therefore creates a new row under the **same**

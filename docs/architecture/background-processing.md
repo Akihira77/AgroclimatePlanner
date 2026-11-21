@@ -1,6 +1,8 @@
 # Background Processing
 
-Status: Phase 1. Implementation in Phase 4.
+Status: design. Queue backing decided 2026-11-21 (PostgreSQL first, §2.1). No worker,
+no queue, and no job table exists; implementation is Phase 5.3. Phase 4 closed without
+a worker.
 
 ## 1. Why a separate worker
 
@@ -36,10 +38,53 @@ Six queues, not ten. Each one exists because of an isolation requirement that a 
 
 Concurrency is deliberately low. Open-Meteo's free tier is 10 000 calls/day and BMKG's is 60/min; a parallel ingest that fans out per user request would burn the budget in an afternoon.
 
+### 2.1 Backing store — PostgreSQL first (owner decision 2026-11-21)
+
+The queue **semantics** in this document are unchanged. The **backing** is decided:
+PostgreSQL, not Redis + BullMQ, for the first implementation. This is a decision, not
+a description — no `jobs` table exists, no worker code exists, and no dependency is
+added.
+
+Why: PostgreSQL is already required and already carries the run bookkeeping; Redis
+would be new infrastructure with no operational evidence yet; and the semantics below
+can be expressed in SQL without weakening them. The choice sits behind a narrow job
+interface so it can be swapped if measurement justifies it.
+
+What the backing must provide — `SELECT … FOR UPDATE SKIP LOCKED` alone does **not**:
+
+| Requirement | Semantics the implementation must provide |
+|---|---|
+| Atomic claim | one statement claims one job and marks it leased; `SKIP LOCKED` only stops two workers taking the same row in the same instant |
+| Lease expiry | a claimed job carries `lease_expires_at`; a crashed worker's job becomes claimable again and `attempt` increments — `SKIP LOCKED` never recovers a job whose worker died |
+| Retry scheduling | `run_at` on the row; a failure writes the next attempt time instead of busy-looping |
+| Attempt counter | increments in place; never a new job, matching `ingestion_runs.attempt` |
+| Idempotency | a unique key on `(kind, idempotency_key)` makes a duplicate enqueue a no-op |
+| Dead-letter | a terminal status on the same row (`status = 'dead'`), not a second table |
+| Transaction boundary | the claim commits before work starts; the job's writes are their own transaction, so a crash mid-write rolls back cleanly |
+| Shutdown | SIGTERM stops claiming, releases the in-flight lease, then exits |
+| Observability | depth, in-flight, oldest waiting, and dead count are queries over the table |
+
+Three bounds, so the decision is not read as a claim of completeness:
+
+1. This is not a message broker. Fan-out is rows and throughput is bounded by the
+   table and the poller; measure before tuning.
+2. It does **not** create the operational tables this document names elsewhere
+   (`sync_attempts`, a separate dead-letter table, a sweep watermark). Those remain
+   unbuilt (`Q-P5-2`).
+3. No migration and no code are added by the decision. The `jobs` table is Phase 5.3's
+   deliverable.
+
+**Conflict recorded, not silently overridden.** `ADR-002` D2 names "a separate BullMQ
+worker process" and D7 names "one Redis". Both predate this decision and remain the
+long-term target if the backing is swapped; the owner decision changes the **first**
+implementation, and the job interface is the seam that makes the swap possible. The ADR
+is not edited here — an accepted ADR records what was decided then, and this section
+records what was decided on 2026-11-21.
+
 ## 3. Scheduling and run identity
 
 - `ForecastRun.id` is **UUIDv7** — the only identifier persisted or exposed. The natural key `(provider, model, product, initializedAt)` is unique and used for lookup/upsert, and nothing else. A composite string like `{provider}:{model}:{product}:{initializedAt}` is **not** an id: it duplicates what the natural key already guarantees, it breaks when a provider adds a model version, and it would put a mutable-looking string into every derived row's provenance.
-- `ingestionRunId` → one row per **logical** ingest: unique on `(forecastRunId, ingestionVersion)` where `ingestionVersion = sha256(adapterVersion, normalizerVersion, targetSelectorHash)`. `attempt` is a physical retry counter on that row, not part of identity. Re-normalizing stored payloads bumps `normalizerVersion`, which changes `ingestionVersion` and creates a new `IngestionRun` under the **same** `ForecastRun` — a normalization fix must never surface to users as a new forecast. A BullMQ retry increments `attempt` in place and creates nothing.
+- `ingestionRunId` → one row per **logical** ingest: unique on `(forecastRunId, ingestionVersion)` where `ingestionVersion = sha256(adapterVersion, normalizerVersion, targetSelectorHash)`. `attempt` is a physical retry counter on that row, not part of identity. Re-normalizing stored payloads bumps `normalizerVersion`, which changes `ingestionVersion` and creates a new `IngestionRun` under the **same** `ForecastRun` — a normalization fix must never surface to users as a new forecast. A retry increments `attempt` in place and creates nothing.
 - Job idempotency keys use ids: `ingest:{queue}:{forecastRunId}:{targetSelectorHash}`, where `forecastRunId` is the UUIDv7 resolved from the natural key at enqueue time.
 - Every derived artifact stores `inputRefs[]` (discriminated: forecast run, baseline, observation set, dataset), `fieldSnapshot` where applicable, `inputSnapshotHash`, `derivationVersion`, `computedAt`.
 - SEAS5: run at day 5, 12:00 UTC. Ingest starts +30 min, jittered per cell to spread load.
@@ -57,11 +102,11 @@ Concurrency is deliberately low. Open-Meteo's free tier is 10 000 calls/day and 
 | Partial payload (fewer rows/days than requested) | accept, record coverage, do not retry |
 | Normalization error | fail, keep raw payload reference, no retry until adapter version changes |
 
-Dead-lettered jobs surface in `/monitoring/queues` with the error and the last payload reference.
+Dead-letter state is `status = 'dead'` on the job row, with the error and the last payload reference. The `/monitoring/queues` surface named by earlier drafts **does not exist**; a monitoring route is Phase 9.
 
 ## 5. Budget guards
 
-- Token-bucket per provider in Redis (`om:free:10000/day`, `bmkg:60/min`).
+- Token-bucket per provider (`om:free:10000/day`, `bmkg:60/min`), stored in a PostgreSQL counter table so concurrent workers share one bucket. An in-process bucket is acceptable only while exactly one worker process serves a given queue; Redis is not required by the owner decision (§2.1).
 - If a bucket is exhausted, jobs are deferred, not failed.
 - Per-cell deduplication: one in-flight job per `(cellKey, source, forecastRunId)`; duplicates are dropped by `jobId`, which is the idempotency key.
 - Batch multi-coordinate requests where the provider supports them; a single request for N cells costs one call.
@@ -121,7 +166,7 @@ Alert thresholds (later, Phase 9): seasonal missing for > 40 days, forecast inge
 | Capability | Allowed |
 |---|---|
 | **Read** | ids and metadata only: field ids, owner ids, artifact ids, `inputRefs`, run ids, dead-letter entries, queue state. No soil values, no geometry, no observations, no briefing text. |
-| **Write** | weather-plane bookkeeping only — `sync_attempts`, dead-letter status, sweep watermark. None of these carry `user_id`, so none of them are covered by a tenant policy. |
+| **Write** | weather-plane bookkeeping only — the queue's `jobs` row and, if `Q-P5-2` is ever built, `sync_attempts`, dead-letter state, sweep watermark. **None of those tables exists today**; dead-letter state is a status on the job row. None carries `user_id`, so none is covered by a tenant policy. |
 | **Enqueue** | yes, and this is its main output: `recompute.windows` jobs keyed by `(ownerId, fieldBatch)`, with `ownerId` in the payload. |
 | **Never** | mark a tenant row stale, rewrite or delete a briefing, touch `farms`, `fields`, `suitability_runs`, `planting_windows`, or `ai_briefings`. |
 

@@ -1150,10 +1150,10 @@ Phases 4.5 and 4.6 remain **not started**.
 
 ## Phase 5 — Climate Data Foundation — **designed, not implemented**
 
-Status: **design only.** This phase produced one document and corrected the project
-status line; it added no source file, migration, Prisma model, contract, route,
-dependency, grant, or policy. The design is
-`docs/architecture/climate-data-foundation.md`.
+Status: **design only.** This phase produced one architecture document plus a
+reconciliation pass over the decision register and the queue design; it added no
+source file, migration, Prisma model, contract, route, dependency, grant, or policy.
+The design is `docs/architecture/climate-data-foundation.md`.
 
 No Phase 5 sub-phase is started. `5.0` through `5.8` are a proposed sequence, not a
 record of work. Nothing in this section claims a provider adapter, an ingestion job,
@@ -1166,8 +1166,8 @@ an aggregation, or a climate endpoint exists.
 | Reconciliation of the 13 existing authorities | designed (§2), with three documented-but-absent items (§3.5) |
 | Implementation sequence, 9 sub-phases | proposed (§8) |
 | Verification strategy | specified (§7); nothing implemented |
-| Decision register | 8 `OPEN-*` items assessed, **none closed** (§9) |
-| Owner decisions | 5 listed (§10) |
+| Decision register | 8 `OPEN-*` items assessed; 5 owner decisions recorded 2026-11-21; **none closed** (§9) |
+| Owner decisions | 5 recorded (§10); provider grid configuration, BMKG permission, the Open-Meteo commercial evaluation, and a CHIRPS route still need **external evidence** |
 | Migration | **none proposed** — the climate schema is already sufficient for a precipitation outlook |
 
 What was measured rather than assumed, as `migration_owner` on 2026-11-21:
@@ -1203,3 +1203,22 @@ What Phase 5 deliberately does **not** do: implement a provider adapter, add a
 worker, add a climate route, add a migration, close an `OPEN-*` item, or claim any
 forecast skill. Months 8–12 remain labelled climatology; BMKG stays disabled by
 default; `bias_corrected` stays `false`.
+
+### Architecture reconciliation — 2026-11-21
+
+A review of the Phase 5 design produced five owner decisions and one correction. All
+of it is documentation; no sub-phase moved.
+
+| Item | Outcome |
+|---|---|
+| Months 8–12 count | Corrected from "eight months" to **five** (`OPEN-18`-independent). A 12-month response always has twelve entries; months 8–12 are `climatology` with `beyond_horizon`, months 0–7 are `pending` when no forecast exists. The temporal contract was not changed |
+| `OPEN-18` | Generic resolver contract **approved**: provider/model-specific, explicit origin/spacing/orientation/revision, decimal-integer arithmetic, re-grid = new `model` string. Five provider grid configurations remain **pending external evidence**; resolver and golden vectors are **not started** |
+| `Q-P5-1` queue backing | **PostgreSQL-first**, behind a job interface: atomic claim, lease expiry, retry scheduling, in-place `attempt`, idempotency key, dead-letter status, shutdown, observability. No `jobs` table, no code, no dependency |
+| `OPEN-03` Open-Meteo plan | **Deferred**, not closed. No paid-plan commitment; commercial operation conditional on verified licensing and an appropriate plan |
+| `OPEN-05` raw payload retention | **Deferred** for the initial release. `reproducible: false` + `raw_payload_not_retained`; that is not the same as missing provenance |
+| `OPEN-16` weather-record retention | **No automatic pruning** until at least one month of measured 5.4 ingestion; never delete provenance or audit data silently |
+| Register consistency | The disposition counts said 18 DEFERRED / 9 BLOCKED, but the table held seven BLOCKED rows. Recomputed as 2 RESOLVED / 19 DEFERRED / 8 BLOCKED after `OPEN-18` moved; `open-decisions.md` §6 records `Q-P5-1`..`Q-P5-4` without changing the 29-item count |
+
+What remains true: Phase 5 is **designed, not implemented**; `5.0`–`5.8` are a proposed
+sequence with no work started; no migration is proposed by the phase; months 8–12 stay
+climatology; BMKG stays disabled by default; `bias_corrected` stays `false`.

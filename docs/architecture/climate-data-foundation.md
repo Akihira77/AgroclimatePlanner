@@ -53,15 +53,15 @@ stands at `d7eeff4`.
 | Data classes | `provenance-contract.md` §1; `ADR-001` D9 | Nine `WeatherDataClass` values, `temporalClass` deprecated | **contract typed.** `enums.ts` + `weather.ts` define the enum and four value variants; `weather_records_data_class_check` restricts stored rows to the four forecast classes — verified in the catalogue | No persistence contract for a `WeatherRecord` row (only the value variant); no mapping table from adapter output to `dataClass` |
 | `ForecastRun` identity | `provenance-contract.md` §3; `background-processing.md` §3 | UUIDv7 id, natural key `(provider, model, product, initialized_at)`, upserted | **table exists and is granted** (`forecast_runs`, 9 columns, `app_api` SELECT, `app_system` RW, `forecast_runs_natural_key` + `forecast_runs_recent_idx`) | No TypeScript schema or repository for the row; no upsert helper; no `horizon_end` derivation rule per product |
 | `IngestionRun` identity | `provenance-contract.md` §3; `tables-climate.md` §3 | Unique on `(forecast_run_id, ingestion_version)`; `attempt` is a counter, not identity | **table exists and is granted** (15 columns, `ingestion_runs_identity_key`, `ingestion_runs_running_idx`) | No `ingestion_version` computation, no `target_selector_hash` definition, no status transition helper; `attempt` update path undefined |
-| Cell resolution | `tables-climate.md` §1; `physical-model.md`; `OPEN-18` | `cell_key` is per-model `text`; identity is `(provider, model, cell_key)` | **tables exist** (`outlook_cells` 10 columns, `field_outlook_cells` 11 columns with live-uniqueness partial index); **no rounding rule is written for any model** | `OPEN-18` in full: five rounding rules, their precision, and the re-grid policy (§5.2) |
+| Cell resolution | `tables-climate.md` §1; `physical-model.md`; `OPEN-18` | `cell_key` is per-model `text`; identity is `(provider, model, cell_key)`; the key is produced by a per-model grid resolver whose origin, spacing, orientation, and revision are explicit inputs (owner-approved 2026-11-21) | **tables exist** (`outlook_cells` 10 columns, `field_outlook_cells` 11 columns with live-uniqueness partial index); **no resolver, and no provider grid constant, exists** | The resolver and its golden vectors (§5.2.7); the five provider grid configurations, all pending external evidence (§5.2.6); field → cell writes |
 | Field → cell mapping | `data-flow.md` §2; `tables-identity.md` §4 | Centroid in v1 (`OPEN-15`); resolution stored, never recomputed on read; a geometry edit supersedes rows | **tables exist and are tenant-scoped with `FORCE` RLS**; no code resolves a field into a cell | The resolution service; the geometry-edit supersession trigger; `field_outlook_cells` writes are not in the Field API |
 | Normalized records | `tables-climate.md` §4 | One row per `(run, cell, variable, valid_at, ensemble_member)`; `value` nullable; never deleted, only superseded | **table exists** (32 columns, 5 indexes, `weather_records_live_key` uses `NULLS NOT DISTINCT`) | The normalizer itself; unit conversion table; the supersession writer; `OPEN-14` vocabulary for `temporal_resolution`/`aggregation_level` |
 | Climatology | `ADR-001` D2; `tables-climate.md` §6 | 1991–2020, CHIRPS preferred, ERA5 as implemented fallback; a rebuild is a new `baseline_version` | **table exists** (`climatology_normals`, 11 columns, unique `(baseline_version, outlook_cell_id, month)`) | The baseline builder; the route to a reachable CHIRPS v3.0 (host timed out 2026-11-18); `baselineHash` computation over a consumed subset |
 | Temporal aggregation | `temporal-and-weather-semantics.md` §1–§6 | Every instant `timestamptz(6)` UTC; every calendar decision Asia/Jakarta; one conversion at aggregation | **designed only.** `temporal.ts` exists in contracts; no aggregation code | The daily → weekly → monthly aggregation; the UTC → Jakarta day boundary at the one permitted conversion point; `monthly_outlooks` assembly order |
 | Provenance | `provenance-contract.md`; `provenance-storage.md`; `canonical.ts` | Hash preimages stored as documents; freshness computed at read time, never stored | **implemented in contracts only**, with 239 passing contract tests including golden vectors; the derived tables that store those documents exist | No producer writes any `input_refs`; `DerivedFreshness` has no producer; the provenance audit that resolves dangling refs does not exist |
-| Raw payload retention | `OPEN-05`; `OPEN-03` | Per-provider licensing decides; `reproducible: false` + reason is the honest alternative | **nothing exists**: no object store, no `raw_payload_ref` writer, no retention table | The decision (`OPEN-05`), the store, and the retention policy per provider (§5.4) |
+| Raw payload retention | `OPEN-05`; `OPEN-03` | Retention is **deferred** by the owner (2026-11-21); the normalized row is the system of record, and every artifact built on a non-retained payload records `reproducible: false` with a reason | **nothing exists**: no object store, no `raw_payload_ref` writer, no retention table — and none is planned for the initial release | Reopening awaits a lawful, paid or self-hosted plan and a verification run that must re-derive a score (§5.4) |
 | Tenant access | `ADR-003`; `tenant.ts`; `system-architecture.md` | `withTenant(userId, fn)` is the only entry point; one `createTenantScope` per request; `app_system` owns global writes and holds no tenant-row grant | **implemented and tested**: `withTenant` ships, `test:rls` passes 90 assertions as real roles, `db:verify` passes | The recompute fan-out has no permitted read of `field_outlook_cells` (`OPEN-27`); climate read path is `app_api` only, which is already granted |
-| Background processing | `background-processing.md` | Six queues, run identity by `forecastRunId`, retry classes, budget guards, explicit failure semantics | **nothing exists.** `apps/worker/src/main.ts` is a stub; no queue library, no Redis client, no scheduler, no HTTP client is installed anywhere in the workspace | Queue backing decision (§9, `Q-P5-1`), the worker runtime, the six queues, the budget buckets, the maintenance sweep |
+| Background processing | `background-processing.md`; `Q-P5-1` | Six queues, run identity by `forecastRunId`, retry classes, budget guards, explicit failure semantics; **queue backing is PostgreSQL-first** (owner decision 2026-11-21), behind an abstraction | **nothing exists.** `apps/worker/src/main.ts` is a stub; no queue library, no Redis client, no scheduler, no HTTP client is installed anywhere in the workspace; no `jobs` table exists | The worker runtime, the six queues, the Postgres job table, the budget buckets, the maintenance sweep (§8.3) |
 
 ---
 
@@ -121,7 +121,7 @@ sub-phase must build.
 
 | Claim | Where | Reality |
 |---|---|---|
-| `sync_attempts` table, dead-letter table, sweep watermark | `background-processing.md` §10 | **No such tables exist.** `ingestion_runs` carries `error` and `status`, but per-attempt latency/bytes and dead-letter entries have no home. Phase 5 must decide whether structured logs suffice or a migration is needed (§5.4, `Q-P5-2`) |
+| `sync_attempts` table, dead-letter table, sweep watermark | `background-processing.md` §10 | **No such tables exist.** `ingestion_runs` carries `error` and `status`, but per-attempt latency/bytes and dead-letter entries have no home. `Q-P5-2` is deferred: structured logs plus `ingestion_runs` first, a migration only when a question cannot be answered (§5.4) |
 | "`app_api` may `INSERT` identity rows into `outlook_cells`" | `tables-climate.md` §1 | True, and narrower than a table grant: only `provider`, `model`, `cell_key` are insertable. Verified. The consequence is that a resolution must be two-phase — `app_api` creates the identity, `app_system` fills `served_lat`/`served_lon`/`elevation_m` — and no code implements the second phase yet |
 | A single value may not carry `evaluationBasis: "mixed"` | `temporal-and-weather-semantics.md` §4; `enums.ts` defines `singleValueEvaluationBasisSchema` for exactly this | `weather.ts` `valueBase` uses the **broad** `evaluationBasisSchema`, which includes `mixed`, and never imports the narrow one. A `WeatherValue` can therefore validate while asserting a per-container basis — the one thing §4 forbids. `planting_windows_basis_check` in the database gets this right | Fixed in 5.0 as a contract defect, not a documentation change |
 | BullMQ is the scheduler | `data-flow.md` §1, `background-processing.md` §3–§5 | **No queue library is installed.** The BullMQ wording is a target, not a dependency |
@@ -310,58 +310,201 @@ and retrying is pointless.
 A field's geometry becomes a provider cell in one direction only:
 
 ```
-field.geom ──▶ anchor point (centroid, v1) ──▶ per (provider, model):
-                 cellKey = round(anchor, grid) ──▶ outlook_cells identity
-                 request cellKey ──▶ provider answers servedLat/servedLon
-                 ──▶ field_outlook_cells (fieldId, provider, model, cell, distance, elevationDelta)
+field.geom ──▶ anchor point (centroid, v1) ──▶ requested (lat, lon)
+             ──▶ grid resolver for (provider, model) ──▶ (i, j)
+             ──▶ serialized cellKey ──▶ outlook_cells identity
+provider response ──▶ served_lat / served_lon  (recorded, never derived)
+             ──▶ field_outlook_cells (fieldId, provider, model, cell, distance, elevationDelta)
 ```
 
-**`OPEN-18` — recommendation, needs owner approval.**
+#### 5.2.1 Six concepts, never merged
 
-`cell_key` is `text` because no rounding rule is written for any grid. The
-recommendation:
+Conflating any two of these is the defect this section exists to prevent.
 
-| Model | Grid step | `cell_key` format | Anchor rule |
+| Concept | Produced by | Stored as | Never |
 |---|---|---|---|
-| `ecmwf_ifs025` | 0.25° | `lat,lon` with 2 decimals, at the node: `-6.25,106.75` | floor to the node, then take the centre |
-| `ecmwf_ec46` | 0.4° (36 km) | 2 decimals | as above, using the published grid origin |
-| `ecmwf_seas5` | 0.4° (36 km) | 2 decimals | as above |
-| ERA5 archive | 0.25° | 2 decimals | as above |
-| CHIRPS v3.0 | 0.05° | 2 decimals | as above |
+| Requested coordinate | the field's anchor | `weather_records.requested_lat/lon` | treated as the cell identity |
+| Grid definition | the grid registry, one per `(provider, model)` | code constant + `gridSpecHash` | inferred from a resolution figure |
+| Selected cell | the resolver | indices `(i, j)`, then `cellKey` | recomputed from a served coordinate |
+| Served coordinate | the provider's response | `outlook_cells.served_lat/lon`, `weather_records.served_lat/lon` | reconstructed from the request or from the key |
+| Interpolation flag | the provider's response | `served_value_is_interpolated` | guessed from distance |
+| `cellKey` | the serializer | `outlook_cells.cell_key` | parsed back to recover a coordinate |
 
-Rules that make the key safe:
+`OPEN-18` is therefore narrower than "write down a rounding rule": the generic
+resolver contract is decided, and the per-model grid constants are not.
 
-1. **The key is the grid node the provider serves, not the requested coordinate.**
-   `requested_lat`/`requested_lon` live on `weather_records`; the cell key is shared
-   by every field that maps to it.
-2. **The rule is part of the model identity.** If a provider re-grids, the new grid
-   is a **new `model` string** (e.g. `ecmwf_seas5_v2`), never a re-interpretation of
-   the old key. Otherwise `outlook_cells_grid_key` would either collide across grids
-   or silently re-point historical `field_outlook_cells` rows at a different place.
-   This is the only way the existing `UNIQUE (provider, model, cell_key)` can be
-   trusted.
-3. **Rounding at 2 decimals matches every grid in the table**, so one formatter
-   suffices and the key stays readable in a URL and a log line. A grid finer than
-   0.01° would need a revisit; none in scope is.
-4. **`extraction_policy` is `'centroid'` in v1** (`OPEN-15`). `'area_weighted'` is
-   accepted by the CHECK and not implemented; a multi-cell weight set does not exist,
-   so the engine must not emit it.
-5. **Distance is stored, and disagreement is not an error.** A served coordinate that
-   differs from the anchor is normal (the provider snapped to its grid). Store
-   `distance_km`; surface it. A 900 km mismatch is a sign error the CHECK
-   (`distance_km >= 0`) cannot catch, so the ingest asserts a per-model upper bound
-   and fails the resolution rather than storing it.
-6. **`served_value_is_interpolated` is shown, not hidden.** A provider that
-   interpolates to the requested point is not serving the cell centre, and the
-   product's first rule ("never let a coarse resolution imitate a fine one") depends
-   on saying so.
+**`OPEN-18` — owner decision 2026-11-21.** The generic contract is **approved**:
+cell identity is computed by a provider/model-specific deterministic resolver whose
+grid origin, spacing, orientation, and revision are explicit inputs; it is not
+derived from a universal coordinate-rounding rule. The **provider grid
+configurations remain pending external evidence** and are not asserted here.
 
-Two-phase write, forced by the column grants: `app_api` may insert only
-`(provider, model, cell_key)` into `outlook_cells`; `app_system` fills
+#### 5.2.2 `GridSpec` — the only shape a resolver accepts
+
+```ts
+// packages/weather-core/cells/grid-spec.ts — design sketch, not yet written
+interface GridSpec {
+  readonly gridId: string; // stable id of *this definition*, e.g. "synthetic-1deg"
+  readonly originLat: DecimalString; // node of index (0, 0)
+  readonly originLon: DecimalString;
+  readonly stepLat: DecimalString; // positive; row spacing
+  readonly stepLon: DecimalString; // positive; column spacing
+  readonly latRange: [DecimalString, DecimalString];
+  readonly lonDomain: "global" | "bounded";
+  readonly lonRange?: [DecimalString, DecimalString]; // required when bounded
+  readonly rows?: number; // required when bounded
+  readonly cols?: number; // required when bounded
+  readonly cellAnchor: "south-west"; // v1: the only supported anchor
+  readonly spatialResolutionKm: number;
+  readonly gridSpecHash: string; // sha256 of the canonical JSON of every other field
+}
+```
+
+Rules:
+
+1. **Decimal strings, not floats.** `"0.25"`, `"-90"`, `"-180"`. Each is parsed
+   once to integer micro-degrees (`µ° = value × 1e6`) and every identity
+   computation is integer arithmetic. No `float` and no `Number` participates in a
+   cell identity.
+2. **Orientation is a resolver property, not a sign trick.** `stepLat` and
+   `stepLon` are positive; the anchor names the corner. A provider with a
+   north-to-south axis needs a resolver implementation, not a negative step.
+3. **v1 supports regular lat/lon grids only.** A curvilinear or genuinely reduced
+   grid that cannot be expressed as `GridSpec` must fail as `provider_changed`
+   rather than be approximated by a rectangle.
+4. **`gridId` binds one-to-one to `model`.** The registry refuses to bind two
+   specs to one model, and `gridSpecHash` is asserted per model in a test. Editing
+   a spec in place therefore fails the suite; a real re-grid creates a new `model`
+   string (5.2.5).
+
+#### 5.2.3 Mapping algorithm
+
+```
+resolve(spec, requestedLat, requestedLon):
+  1. parse both coordinates as decimal strings; reject non-finite or > 6 dp
+  2. reject unless lat is inside latRange
+  3. lonDomain = "global"  → shift by ±360 until lon ∈ [originLon, originLon + 360)
+     lonDomain = "bounded" → reject unless lon is inside lonRange
+  4. i = floorDiv(latµ - originLatµ, stepLatµ)
+     j = floorDiv(lonµ - originLonµ, stepLonµ)
+  5. bounded grids: reject unless i ∈ [0, rows) and j ∈ [0, cols)
+  6. nodeLatµ = originLatµ + i × stepLatµ
+     nodeLonµ = originLonµ + j × stepLonµ
+  7. key = serialise(nodeLatµ, nodeLonµ, decimals(spec))
+  8. return { i, j, nodeLat, nodeLon, key, gridSpecHash }
+```
+
+Three details carry the determinism:
+
+- **`floorDiv`, not truncation.** `floorDiv(-1, 4) = -1`; truncation gives `0` and
+  would put `-0.1` in the same cell as `0.1`. This is the single most likely bug in
+  a hand-written resolver, which is why it is a named golden vector (5.2.6 #9).
+- **Half-open cells, lower edge inclusive.** A cell owns
+  `[node, node + step)` on both axes, so a coordinate exactly on a grid line
+  selects the cell whose lower edge is that line. Deterministic by construction,
+  not by which way a float rounded.
+- **Decimal input, not binary input.** A caller that holds a JS `number` renders it
+  with `toFixed(6)` before parsing, so the same user value lands in the same cell
+  across engines and across versions. The resolver never sees a raw float.
+
+Longitude wrapping applies **only** to `lonDomain = "global"`, and only around
+`originLon`. A regional grid is `bounded`; wrapping it would merge two cells the
+provider distinguishes. Latitude is never wrapped.
+
+#### 5.2.4 Serialization
+
+`cellKey = "<lat>,<lon>"`, produced by one formatter:
+
+- `decimals = max(2, decimalsOf(stepLat), decimalsOf(stepLon))`. A step needing more
+  places than the resulting format allows is a configuration error, rejected at
+  registry load, not at ingest.
+- Fixed-point, no exponent, no leading `+`, no spaces, negative allowed:
+  `-6.25,106.75`.
+- The value comes from the **integer node coordinate**, never from rounding the
+  requested coordinate. `-6.2` and `-6.20` must not both exist; the formatter is
+  the only producer, so they cannot.
+
+`cell_key` stays `text` (`tables-climate.md` §1) and the key identifies the **cell
+anchor**, not the served location. A provider that answers with an interpolated
+point still has cells at anchors; the interpolation is recorded on the record, and
+`served_value_is_interpolated` says so.
+
+#### 5.2.5 Re-gridding and versioning
+
+- A grid change that alters identity **requires a new `model` string** (for example
+  `ecmwf_seas5_v2`). The registry binds one `GridSpec` per model, and the
+  `gridSpecHash` golden test fails on an in-place edit. Operator discipline is not
+  the guarantee; a failing test is.
+- Old `outlook_cells` rows and old `field_outlook_cells` rows keep their model and
+  keep their meaning. They are not rewritten. A field re-resolves under the new
+  model on its next write, and `field_outlook_cells_live_key` supersedes the old
+  resolution rather than updating it.
+- `UNIQUE (provider, model, cell_key)` therefore keeps meaning "one identity per
+  model per cell" across revisions, because the revision is part of the model.
+- **Rejected alternative:** embedding `gridId` in the key. It enforces the same
+  invariant without relying on the model string, but duplicates the version in two
+  places, lengthens every key, and diverges from the documented key format for no
+  additional guarantee.
+
+#### 5.2.6 Provider grid configurations — pending, not invented
+
+No real grid is asserted in this document. An origin, a spacing, and an axis
+orientation cannot be derived from a resolution figure; they need provider
+documentation or a measured response with a known request and its served coordinate.
+
+| `model` | Grid definition | Evidence needed before 5.2 |
+|---|---|---|
+| `ecmwf_ifs025` | **pending** | documented origin/axis, or one measured request→served pair |
+| `ecmwf_ec46` | **pending** | as above; the exposed point grid must be documented explicitly, because the upstream model is reduced Gaussian |
+| `ecmwf_seas5` | **pending** | as above |
+| ERA5 archive | **pending** | as above |
+| CHIRPS v3.0 | **pending** | as above |
+
+Until a row is validated, the resolver exists but that model cannot ingest. That is
+`BLOCKED_EXTERNAL_INPUT` in the decision register, not a design gap, and it is why
+5.2's acceptance test is written against synthetic grids.
+
+#### 5.2.7 Golden-vector specification (required test, not yet written)
+
+Every vector is `(grid, input) → (i, j, key)`. The grids are **synthetic and
+labelled as such**; none is a claim about a real provider. `origin` and `step` are
+degrees, `domain` is `global` or `bounded`.
+
+| # | Grid: origin / step / domain | Input | `(i, j)` | Key | Served (synthetic) | Proves |
+|---|---|---|---|---|---|---|
+| 1 | `(0,0)` / `1,1` / global | `(0.5, 0.5)` | `(0, 0)` | `0.00,0.00` | `0.00,0.00` | interior point |
+| 2 | `(0,0)` / `1,1` / global | `(0, 0)` | `(0, 0)` | `0.00,0.00` | `0.00,0.00` | lower edge is inclusive |
+| 3 | `(0,0)` / `1,1` / global | `(1, 1)` | `(1, 1)` | `1.00,1.00` | `1.00,1.00` | an internal boundary starts the next cell |
+| 4 | `(0,0)` / `1,1` / global | `(0.999999, 0.999999)` | `(0, 0)` | `0.00,0.00` | `0.00,0.00` | just below a boundary |
+| 5 | `(0,0)` / `1,1` / global | `(1.000001, 1.000001)` | `(1, 1)` | `1.00,1.00` | `1.00,1.00` | just above a boundary |
+| 6 | `(-90,-180)` / `0.05,0.05` / bounded | `(-6.21, 106.79)` | `(1675, 5735)` | `-6.25,106.75` | `-6.25,106.75` | non-zero origin, negative latitude, floor not trunc |
+| 7 | `(0,0)` / `0.25,0.25` / global | `(-6.21, 106.79)` | `(-25, 427)` | `-6.25,106.75` | `-6.25,106.75` | one resolution |
+| 8 | `(0,0)` / `0.4,0.4` / global | `(-6.21, 106.79)` | `(-16, 266)` | `-6.40,106.40` | `-6.40,106.40` | a different resolution for the same input yields a different cell |
+| 9 | `(0,0)` / `1,1` / global | `(-0.1, -0.1)` | `(-1, -1)` | `-1.00,-1.00` | `-1.00,-1.00` | truncation would give `0.00,0.00` |
+| 10 | `(0,0)` / `1,1` / global | `(0, 359.5)` and `(0, -0.5)` | `(0, 359)` | `0.00,359.00` | `0.00,359.00` | longitude wrapping, both inputs agree |
+| 11 | `(0,0)` / `1,1` / bounded, `latRange=(-90,90)`, `lonRange=(0,10)` | `(91, 0)` and `(0, 400)` | — | typed `out_of_grid` | — | invalid input produces no cell |
+| 12 | same origin/step, different `gridId` | `(0.5, 0.5)` | same `(0,0)` | same key | `0.00,0.00` | a revision is a new **model**, not a new key format |
+
+Every synthetic grid is node-serving, so `served` equals the anchor. A live provider
+that interpolates returns a different served coordinate with
+`served_value_is_interpolated = true`, and the key still comes from the cell — that is
+the case the synthetic vectors cannot cover, so 5.1 records the provider's answer
+verbatim and the flag.
+
+Vector 8 is exact only for the synthetic grid; it is there to prove that resolution
+changes identity, not to predict a provider's answer. For each vector a resolver
+test also asserts: `key` round-trips to the node it was built from, `gridSpecHash`
+matches the committed fixture, and `served` is recorded as the node (synthetic) or
+as the provider's answer (live), never derived.
+
+#### 5.2.8 Two-phase cell write
+
+Forced by the column grants, unchanged by this reconciliation: `app_api` may
+insert only `(provider, model, cell_key)` into `outlook_cells`; `app_system` fills
 `served_lat`, `served_lon`, `elevation_m`, `spatial_resolution_km`. The ingest job
-does the second write. A cell created by a user's field therefore exists before its
-coordinates do, which is the documented lifecycle ("`NULL` until first ingest") and
-not an error state.
+performs the second write. A cell created by a user's field therefore exists before
+its coordinates do — the documented lifecycle ("`NULL` until first ingest"), not an
+error state.
 
 ### 5.3 Run lifecycle and idempotency
 
@@ -426,7 +569,8 @@ reports `spreadUnavailable` rather than inventing a mean (`ADR-001` D8b).
 | Incomplete payload | accept what exists, record coverage, `status = 'partial'`, never extrapolate |
 | Reproducibility | an artifact built on a non-retained provider payload is `reproducible: false` with `unreproducible_reason = 'raw_payload_not_retained'` |
 
-**`OPEN-05` — recommendation.** Do not build retention in Phase 5. Reasons: the
+**`OPEN-05` — owner decision, 2026-11-21: retention is deferred, not abandoned.**
+Do not build it in the initial release. Reasons: the
 object store is new infrastructure with its own access control; Open-Meteo's free
 tier imposes terms that are themselves unresolved (`OPEN-03`); and the honesty cost
 is already representable — `reproducible: false` with a stated reason is exactly what
@@ -435,11 +579,19 @@ is already representable — `reproducible: false` with a stated reason is exact
 needs to re-derive a score. Until then, `raw_payload_ref` stays `NULL` and no artifact
 claims replayability it cannot deliver.
 
-**`OPEN-16` — recommendation.** Retention of `weather_records` is not urgent at
+The distinction that must survive in code and in prose: **`reproducible: false` is not
+missing provenance.** The artifact still names its provider, model, run ids, cell,
+requested and served coordinates, initialization time, and derivation version. What
+it cannot do is re-run the adapter on the original bytes. A record with no `inputRefs`
+is a different and worse defect, and the two must not collapse into one "not
+reproducible" flag.
+
+**`OPEN-16` — owner decision, 2026-11-21: no automatic pruning, measure first.**
+Retention of `weather_records` is not urgent at
 Phase 5 scale, and the growth figure in the research (≈56 000 rows per ensemble run)
 is a per-run-per-cell-set estimate that must be measured against the real cell count
-before any policy is chosen. Recommended policy to adopt in 5.0 and revisit after the
-first month of 5.4 traffic:
+before any policy is chosen. The committed direction for the initial release, to be
+reassessed — not implemented — after the first month of 5.4 traffic:
 
 - Never delete a row referenced by any `input_refs` — the hash audit depends on it.
 - Superseded rows are retained; they are the audit trail of a normalization change.
@@ -527,7 +679,7 @@ Reviewed against the applied catalogue, table by table.
 | `monthly_outlooks` | yes | **yes for precipitation** | `variable = 'precipitation'` only. Temperature outlooks need a second migration once the assembly rule for temperature exists; not Phase 5 |
 | `climatology_normals` | yes | **yes** | no `baseline_hash` column by design; must be computed over the consumed subset |
 | `field_outlook_cells` | yes | **yes** | no `created_at` (creation instant is `resolved_at`, per the consistency checklist); `area_weighted` policy exists and is unimplemented |
-| dead-letter / `sync_attempts` / watermark | **no** | **decision required** | `background-processing.md` §10 names `sync_attempts` and a dead-letter surface that have no table. Recommendation: structured logs + `ingestion_runs.error` + `ingestion_runs_running_idx` for stuck detection is enough for 5.4, and a migration is written only if a query is actually needed (§9, `Q-P5-2`) |
+| dead-letter / `sync_attempts` / watermark | **no** | **deferred** (`Q-P5-2`) | `background-processing.md` §10 names `sync_attempts` and a dead-letter surface that have no table. Structured logs + `ingestion_runs.error` + `ingestion_runs_running_idx` for stuck detection is enough for 5.4; a migration is written only if a query cannot answer a real question |
 
 **No migration is proposed by this phase.** Two are foreseeable — a temperature
 outlook variable, and dataset versioning — and both are cheap when the need is real.
@@ -600,7 +752,7 @@ logs. No monitoring stack is introduced.
 | Ingestion success / failure rate | `ingestion_runs.status` over `started_at` | per provider and per queue |
 | Provider latency | `ingestion_runs.started_at` → `finished_at`, plus the adapter's recorded fetch duration | p50/p95 per provider |
 | Rate-limit consumption | token-bucket counters; `attempt` and `status = 'queued'` show deferral | per provider, per day |
-| Payload size | what the normalizer counted | no number is stored yet; §9 `Q-P5-2` |
+| Payload size | what the normalizer counted | no number is stored yet; `Q-P5-2` is deferred |
 | Records received / accepted / rejected / persisted | adapter counts + `ingestion_runs.record_count` | the four must reconcile; a gap means silent drops |
 | Coverage per cell and run | `ingestion_runs.coverage_percent`, per-month `data_coverage_percent` | the honesty metric |
 | Forecast freshness | computed from `forecast_runs.initialized_at` at read time | never stored |
@@ -629,7 +781,7 @@ the numbers *queryable*, which is why `ingestion_runs` already carries them.
 | Adapter error mapping | each provider failure shape maps to one of the five classes | recorded error bodies (`400`, `404`, `429`, `500`, schema change) |
 | Normalizer unit conversion | mm/day, `m/s` rate → mm/month, K → °C, Indonesian slot → Jakarta day | hand-computed tables, including a 28/29/30/31-day month for the rate conversion |
 | Timestamp semantics | no naive timestamp survives; provider value without a zone is rejected | table of instants |
-| Cell-key determinism | the same anchor always yields the same key, and the key is the served grid node | golden table per model |
+| Cell-key determinism | the same requested coordinate always yields the same `(provider, model, key)`; the key is the **anchor node**, and the served coordinate is a separately recorded fact | golden table per synthetic grid, §5.2.7 |
 | Idempotency | the same payload ingested twice produces zero new rows and zero new runs | real database, real roles |
 | Supersession | a bumped `normalizerVersion` creates a new `IngestionRun`, same `ForecastRun`, old rows superseded | real database |
 | Partial payload | `status = 'partial'`, coverage recorded, no extrapolation | truncated fixture |
@@ -685,15 +837,15 @@ a pure abstraction layer. Dependency graph:
 
 | | |
 |---|---|
-| Objective | every decision the adapters depend on is written, and the missing contracts exist |
-| Prerequisites | this document approved |
-| Scope | `docs/data-model/open-decisions.md` (close or explicitly defer `OPEN-14`, `OPEN-18`); `packages/contracts/src/weather.ts` (add `ForecastRun` / `IngestionRun` row contracts, and switch `valueBase` to `singleValueEvaluationBasisSchema`); `packages/contracts/src/climate.ts` (new: adapter request/result types) |
-| Contracts | `ForecastRun`, `IngestionRun`, `AdapterResult`, `CellKey` per model, frozen `temporal_resolution` / `aggregation_level` vocabularies |
-| Database impact | none |
-| Tests | contract tests + golden vectors for the new schemas; the existing 239 must stay green |
-| Acceptance | a `WeatherValue` produced by a hand-written fake adapter type-checks against the contract with no `any`; the cell-key rule table exists and is executable |
+| Objective | every decision, contract, and test fixture that 5.1–5.8 depends on exists, is executable, and is recorded in the register — and no provider-specific implementation is started |
+| Prerequisites | this document approved; the 2026-11-21 owner decisions recorded in `docs/data-model/open-decisions.md` |
+| Scope | `docs/data-model/open-decisions.md` (record `OPEN-18`, `Q-P5-1`, `OPEN-03`, `OPEN-05`, `OPEN-16`, plus `OPEN-14` vocabulary); `packages/contracts/src/weather.ts` (`ForecastRun` / `IngestionRun` row contracts, `valueBase` → `singleValueEvaluationBasisSchema`); `packages/contracts/src/climate.ts` (new: `AdapterResult`, `GridSpec`, `ResolvedCell`, `MonthlyOutlook`); `packages/database/src/climate.ts` (row types only, no query); `packages/weather-core/cells/` (resolver contract + synthetic golden fixtures); `apps/worker/src/queue/contract.ts` (job lifecycle interface, no backing) |
+| Contracts | `ForecastRun`, `IngestionRun`, `AdapterResult`, `GridSpec`, `CellKey`, `ResolvedCell`, `Job` (claim / lease / retry / dead-letter / idempotency), `MonthlyOutlook`; frozen `temporal_resolution` and `aggregation_level` vocabularies; the deferred-retention reproducibility shape |
+| Database impact | **none.** The `jobs` table belongs to 5.3, not 5.0 |
+| Tests | contract tests and golden vectors for every new schema; resolver vectors 1–12 of §5.2.7 against synthetic grids; a registry assertion that one `GridSpec` binds one `model` and its `gridSpecHash` matches the committed fixture; the existing 239 contract tests stay green |
+| Acceptance | a fake adapter's `WeatherValue` type-checks with no `any`; a single value carrying `evaluationBasis: "mixed"` is **rejected**; all twelve resolver vectors pass, including negative-floor and longitude-wrap cases; `reproducible: false` + `raw_payload_not_retained` validates while `reproducible: false` without a reason does not; the queue interface expresses claim, lease expiry, retry, dead-letter, and idempotency without importing Redis or a queue library |
 | Dependencies | — |
-| Risks | freezing a vocabulary too early (`OPEN-14`); mitigate by freezing only the five values the storage CHECK already implies |
+| Risks | freezing a vocabulary too early (`OPEN-14`) — mitigate by freezing only the five values the storage CHECK already implies; contract churn while 5.1 is written — mitigate by versioning the adapter and normalizer constants in 5.1, not the row contracts |
 
 ### 8.1 Phase 5.1 — adapter and normalization foundation
 
@@ -713,29 +865,29 @@ a pure abstraction layer. Dependency graph:
 
 | | |
 |---|---|
-| Objective | any field yields a deterministic `cellKey` per model, stored as a resolution |
+| Objective | the generic resolver is implemented and proven against synthetic grids; a field yields a deterministic `cellKey` for any model whose grid configuration has been validated |
 | Prerequisites | 5.0, 5.1 (grid metadata) |
-| Scope | `packages/weather-core/cells.ts`; `packages/database/src/climate.ts` (`upsertCell`, `resolveFieldCells`); one integration point in the Field write path |
+| Scope | `packages/weather-core/cells/` (`grid-spec.ts`, `resolve.ts`, synthetic fixtures); `packages/database/src/climate.ts` (`upsertCell`, `resolveFieldCells`); one integration point in the Field write path |
 | Contracts | `CellKey`, `ResolvedCell` (`provider`, `model`, `cellKey`, `distanceKm`, `extractionPolicy`) |
 | Database impact | none new; writes `outlook_cells` (identity only, `app_api`) and `field_outlook_cells` inside `withTenant` |
-| Tests | §7.1 row 5; the two-phase cell fill; supersession on geometry edit; `distance_km` bound rejection |
-| Acceptance | the same polygon always resolves to the same cell; a geometry edit supersedes the old row and inserts a new one; no cross-tenant row is visible |
+| Tests | the twelve vectors of §5.2.7; the registry rejects two `GridSpec`s for one `model`; a changed `gridSpecHash` fails the committed fixture; the two-phase cell fill; supersession on geometry edit; `distance_km` bound rejection |
+| Acceptance | all twelve vectors pass, including negative-floor and longitude-wrap cases; the same polygon always resolves to the same key; a model with no validated `GridSpec` **fails** resolution instead of guessing; a geometry edit supersedes the old row and inserts a new one; no cross-tenant row is visible |
 | Dependencies | 5.0, 5.1 |
-| Risks | the centroid of a large plot falling near a grid boundary (two cells differ by one step); documented, not solved, because `OPEN-15` is undecided |
+| Risks | the centroid of a large plot falling near a grid boundary (two cells differ by one step), documented and not solved because `OPEN-15` is undecided; no real model resolves until its grid configuration is validated, so 5.2 can land while 5.4 waits on evidence |
 
 ### 8.3 Phase 5.3 — run lifecycle and worker runtime
 
 | | |
 |---|---|
-| Objective | a job can be enqueued, retried, deduplicated, and recorded against `forecast_runs` / `ingestion_runs` |
+| Objective | a job can be enqueued, claimed, retried, deduplicated, recovered after a crash, and recorded against `forecast_runs` / `ingestion_runs` — on PostgreSQL alone |
 | Prerequisites | 5.0 |
-| Scope | `apps/worker/src/queue.ts` (backing per `Q-P5-1`), `apps/worker/src/ingest/run.ts`, `packages/database/src/climate.ts` (`upsertForecastRun`, `upsertIngestionRun`, `markIngestionStatus`) |
-| Contracts | `ForecastRun`, `IngestionRun`, `targetSelectorHash` definition |
-| Database impact | none if `Q-P5-1` picks Postgres; a `jobs` table if it does |
-| Tests | §7.1 rows 6–7; `attempt` increments in place; `ingestion_runs_finished_check` holds on every transition |
-| Acceptance | ingesting the same fake payload twice leaves exactly one `ForecastRun`, one `IngestionRun`, and an unchanged row count; a forced failure increments `attempt` without minting a row |
+| Scope | `apps/worker/src/queue/postgres.ts`, `apps/worker/src/ingest/run.ts`, `apps/worker/src/main.ts`, `packages/database/src/climate.ts` (`upsertForecastRun`, `upsertIngestionRun`, `markIngestionStatus`), the `jobs` migration |
+| Contracts | the `Job` lifecycle from 5.0; `targetSelectorHash` (`sha256` over the sorted `(cellKey, variable)` set) |
+| Database impact | **one additive migration**: a `jobs` table (id, kind, payload, run_at, lease_expires_at, attempt, max_attempts, status, last_error, unique idempotency key). No Redis, no new dependency. `sync_attempts`, a separate dead-letter table, and a sweep watermark remain **unbuilt** and are not implied by this table |
+| Tests | §7.1 rows 6–7; two workers claim disjoint jobs under `FOR UPDATE SKIP LOCKED`; a lease expires and the job is reclaimed with `attempt` incremented in place; a duplicate enqueue is dropped by the unique idempotency key; `ingestion_runs_finished_check` holds on every transition |
+| Acceptance | ingesting the same fake payload twice leaves exactly one `ForecastRun`, one `IngestionRun`, and an unchanged row count; a killed worker's job is reclaimed after lease expiry without minting a second row or a second run; graceful shutdown releases the lease and leaves the job claimable; `SKIP LOCKED` alone is shown by test **not** to be sufficient (the lease and attempt assertions fail if it is removed) |
 | Dependencies | 5.0 |
-| Risks | the queue choice becomes load-bearing; mitigate by keeping job semantics (id, retry, dead-letter) independent of the backing |
+| Risks | the queue choice becomes load-bearing — mitigate by keeping the interface narrow and the job semantics (atomic claim, lease, retry, dead-letter, idempotency) independent of the backing; a Postgres queue under load becomes a poller hotspot — measure before tuning, and treat a move to Redis as a backing swap behind the same interface |
 
 ### 8.4 Phase 5.4 — short-range forecast ingestion
 
@@ -749,7 +901,7 @@ a pure abstraction layer. Dependency graph:
 | Tests | §7.1 rows 1–7 and 10; the day-14 ensemble null truncation asserted from a recorded payload |
 | Acceptance | one scheduled run stores deterministic and ensemble rows for a real cell; `horizon_end` equals the last non-null instant; a 429 defers instead of failing |
 | Dependencies | 5.1, 5.2, 5.3 |
-| Risks | free-tier budget exhaustion; no commercial permission; both are `OPEN-03` and must be settled before this runs on a schedule |
+| Risks | free-tier budget exhaustion and no commercial permission — both `OPEN-03`, and both must be settled before this runs on a schedule; the model's grid configuration must be validated first (§5.2.6) |
 
 ### 8.5 Phase 5.5 — climatology baseline
 
@@ -789,7 +941,7 @@ a pure abstraction layer. Dependency graph:
 | Contracts | `MonthlyOutlook` response: month key, `dataClass`, `valueMm`, `missingReason`, coverage, spread, freshness per source |
 | Database impact | none; writes and reads `monthly_outlooks` |
 | Tests | §7.1 rows 8–9; §7.2 read-path tenancy; a month with `ingest_failed` is not promoted; a 12-month response always has 12 entries |
-| Acceptance | with only climatology ingested, the API returns 12 months, 8 of them labelled `climatology` / `beyond_horizon`, and no month claims a forecast; with seasonal data present, months 2–7 change class and 8–12 do not |
+| Acceptance | with only climatology ingested, the API returns 12 entries: **five** (months 8–12) labelled `climatology` with `missing_reason = 'beyond_horizon'`, and months 0–7 present as `pending` / `not_requested` with no value, so no month claims a forecast; with seasonal data present, months 2–7 change class and months 8–12 do not |
 | Dependencies | 5.2, 5.5 (minimum), 5.4 and 5.6 (for a complete timeline) |
 | Risks | shipping a read API before the data exists and calling it done; the acceptance criterion above is written to prevent exactly that |
 
@@ -809,67 +961,98 @@ a pure abstraction layer. Dependency graph:
 
 ### 8.9 What "first usable capability" means here
 
-After 5.7 with climatology only, a farmer can be shown twelve months of historical
-normals, correctly labelled, for their own plot. After 5.6, months 2–7 become a real
-seasonal forecast. After 5.4, days 0–14 become a real short-range forecast. That is
-the order in which the product becomes useful, and it is why 5.5 precedes 5.6 and
-5.4 rather than following them.
+After 5.7 with climatology only, a farmer can be shown **five** correctly labelled
+months of historical normals (months 8–12) plus an explicit pending state for the
+months that require a forecast — not twelve months presented as normals, which
+would be the same substitution the product forbids. After 5.6, months 2–7 become a
+real seasonal forecast. After 5.4, days 0–14 become a real short-range forecast.
+That is the order in which the product becomes useful, and it is why 5.5 precedes
+5.6 and 5.4 rather than following them.
+
+The count is a contract, not a convenience: 0–14 d is `weather_forecast`, 15–45 d is
+`subseasonal_forecast`, months 2–7 (six) are `seasonal_forecast`, and months 8–12
+(five) are `climatology`. A 12-month response always has twelve entries and never
+promotes one class into another to fill the grid.
 
 ---
 
-## 9. Decision register
+## 9. Decision status
 
-| Decision | Existing decision | Recommendation | Status |
-|---|---|---|---|
-| BMKG permission | `OPEN-02` | keep the flag off; the 0–3 d band falls back to Open-Meteo, labelled `weather_forecast` | **needs external evidence** (written permission) |
-| Open-Meteo commercial plan | `OPEN-03` | decide before 5.4 runs on a schedule; paid plan is the cheap option, self-host is `OPEN-03`-sized infrastructure | **needs owner approval** |
-| Raw payload retention | `OPEN-05` | do not build in Phase 5; record `reproducible: false` + `raw_payload_not_retained` | **needs owner approval** (accepts the honesty cost) |
-| Cell-key algorithm | `OPEN-18` | fixed-decimal `lat,lon` at the served grid node, 2 decimals, per model; a re-grid is a new `model` string | **needs owner approval**, then written into `open-decisions.md` |
-| Weather-record retention | `OPEN-16` | no pruning in Phase 5; never delete a run referenced by `input_refs`; measure before choosing | **can be deferred** with a stated trigger |
-| Temporal vocabulary | `OPEN-14` | freeze the five `temporal_resolution` and five `aggregation_level` values in 5.0, matching the columns' documented sets | **already implied by the schema** — freezing adds no risk |
-| Field-to-cell mapping | `OPEN-15` | `centroid` in v1, as documented; `area_weighted` stays accepted-but-unimplemented | **already decided** |
-| Field snapshot vocabularies | `OPEN-21` | out of Phase 5; it blocks snapshots and therefore Phase 6 | **can be deferred** to Phase 6 |
-| Queue backing | `Q-P5-1` (new) | Postgres `jobs` table with `FOR UPDATE SKIP LOCKED` before adding Redis+BullMQ: no new dependency, and the job semantics in `background-processing.md` are preserved | **needs owner approval** |
-| Operational history storage | `Q-P5-2` (new) | structured logs + `ingestion_runs` first; migrate only when a question cannot be answered | **needs owner approval**, low cost either way |
-| Temperature outlook | `Q-P5-3` (new) | defer; `monthly_outlooks.variable` is precipitation-only by CHECK | **can be deferred** |
-| CHIRPS route | `Q-P5-4` (new) | try a mirror or GEE; if neither is lawful and reachable, ship ERA5 and say so in the payload | **needs external evidence** |
-| Annual outlook (Set VII) | `ADR-001` D2a | do not pursue in Phase 5; months 8–12 stay climatology | **can be deferred** |
+`docs/data-model/open-decisions.md` is the **authoritative** register. This section is
+a view of the items Phase 5 depends on, with the fields that register records. It is
+not a second register, and it closes nothing: a decision is only settled when the
+register says so and the deliverable exists.
 
-Nothing in this table closes an `OPEN-*` item. Each recommendation needs the
-approval or evidence in its Status column before the sub-phase that depends on it.
+### 9.1 Recorded by the owner, 2026-11-21
+
+| ID | Decision | Rationale | Scope | Status | Revisit condition |
+|---|---|---|---|---|---|
+| `OPEN-18` | A provider/model-specific deterministic grid resolver; grid origin, spacing, orientation, and revision are explicit inputs; a change that alters identity requires a new `model` string | A universal `floor(lat / resolution)` assumes a zero origin, square cells, and one axis orientation, none of which is established for any provider; and an in-place rule change would silently re-point historical cells | The generic resolver contract and the serialization rule (§5.2.2–§5.2.5). **Not** any provider's actual grid constants | **Generic contract approved.** Provider grid configuration pending external evidence. Resolver and golden vectors **not started** | A provider re-grid, which creates a new `model` string; or a grid that cannot be expressed as `GridSpec`, which becomes a resolver implementation |
+| `Q-P5-1` | PostgreSQL is the initial queue backing, using row locking and `FOR UPDATE SKIP LOCKED` behind a narrow job interface | PostgreSQL is already required; Redis and BullMQ would be new infrastructure with no operational evidence yet; the documented job semantics survive a backing swap | Job claiming, leases, retries, attempts, idempotency, dead-letter state, observability, transaction boundaries, and shutdown (§8.3) | **Owner-approved architecture decision.** No `jobs` table, no queue code, no dependency. Implementation is 5.3 | Measured contention or polling cost on the `jobs` table; a multi-region worker requirement; or a queue feature (scheduling at scale, fan-out) that is expensive to express in SQL |
+| `OPEN-03` | Do not commit to a paid Open-Meteo plan yet; commercial operation is conditional on verified licensing and an appropriate commercial plan; the free tier is not used for commercial operation; self-hosting is not assumed to resolve licensing or redistribution terms | Price, quota, attribution, and permitted use are unresolved, and a plan chosen before 5.4 exists would be a guess | Commercial deployment legality and any `raw_payload_ref` retention. Not the schema, not the adapter | **Deferred** pending commercial and cost evaluation. Not closed | Before any commercial deployment; after pricing, quotas, attribution, and permitted-use terms are reviewed |
+| `OPEN-05` | Defer durable raw-payload retention for the initial release; normalized records carry sufficient provenance to identify origin and transformation; artifacts that cannot be reproduced record `reproducible: false` with a machine-readable reason; no full-reproducibility claim | An object store is new infrastructure with its own access control, and the provider terms that would make retention lawful are unsettled; the honesty cost is already representable | `ingestion_runs.raw_payload_ref`, object storage, and the `reproducible` claim. Not the normalized row, which is the system of record | **Owner-approved deferral.** No store, no writer. Reopening is a later phase | A lawful paid or self-hosted plan, known storage cost, and a verification run that must re-derive a score |
+| `OPEN-16` | No automatic pruning for the initial release; preserve existing data; measure growth and query needs during initial ingestion; reassess after at least one month of 5.4; never let a future policy delete data required for provenance or audit | The growth estimate is per-run-per-cell-set and has never been measured against a real cell count; a policy chosen now would be a guess with an audit cost | `weather_records` and superseded rows. Not `climatology_normals`, which is never pruned | **Owner-approved deferral** pending measured usage | At least one month of observed 5.4 ingestion, plus a demonstrated storage or query need |
+
+### 9.2 Deferred, or out of Phase 5
+
+| ID | Item | Status |
+|---|---|---|
+| `OPEN-02` | BMKG written permission | **External evidence.** The flag stays off; days 0–3 fall back to labelled Open-Meteo |
+| `OPEN-14` | Freeze the five `temporal_resolution` and five `aggregation_level` values | **Assigned to 5.0**; the columns are unconstrained `text`, and an unfrozen vocabulary is a silent re-labelling risk |
+| `OPEN-15` | `area_weighted` weight set | **Already decided** as `centroid` for v1; the policy stays accepted-but-unimplemented |
+| `OPEN-21` | Field snapshot vocabularies | **Deferred to Phase 6**; blocks snapshots, not climate reads |
+| `Q-P5-2` | Operational history storage (`sync_attempts`, dead-letter, watermark) | **Deferred**; structured logs + `ingestion_runs.error` first. None of those tables exists |
+| `Q-P5-3` | Temperature outlook | **Deferred**; `monthly_outlooks.variable` is precipitation-only by CHECK |
+| `Q-P5-4` | A reachable, lawful CHIRPS v3.0 route | **External evidence**; ERA5 is the fallback, labelled by dataset |
+| `ADR-001` D2a | ECMWF Set VII annual outlook | **Deferred**; months 8–12 stay climatology |
+
+### 9.3 External evidence, not a decision
+
+These cannot be settled by the owner alone, and no document in this repository may
+assert them as done: written BMKG permission (`OPEN-02`), the Open-Meteo commercial
+evaluation (`OPEN-03`), a reachable CHIRPS route (`Q-P5-4`), the five provider grid
+configurations (§5.2.6), and the seasonal payload shape (`forecast_days` split, EC46
+lead-time shape, ensemble null boundary).
 
 ---
 
-## 10. Owner decisions required
+## 10. Owner decisions and external evidence
 
-Only the items that cannot be settled by engineering evidence:
+### 10.1 Recorded, 2026-11-21
 
-1. **`OPEN-18` cell-key format** — approve the fixed-decimal rule and the
-   "re-grid means a new `model` string" consequence, or propose an alternative.
-   Everything in 5.2 depends on it.
-2. **`Q-P5-1` queue backing** — Postgres `SKIP LOCKED` (no new dependency) versus
-   Redis + BullMQ (`background-processing.md`'s wording). This is the only place
-   where following the documents exactly means adding infrastructure.
-3. **`OPEN-03` Open-Meteo plan** — paid tier, self-host, or accept non-commercial use
-   and never deploy. Budget, not architecture.
-4. **`OPEN-05` retention deferral** — approve that Phase 5 ships without raw payload
-   retention, and that derived artifacts record `reproducible: false` with a reason.
-5. **`OPEN-16` retention policy direction** — approve "no pruning until measured", so
-   the first month of 5.4 traffic is the evidence, not a guess.
+1. **`OPEN-18`** — generic grid-resolver contract approved; provider grid
+   configurations pending evidence; implementation not started.
+2. **`Q-P5-1`** — PostgreSQL-first queue, behind an interface; no queue table or
+   code exists.
+3. **`OPEN-03`** — no paid plan commitment; commercial use conditional on verified
+   licensing and an appropriate plan.
+4. **`OPEN-05`** — raw-payload retention deferred; `reproducible: false` plus a
+   reason where a payload is not retained.
+5. **`OPEN-16`** — no automatic pruning until at least one month of measured 5.4
+   ingestion.
 
-External evidence, not a decision: BMKG written permission (`OPEN-02`) and a
-reachable, lawful CHIRPS route (`Q-P5-4`).
+Recording a decision is not implementing it. Each item above still names the
+sub-phase that delivers it, and that sub-phase has not started.
+
+### 10.2 Still needs external evidence
+
+BMKG written permission; Open-Meteo commercial terms and pricing; a lawful and
+reachable CHIRPS route; each provider's grid origin/axis; the seasonal payload
+shape. Until each is on file, the dependent sub-phase either runs on the labelled
+fallback or does not run.
 
 ---
 
 ## 11. What this document does not change
 
 - No migration, no Prisma model, no column, constraint, index, grant, or policy.
+- No queue table: the `jobs` table is 5.3's deliverable, not this document's.
 - No API contract, no route, no response envelope.
 - No authentication, RLS, or tenant-transaction behaviour.
 - No dependency, and no new package (the two new packages are *proposed*, §8.1).
 - No phase status: Phase 5 remains **designed, not implemented**.
 - `ADR-001`, `provenance-contract.md`, `tables-climate.md`,
-  `temporal-and-weather-semantics.md`, `background-processing.md`, and `data-flow.md`
-  are cited, not edited. Where one is wrong (§3.5), the divergence is recorded here
-  for a separate correction, not silently overridden.
+  `temporal-and-weather-semantics.md`, and `data-flow.md` are cited, not edited.
+  `background-processing.md` is edited only to record the queue backing decision and
+  to mark its queue tables as proposed. Where another document is wrong (§3.5), the
+  divergence is recorded here for a separate correction, not silently overridden.
