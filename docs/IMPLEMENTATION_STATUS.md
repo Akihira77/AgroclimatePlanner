@@ -1148,7 +1148,7 @@ Phases 4.5 and 4.6 remain **not started**.
 
 ---
 
-## Phase 5 — Climate Data Foundation — **5.0 contracts implemented; 5.1–5.8 not started**
+## Phase 5 — Climate Data Foundation — **5.0 contracts implemented; 5.1 adapter foundation started; 5.2–5.8 not started**
 
 Status: **5.0 partially implemented.** Phase 5.0 added contract and resolver code
 to `packages/contracts`, with tests. It added no migration, Prisma model, route,
@@ -1156,9 +1156,10 @@ dependency, grant, policy, worker, provider adapter, queue, or persistence. The
 design is `docs/architecture/climate-data-foundation.md`.
 
 5.0's contract scope is started but not complete: the `OPEN-14` vocabulary freeze
-and the job-lifecycle interface remain. Sub-phases 5.1 through 5.8 are **not
-started**, and nothing here claims a provider adapter, an ingestion job, an
-aggregation, or a climate endpoint exists.
+and the job-lifecycle interface remain. 5.1 has begun: `@agroclimate/weather-core`
+exists with a transport, a failure union, one real provider adapter (SEAS5 monthly),
+and a monthly normalizer. Nothing here claims an ingestion job, a persisted record,
+an aggregation, or a climate endpoint — 5.2 through 5.8 are **not started**.
 
 | Item | State |
 |---|---|
@@ -1167,8 +1168,8 @@ aggregation, or a climate endpoint exists.
 | Reconciliation of the 13 existing authorities | designed (§2), with three documented-but-absent items (§3.5) |
 | Implementation sequence, 9 sub-phases | proposed (§8) |
 | Verification strategy | specified (§7); nothing implemented |
-| Decision register | 8 `OPEN-*` items assessed; 5 owner decisions recorded 2026-11-21; **none closed** (§9) |
-| Owner decisions | 5 recorded (§10); provider grid configuration, BMKG permission, the Open-Meteo commercial evaluation, and a CHIRPS route still need **external evidence** |
+| Decision register | 8 `OPEN-*` items assessed; 7 `Q-P5-*` decisions recorded; **none closed** (§9) |
+| Owner decisions | 7 recorded; provider grid configuration, BMKG permission, the Open-Meteo commercial evaluation, a CHIRPS route, and the `precipitation_mean` quantity question (`Q-P5-7`) still need **external evidence or an owner call** |
 | Migration | **none proposed** — the climate schema is already sufficient for a precipitation outlook |
 
 What was measured rather than assumed, as `migration_owner` on 2026-11-21:
@@ -1223,7 +1224,8 @@ of it is documentation; no sub-phase moved.
 
 What remains true: no migration is proposed by the phase; lead months 8–12 stay
 climatology; BMKG stays disabled by default; `bias_corrected` stays `false`.
-Sub-phases 5.1–5.8 have no work started.
+`open-decisions.md` §6 has since grown to `Q-P5-1`..`Q-P5-7`. Sub-phase 5.1 has
+started (adapter foundation only); 5.2–5.8 have no work started.
 
 ### Phase 5.0 — contracts and grid resolver — 2026-11-21
 
@@ -1239,3 +1241,20 @@ Sub-phases 5.1–5.8 have no work started.
 | Not implemented | No adapter, no HTTP client, no queue, no worker runtime, no migration, no Prisma change, no route, no dependency, no persistence. No provider grid is asserted |
 | Still open in 5.0 | `OPEN-14` vocabulary freeze; the job-lifecycle interface (now scoped to 5.3) |
 | Layout deviation | Resolver is `packages/contracts/src/grid.ts`, not `packages/weather-core/cells/`; creating a package for one pure module had no consumer and `weather-core` is 5.1's |
+
+### Phase 5.1 — provider adapter and normalizer foundation — 2026-11-21
+
+| Item | State |
+|---|---|
+| `packages/weather-core` | **Created.** `@agroclimate/weather-core`, ESM+CJS build mirroring `contracts`, `zod` from the catalogue plus `@agroclimate/contracts` for the failure taxonomy |
+| `src/http.ts` | **Implemented.** `Transport` boundary: `GET`, timeout via `AbortController`, caller `AbortSignal` via `AbortSignal.any`, streaming body cap, `Retry-After` parse. No retry, no JSON parsing, no provider knowledge |
+| `src/failures.ts` | **Implemented.** `AdapterOutcome<T>`; the four shared kinds are `Extract<AdapterResult, …>["kind"]` from `@agroclimate/contracts`, so a contract rename fails to compile. Adds `incomplete_horizon`, `invalid_config`, `invalid_payload`, `unsupported_unit` |
+| `src/adapters/open-meteo-seasonal.ts` | **Implemented.** Pins `models=ecmwf_seas5`, `monthly=precipitation_mean`, `forecast_days=217`; validates month axis (first-of-month, strictly increasing, 7 rows), maps 429/4xx/5xx/other/network to the taxonomy; returns the provider-native series with the provider's own unit string and no `valueMm` |
+| `src/normalize/monthly.ts` | **Implemented.** Unit gate (`mm` only), ordering, null → `provider_null`, negative/non-finite refused, deterministic, frozen. **No conversion, no anomaly, no aggregation, no climatology fallback** |
+| Open-Meteo daily adapter | **Deferred** — needs record assembly and the daily coverage threshold; nothing would consume it |
+| EC46 / ERA5 / CHIRPS adapters | **Deferred** — no monthly product, undecided dataset route, unresolved licensing |
+| BMKG / Set VII adapters | **Blocked** — written permission and licence/GRIB proof of concept pending |
+| Tests | **27 in `weather-core`** (deliberately every fixture is labelled synthetic; no network) |
+| Executed | `pnpm --filter @agroclimate/weather-core test` — 27 passed; `typecheck`, `lint`, `build` clean. `pnpm typecheck` 8/8, `pnpm lint` 6/6 |
+| Not implemented | No persistence, no Prisma change, no migration, no worker, no queue, no route, no config loader, no raw-payload store, no cell resolution |
+| Open | `Q-P5-7` / `F-09` (`precipitation_mean` vs `valueMm`); `Q-P5-5`, `Q-P5-6` unchanged |

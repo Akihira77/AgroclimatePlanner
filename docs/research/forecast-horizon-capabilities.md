@@ -6,6 +6,13 @@ Every number below was verified by direct HTTP request from a WSL2 machine in In
 
 Test location for probes: Jakarta, `latitude=-6.2&longitude=106.8`.
 
+What code depends on this log (Phase 5.1): the SEAS5 monthly adapter pins the exact
+values recorded in §2 — `models=ecmwf_seas5`, `monthly=precipitation_mean`,
+`forecast_days=217` — and refuses a six-row answer. The adapter's tests use
+**synthetic** payloads that reproduce this log's shape and row counts, never a
+recording, so no test depends on the network. Any revision to the numbers below
+requires an adapter change, which is the point of citing them here.
+
 ---
 
 ## 1. Verified provider limits

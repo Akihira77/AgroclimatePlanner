@@ -215,9 +215,9 @@ provider ──▶ adapter ──▶ raw payload ──▶ normalizer ──▶ 
 
 | Component | Location | Purity | Owns |
 |---|---|---|---|
-| Adapter (per provider/product) | `packages/weather-core/adapters/*` (new; the documented `weather-core`) | pure given `(request, now)` except for the injected fetch | request shape, response parse, provider error mapping, attribution |
-| Normalizer | `packages/weather-core/normalize/*` | **pure** | unit conversion, `dataClass`, validity times, coverage accounting, record assembly |
-| Cell resolution | `packages/weather-core/cells/*` | **pure** | geometry → `cellKey`; served coordinate acceptance; distance |
+| Adapter (per provider/product) | `packages/weather-core/src/adapters/*` (**exists**; SEAS5 monthly only) | pure given `(request, now)` except for the injected fetch | request shape, response parse, provider error mapping, attribution |
+| Normalizer | `packages/weather-core/src/normalize/*` (**exists**; monthly only, no unit conversion yet) | **pure** | unit conversion, `dataClass`, validity times, coverage accounting, record assembly |
+| Cell resolution | `packages/weather-core/src/cells/*` (**not written**; the pure logic exists in `@agroclimate/contracts` `grid.ts`) | **pure** | geometry → `cellKey`; served coordinate acceptance; distance |
 | Ingestion pipeline | `apps/worker/src/ingest/*` | impure | run upsert, transaction, supersession, status transitions |
 | Aggregation | `apps/worker/src/aggregate/*` + `packages/climate-core/aggregate/*` (the documented `climate-core`) | pure core, impure writer | daily/weekly/monthly rollup, anomaly, coverage, spread |
 | Persistence | `packages/database/src/climate.ts` (new; not importable from `weather-core`) | impure | typed access to the six global tables + `field_outlook_cells` |
@@ -232,7 +232,9 @@ Two rules that shape every file above:
    aggregation take data and return data. That is what lets the whole pipeline be
    tested from recorded fixtures with no network and no clock (§7).
 
-Neither `weather-core` nor `climate-core` exists yet; §8.1 and §8.7 add them. The
+`climate-core` does not exist yet (§8.7 adds it). `weather-core` exists as a package
+since 5.1, but only the SEAS5 monthly adapter, the transport, and the monthly
+normalizer are written; cells, the other adapters, and record assembly are not (§5.1.2). The
 alternative — putting adapters inside `apps/worker` —
 was rejected because `packages/contracts` cannot import from an app, and the
 `WeatherValue` contract is the type these functions must return.
@@ -337,10 +339,57 @@ Responsibilities, each with a reason:
 | `request_invalid` | 400, unknown model, bad parameter | **no** | `failed`, `error.code = 'request_invalid'`, payload ref logged |
 | `provider_changed` | missing field, renamed variable, unexpected schema | **no**, and surface loudly | `failed`, `error.code = 'provider_changed'` — this is the class that means an adapter edit is required |
 | `partial` | fewer rows/days than requested | **no** | `status = 'partial'`; `coverage_percent` may round to 100 when the shortfall is a fraction of a large request |
+| `invalid_config` | bad coordinate, non-https base URL, missing required parameter | **no**, no request is made | `failed`, `error.code = 'invalid_config'` |
+| `incomplete_horizon` | 6 monthly rows when 7 were required — the code-level name for `partial` where the short axis is not a coverage fraction | **no** | `status = 'partial'` |
+| `invalid_payload` | negative precipitation amount, out-of-order month, empty series | **no** | `failed`, `error.code = 'invalid_payload'` |
+| `unsupported_unit` | a unit with no approved conversion | **no** | `failed`, `error.code = 'unsupported_unit'` |
+
+The last four exist in `packages/weather-core/src/failures.ts`; `partial` is split into
+`partial` (coverage) and `incomplete_horizon` (axis) because a monthly series has no
+cells to count. Both are recorded as `ingestion_runs.status = 'partial'`. `invalid_payload`
+and `unsupported_unit` are the normalizer's two refusals: a value it cannot represent,
+and a unit it must not convert.
 
 `provider_changed` is separated from `request_invalid` on purpose: the first is our
 bug or the provider's breaking change and needs a human; the second is a bad request
 and retrying is pointless.
+
+#### 5.1.2 Implemented adapters — 5.1
+
+| Provider / product | Status | What exists |
+|---|---|---|
+| Open-Meteo seasonal, `ecmwf_seas5`, `monthly=precipitation_mean` | **implemented** | `adapters/open-meteo-seasonal.ts`: request build, HTTP classify, payload parse, month-axis validation |
+| Open-Meteo daily (`forecast_days` ≤ 16) | **deferred** | needs record assembly (`weather_records`) and the daily coverage threshold; nothing to store it yet |
+| ECMWF EC46 subseasonal | **deferred** | no monthly product, so no monthly target; daily assembly is `Q-P5-6` |
+| ERA5 climatology | **deferred** | the dataset route is `Q-P5-4`/`OPEN-16`; no download verified |
+| BMKG | **blocked** | written permission pending; never enabled |
+| ECMWF Set VII | **blocked** | licence and GRIB proof of concept pending |
+
+The SEAS5 request is pinned, not defaulted: `models=ecmwf_seas5`,
+`monthly=precipitation_mean`, `forecast_days=217`. The provider's default horizon is
+six months; seven rows require that explicit value, so a six-row answer is
+`incomplete_horizon`, never a six-month outlook. `initializedAt` is supplied by the
+caller and recorded as `initializedAtSource: 'request_configuration'`, because the
+payload reports no initialisation time and inferring it from the clock would corrupt
+every freshness calculation downstream.
+
+**The adapter stops at the provider's quantity.** It returns `variable:
+'precipitation_mean'`, the provider's own `unit` string, and the untouched values. It
+does not produce `valueMm`, a monthly total, an anomaly, or a `dataClass`. The domain
+meaning of `monthly_outlooks.value_mm` for a `precipitation_mean` row is undecided
+(`F-09` / `Q-P5-7`): a mean is not an amount, and converting one into the other would be
+a scientific claim nobody has made.
+
+The monthly normalizer validates and orders; it converts nothing. Only `mm` is
+accepted, a null stays `provider_null` with no value, a negative or non-finite value is
+refused, and the month key must be a first-of-month date in strictly increasing order.
+Its output carries `reproducible: false` with `raw_payload_not_retained` — the honest
+state per §5.4, since nothing retains the bytes.
+
+**Fixture provenance.** Every test payload is synthetic and labelled as such: it
+reproduces the *shape* and the pinned parameters observed on 2026-11-18, not the
+response bytes. No test touches the network, and no test asserts a value that only a
+live provider could have produced.
 
 ### 5.2 Spatial resolution and cell identity
 
@@ -962,7 +1011,7 @@ Two layout deviations from the original scope, both deliberate:
 discriminated union of §5.1.1: a result type that cannot express `rate_limited`
 would force the adapter to throw, which loses the classification the queue needs.
 
-#### 8.0.1 Corrective pass — F-03…F-06 (2026-11-21)
+#### 8.0.1 Corrective passes — F-03…F-09 (2026-11-21)
 
 A review of the delivered contracts produced four findings, all fixed in place. No
 new file, dependency, or sub-phase.
@@ -974,6 +1023,8 @@ new file, dependency, or sub-phase.
 | **F-05** | `outlookMonthSchema` cross-checks `dataClass` against `evaluationBasis`: climatology only with the climatology basis, forecast only with the monthly basis, pending with the monthly basis and no value. Every issue carries the offending path |
 | **F-06** | `defineGridSpec` copies and freezes `latRange`/`lonRange`, freezes the spec, and the registry stores a re-defined frozen spec rather than the caller's object |
 | **F-07** | Complete/partial is decided by `answeredCells` vs `requestedCells` only. A rounded 100 from an incomplete answer stays `partial`; the percentage is display, not status. `ingestion_runs` stores no counts, so `status` is the authority there and a `partial` row may read 100 — no migration needed |
+| **F-08** | 5.1 adds a real `@agroclimate/weather-core` package — transport, failure union, SEAS5 monthly adapter, monthly normalizer — with no dependency beyond the workspace `zod` catalogue entry. Transport owns bytes/status/timeout/body cap and nothing else; adapters classify, they never retry; the normalizer refuses instead of converting |
+| **F-09** | `precipitation_mean` is a **mean**, and `MonthlyOutlook.valueMm` reads as a monthly amount. No approved definition says they are the same quantity, so the adapter and normalizer stop at the provider-native series and populate no `valueMm`. The decision — whether a monthly outlook stores a mean, a total derived by an approved rule, or gains a separate column — is `Q-P5-7`, owner-owned and open |
 
 Capability status after 5.0, stated so no reader infers more than exists:
 
@@ -986,7 +1037,9 @@ Capability status after 5.0, stated so no reader infers more than exists:
 | Field-to-cell resolution service | **Not implemented** |
 | Persisting resolved cells | **Not implemented** — no migration, no query |
 | Served-coordinate assignment | **Not implemented** |
-| Provider adapters, HTTP clients | **Not implemented** |
+| Provider adapters | **Partially implemented** — SEAS5 monthly only; daily, EC46, ERA5 deferred, BMKG and Set VII blocked (§5.1.2) |
+| HTTP transport | **Implemented** — `packages/weather-core/src/http.ts`, cap + timeout + AbortSignal, no retry |
+| Normalizer | **Partially implemented** — monthly validation/ordering only; no unit conversion, no record assembly |
 | Queue, worker, scheduler | **Not implemented** |
 
 ### 8.1 Phase 5.1 — adapter and normalization foundation
@@ -995,11 +1048,13 @@ Capability status after 5.0, stated so no reader infers more than exists:
 |---|---|
 | Objective | one real provider payload can be turned into contract-valid records, offline |
 | Prerequisites | 5.0 |
-| Scope | new `packages/weather-core` (`adapters/open-meteo-forecast.ts`, `normalize/*`, `fixtures/*`), wired into the workspace; `apps/worker` untouched |
-| Contracts | `AdapterResult`; normalizer signature `(payload, adapterMeta) => { values, coverage, rejects }` |
+| Scope, as built | `@agroclimate/weather-core` created with `src/{failures,http,runtime,index}.ts`, `src/adapters/open-meteo-seasonal.ts`, `src/normalize/monthly.ts`; `apps/worker` untouched |
+| Scope, changed | the plan named `adapters/open-meteo-forecast.ts` (daily) first. SEAS5 monthly was built instead: it is the only product with a verified monthly quantity, and it is the only class a monthly outlook accepts at lead months 1–7. The daily adapter is deferred because it needs record assembly and the daily coverage threshold |
+| Contracts | `failures.ts` derives its four shared failure kinds from the contract's `AdapterResult` (`Extract<AdapterResult, { kind: … }>["kind"]`), so a rename there fails this package at compile time instead of letting two unions drift. `weather-core` depends on `@agroclimate/contracts` for that. Its own `AdapterOutcome<T>` stays narrower on purpose: the contract's success variants need observations and a cell-count coverage figure, which a monthly series does not have |
+| Not built | `normalize/*` does not produce `{ values, coverage, rejects }` or `weather_records`-shaped records — it validates a monthly series and stops at the provider's quantity (F-09). `fixtures/*` do not exist; the tests build labelled synthetic payloads inline |
 | Database impact | none |
-| Tests | §7.1 rows 1–4 and 10; a recorded Open-Meteo forecast response as the first fixture |
-| Acceptance | a fixture produces records whose `unit`, `valid_at`, `data_class`, `initialized_at`, and coverage are asserted; a recorded 429 / 400 / schema-change body maps to the right error class |
+| Tests | 27 in `weather-core` — request pinning and determinism, 429/400/5xx/302 mapping, invalid config with no request made, six-row horizon, duplicate/reversed/malformed month keys, unequal array lengths, non-JSON body, null preservation, and the normalizer's refusals |
+| Acceptance | met for the SEAS5 monthly boundary: the request is reproducible from explicit config, a short axis is refused, a schema change is classified as `provider_changed`, and the output never claims a monthly total |
 | Dependencies | 5.0 |
 | Risks | over-fitting the normalizer to one payload shape; mitigate with three fixtures of different lengths |
 
