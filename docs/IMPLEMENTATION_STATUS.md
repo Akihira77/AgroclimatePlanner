@@ -830,31 +830,31 @@ What this does **not** mean:
 Status: **designed, not implemented.** No source file, migration, grant, policy, role, or
 dependency was added. The document is `docs/architecture/farm-field-domain-contracts.md`.
 
-Phases 4.3–4.6 remain **not started**. Nothing below claims their work.
+Phases 4.4–4.6 remain **not started**. Nothing below claims their work.
 
 | Item | State |
 |---|---|
 | Domain definitions for Farm and Field | designed (§3) |
 | Invariants, each assigned to contract / database / derived | designed (§5) |
 | Tenant API surface, 10 endpoints | designed (§6) |
-| Contract schemas (`farm`, `field`, `geometry`, `pageMeta`) | **proposed, not written** (§7) |
+| Contract schemas | `farm` and `pageMeta` **written in 4.3**; `field` and `geometry` proposed (§7) |
 | Tenant isolation behaviour, including nested access | designed (§9.4) |
 | Implementation sequence 4.2–4.6 | proposed (§13) |
 | Migration | **none needed** — `farms`/`fields` were applied in Phase 2.2.3 |
-| Owner decisions | `Q1`–`Q4` **approved 2026-11-21**; `Q5`–`Q8` remain open (§12) |
+| Owner decisions | `Q1`–`Q8` **approved 2026-11-21** (§12) |
 
 What the design rests on, verified rather than assumed: `app.farms` and `app.fields` exist with
 `FORCE` RLS and `app_api` RW grants (`20261118020000_tenant_tables`); the composite FK
 `(farm_id, user_id) → farms (id, user_id)` makes a cross-tenant parent a `23503`, not a row;
 `withTenant` is transaction-local and rejects nesting (`tenant.ts`); contracts enforce
 `strictObject` + a branded `*_NOT_FOUND` family, so `FARM_NOT_FOUND`/`FIELD_NOT_FOUND` need no
-enum change; `api-conventions.md` §5 already fixes `?page&pageSize` (max 100) and `?sort=`, and
-**no code implements it yet**.
+enum change; `api-conventions.md` §5 fixes `?page&pageSize` (max 100) and `?sort=`; the Farm
+collection implements it in 4.3.
 
 Scope decision recorded: the contract accepts `POLYGON` only and the database is left unchanged.
 `OPEN-17` (`POINT` ⇒ `area_ha = 0`, which `FieldSnapshotPayload.areaHa` rejects) therefore stays
-open rather than resolved by this phase, and `Q1` asks the owner whether point fields are a v1
-requirement.
+open rather than resolved by this phase; `Q1` was answered afterwards — point fields are not a
+v1 requirement, and the database CHECK remains untouched.
 
 Three `ST_GeomFromGeoJSON` behaviours were measured against the applied database. The first
 statement of this paragraph was wrong when written and is corrected here: an unclosed ring is
@@ -918,3 +918,64 @@ result of the run above.
 Not done, and not claimed: HTTP endpoints, contract schemas in `packages/contracts`, `409`
 mapping (the primitive returns `has_live_fields`), rate limiting, `If-Match`, and every question
 in `Q5`–`Q8`.
+
+### Phase 4.3 — Farm CRUD API — **implemented and verified**
+
+Status: implemented. Five endpoints are routed, validated, authenticated, tenant-scoped, and
+tested through the real HTTP pipeline against PostgreSQL. No Field route, no migration, grant,
+role, policy, or dependency was added.
+
+| File | Contents |
+|---|---|
+| `packages/contracts/src/page.ts` | `pageMetaSchema`, `PageMeta` |
+| `packages/contracts/src/farm.ts` | `farmCreateSchema`, `farmUpdateSchema`, `farmSchema`, `farmSortSchema`, `farmListQuerySchema`, `farmIdSchema`, `farmEnvelopeSchema`, `farmListEnvelopeSchema` |
+| `packages/contracts/src/farm.test.ts` | 12 contract assertions (lengths, strictness, presence semantics, paging, envelopes) |
+| `apps/api/src/farm/farm.controller.ts` | the five routes, path/query/body pipes, `Location`, `404`/`409` mapping |
+| `apps/api/src/farm/farm.service.ts` | one `withTenant` per request, resource mapping, offset clamp |
+| `apps/api/src/farm/farm.module.ts` | controller + service |
+| `apps/api/src/app.module.ts` | registers `FarmModule` |
+| `apps/api/src/auth/auth.module.ts` | `global: true`; exports `AuthGuard`, `AuthService`, `CsrfValidator` |
+| `apps/api/test/integration/farm.test.mjs` | 25 assertions, real `app_api`/`app_auth`, real RLS |
+
+Endpoints: `POST /v1/farms` (`201` + relative `Location`), `GET /v1/farms`
+(`{ data, meta: { page, pageSize, total } }`, default `page=1&pageSize=20&sort=-createdAt`),
+`GET /v1/farms/:farmId`, `PATCH /v1/farms/:farmId` (last-write-wins, `Q8`),
+`DELETE /v1/farms/:farmId` (`204`; `409 CONFLICT` when live fields exist, `Q2`).
+
+Integration: the tenant comes only from `request.auth.user.id`; every request opens exactly one
+`createTenantScope(prisma).withTenant(...)` and hands the transaction to the 4.2 primitive. The
+service contains no SQL. `AuthGuard` authenticates the session and, because it derives the
+requirement from the HTTP method, enforces `X-CSRF-Token` on `POST`/`PATCH`/`DELETE`; `Origin` is
+validated by middleware before body parsing. `GET` requires no CSRF token.
+
+`AuthModule` became global and exports the guard with its two dependencies. Nest resolves a
+class-reference enhancer in the consuming module, so `FarmModule` must see `AuthService` and
+`CsrfValidator`; the alternative was importing `AuthModule.register(...)` a second time, which
+would create a second `app_auth` pool and a second rate limiter. The auth database client and the
+password hasher remain unexported.
+
+| Check | Command | Result |
+|---|---|---|
+| Farm HTTP integration | `pnpm --filter @agroclimate/api test:integration` | **25 pass, 0 fail** |
+| API unit suite | `pnpm --filter @agroclimate/api test` | **206 pass, 0 fail** |
+| Contract suite | `pnpm --filter @agroclimate/contracts test` | **223 pass, 0 fail** |
+| Database suites | `pnpm --filter @agroclimate/database test:integration`, `test:rls`, `test:schema` | run in §Phase 4.2; unchanged by 4.3 |
+| Workspace typecheck / build / lint | `pnpm typecheck`, `pnpm build`, `pnpm lint` | exit 0 |
+| Format / whitespace | `pnpm format:check`, `git diff --check` | exit 0 |
+
+The Farm HTTP suite is a separate script (`test:integration`) because it needs a migrated database
+and `NODE_ENV=development` for role DSN derivation; `pnpm test` stays database-free.
+
+What the suite covers: `201` + `Location` + server-assigned ownership read back as
+`migration_owner`; unknown keys, blank name, and the `Q6` length boundaries; `401` without a
+session on all five endpoints; `403` for an untrusted `Origin`, a missing token, and a wrong
+token; list scoping, default sort, explicit sort, paging, `meta`, and the `400`s for unknown
+parameters, unlisted sorts, `page=0`, `page=1.5`, and `pageSize=101`; identical `404
+FARM_NOT_FOUND` for missing, foreign, and deleted farms on read, update, and delete; `400` for a
+non-UUID path; PATCH presence semantics (`null` clears, absent keeps), empty update rejection,
+`name: null` rejection, and last-write-wins; `204` soft delete with the row still present and
+absent from reads and lists; `409` for a farm with a live field, then `204` once that field is
+soft-deleted; and two seeded tenants proving isolation.
+
+Not done, and not claimed: Field CRUD (4.4), `geometry.ts`/`field.ts` contracts, `If-Match`,
+additional rate limiting (`Q7`), viewport queries, and every 4.5 hardening item.

@@ -1,9 +1,10 @@
-# Farm & Field — domain contracts (Phase 4.1) and database layer (Phase 4.2)
+# Farm & Field — domain contracts (Phase 4.1), database layer (4.2) and Farm CRUD (4.3)
 
-**Status: the design is approved; the database layer in §10.2 and §5 is implemented in
-`packages/database/src/farms.ts` and `fields.ts`.** The API surface (§6), the contract
-schemas (§7), and Phases 4.3–4.6 are still design only — no HTTP route exists.
-**Owner decisions:** `Q1`–`Q4` were answered on 2026-11-21 and are recorded as approved in
+**Status: the design is approved, the database layer is implemented (§10.2, §5), and the Farm
+half of the API surface is implemented and verified.** `POST/GET/PATCH/DELETE /v1/farms` exist
+and are exercised through the real HTTP pipeline against PostgreSQL; nothing Field-shaped is
+routed yet (4.4).
+**Owner decisions:** `Q1`–`Q8` were answered on 2026-11-21 and are recorded as approved in
 §12; they are not reinterpreted here.
 **Authoritative for:** the Farm and Field API surface, contracts, invariants, and the
 tenant-isolation rules those layers must obey.
@@ -371,8 +372,11 @@ Consistent with `api-conventions.md` §5 — offset paging, page-numbered, no ne
   meaningful filter yet. Adding one is a query-schema change, not a new mechanism.
 
 `meta` is `{ page: number, pageSize: number, total: number }`, `total` computed under the same
-RLS scope and the same `deleted_at IS NULL` predicate, from one statement
-(`count(*) OVER ()`) so a page and its total cannot disagree.
+RLS scope and the same `deleted_at IS NULL` predicate. The implemented primitive counts in a
+second statement (4.2), not with `count(*) OVER ()`: a window function cannot report a total for
+a page past the last row, and an empty page still needs an accurate total. The cost is that a
+concurrent insert can move `total` by one relative to the rows already returned; a page and its
+total are the same snapshot only when nothing writes in between.
 
 Index note, stated rather than implied: the default `ORDER BY created_at DESC, id DESC` is not
 covered by an index — the partial indexes are on `user_id` and `farm_id`. Tenant row counts are
@@ -387,11 +391,13 @@ and any farm-level geometry or map viewport query.
 
 ---
 
-## 7. Proposed contract schemas
+## 7. Contract schemas
 
-Not written to `packages/contracts` in this phase. The shapes below follow the package's
-conventions: `z` from `"zod"`, `.js` specifiers, `strictObject`, one schema plus one inferred
-type per concept, doc comment naming the normative source.
+`page.ts` and `farm.ts` were written in 4.3 and are exported from the barrel with colocated
+Vitest suites (`farm.test.ts`). `geometry.ts` and `field.ts` are still the design below and land
+in 4.4. The shapes follow the package's conventions: `z` from `"zod"`, `.js` specifiers,
+`strictObject`, one schema plus one inferred type per concept, doc comment naming the normative
+source.
 
 ```ts
 // packages/contracts/src/geometry.ts  (proposed)
@@ -697,9 +703,16 @@ recorded verbatim in intent, not reinterpreted.
 | Q7 | Should tenant routes be rate limited, and with which quota? | Not in 4.1; only auth routes are limited today | An unauthenticated-scraping risk does not exist here (authentication is required), but a write-flood does; adding it later is middleware, not contract |
 | Q8 | Is `If-Match` optimistic concurrency required for PATCH? | No. Last write wins; `updatedAt` is observable but not conditional | Adding it later is additive (a header and a `409`), but a client that already relies on last-write-wins would see new conflicts |
 
-`Q5`–`Q8` are still the design's defaults, not decisions. `Q5` (minimum area) and `Q6` (length
-bounds) only shape validation; `Q7` (rate limiting) and `Q8` (`If-Match`) are additive later and
-should be answered before the API layer pins a status or a header.
+`Q5`–`Q8` were answered by the owner on 2026-11-21 and are final for Phase 4.x:
+
+| # | Question | Decision applied | Consequence if changed |
+|---|---|---|---|
+| Q5 | Is there a minimum polygon area product rule? | **Approved: none.** A valid `Polygon` with positive generated area is accepted | A threshold is a product policy with no source in the repo; it would be a contract rule, not a database one |
+| Q6 | Are the name/metadata length bounds acceptable? | **Approved: name 100, region 120, notes 2000.** The database has no bound to inherit | Smaller bounds are cheap to tighten before data exists; lowering them after 4.x data exists is a breaking change |
+| Q7 | Should tenant routes be rate limited? | **Approved: no additional Farm/Field limiter.** The existing authentication and infrastructure protections stay | A write flood is the remaining risk; adding a limiter later is middleware, not a contract change |
+| Q8 | Is `If-Match` optimistic concurrency required for PATCH? | **Approved: no.** Updates are last-write-wins; `updatedAt` is observable but not conditional | Adding it later is additive (a header and a `409`), but a client relying on last-write-wins would start seeing conflicts |
+
+No open question remains for Phase 4.x.
 
 ---
 
@@ -721,20 +734,41 @@ transaction rollback, and both directions of the delete/create race. The two rac
 shown to fail against a lock-free create and against a single-snapshot delete before being
 accepted.
 
-### 4.3 — Contracts and Farm CRUD
+### 4.3 — Contracts and Farm CRUD — **implemented**
 
-`packages/contracts/src/geometry.ts`, `page.ts`, `farm.ts` (exported from the barrel, colocated
-Vitest suites), then `apps/api/src/farm/**`: controller, service, path/query/body schemas through
-`ZodValidationPipe`, `AuthGuard`, `Location` on `201`, `404` for a zero-row read, and `409` for
-the farm delete rule.
+`packages/contracts/src/page.ts` (`pageMetaSchema`) and `farm.ts` (`farmCreateSchema`,
+`farmUpdateSchema`, `farmSchema`, `farmSortSchema`, `farmListQuerySchema`, `farmIdSchema`, both
+envelopes) are exported from the barrel with `farm.test.ts`. `apps/api/src/farm/**` adds
+`FarmController`, `FarmService`, and `FarmModule`; `FarmModule` is registered in `AppModule`.
 
-Exit: `FARM_NOT_FOUND` reachable only through the branded family; a round-trip test proving a
-rejected geometry never reaches SQL (unclosed ring, `crs` member, 43-character ring, lat/lon
-swapped bounds); endpoint tests for 201/200/204, `401` without a session, `403` without
-`X-CSRF-Token`, `404` on every cross-tenant attempt in §9.4, `409` on the farm rule, and `400`
-for unknown keys and query parameters.
+`geometry.ts` and `field.ts` belong to 4.4: the design above is written against `Field`, and the
+Farm surface accepts no geometry, so nothing was created for them here. The exit criterion that
+names a geometry round-trip therefore moves with them.
 
-### 4.4 — Field CRUD
+Exit, met for the Farm surface: `FARM_NOT_FOUND` is reachable only by parsing the branded family;
+endpoint tests through the real pipeline cover `201` + `Location`, `200` list with `meta`,
+`200`/`404` detail, `200` PATCH, `204`/`409`/`404` DELETE, `401` without a session, `403` without
+a trusted `Origin` or without a valid `X-CSRF-Token`, `404` on every cross-tenant attempt, and
+`400` for unknown keys, unknown query parameters, an unlisted `sort`, an out-of-range page, and a
+non-UUID path parameter. A global `AuthGuard` applied per feature module is the mechanism; see
+`apps/api/src/farm/farm.controller.ts`.
+
+### 4.3.1 Deviations recorded while implementing 4.3
+
+- **`AuthModule` is `global: true` and exports `AuthGuard`, `AuthService`, and `CsrfValidator`.**
+  Nest resolves a class-reference enhancer in the consuming module, so `FarmModule` had to see
+  the guard's dependencies. The alternative — importing `AuthModule.register(...)` again —
+  creates a second `app_auth` pool and a second rate limiter, which the module's own comment
+  forbids. The auth database client and the password hasher are still not exported.
+- **`Location` is relative** (`/v1/farms/{id}`), not absolute. The API does not trust a `Host`
+  header, and a relative `Location` is valid per RFC 9110 §10.2.2.
+- **The offset is clamped to `2147483647`** in the service. `page` is any positive integer, and
+  `(page - 1) * pageSize` can otherwise exceed PostgreSQL's `OFFSET` argument type. A page past
+  the end is an empty `200`, not an error.
+- **`farmUpdateSchema` uses `.partial()` plus a root refinement**, so an empty body is a `400`
+  whose `details[].path` is `(root)`; no synthetic key is invented.
+
+### 4.4 — Field CRUD — **not started**
 
 `apps/api/src/field/**` over the same primitives, flat at `/v1/fields/:fieldId` (`Q3`), plus
 `POST/GET /v1/farms/:farmId/fields`.
@@ -743,7 +777,7 @@ Exit: `FIELD_NOT_FOUND` on every cross-tenant field attempt; `400` for a non-pol
 `crs` member, mapped from `FieldGeometryError` rather than from `23514`; pagination metadata
 asserted on both collections.
 
-### 4.5 — Hardening
+### 4.5 — Hardening — **not started**
 
 Pagination boundaries (page 0, pageSize 101, unknown `sort`) and stable ordering across pages;
 `updated_at` movement; soft-delete invisibility for reads *and* writes; statement inventory with
@@ -753,9 +787,9 @@ shipped.
 Exit: the full workspace suite plus the real-role suites green, and the endpoint matrix in §6.1
 implemented one-to-one with no extra route.
 
-### 4.6 — Decision closure
+### 4.6 — Decision closure — **not started**
 
-Answer `Q5`–`Q8`. If `OPEN-17` or `OPEN-21` is reopened, extend the contract and, only then,
+`Q5`–`Q8` are answered (§12). If `OPEN-17` or `OPEN-21` is reopened, extend the contract and, only then,
 the database. Optional later work this design leaves out: viewport query (`OPEN-22`), field
 metadata, farm geometry, `If-Match`. Each is additive.
 

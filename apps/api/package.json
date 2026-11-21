@@ -8,6 +8,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src",
     "test": "pnpm build && node --test test/*.test.mjs",
+    "test:integration": "pnpm build && NODE_ENV=development node --test test/integration/*.test.mjs",
     "start": "node dist/main.js",
     "dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput"
   },

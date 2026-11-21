@@ -32,6 +32,20 @@ export class AuthModule {
   static register(config: RuntimeConfig, createClient: DatabaseClientFactory): DynamicModule {
     return {
       module: AuthModule,
+      // `AuthGuard` is the authentication boundary of every authenticated feature
+      // module, and it is applied with `@UseGuards(AuthGuard)`. Nest resolves a
+      // class-reference enhancer in the *consuming* module's injector, so the module
+      // that applies it must also be able to see the guard's dependencies. Exporting
+      // the three providers globally is what lets `FarmModule` do that without
+      // importing `AuthModule.register(...)` again — a second registration would
+      // create a second `app_auth` pool and a second rate limiter, which the
+      // one-limiter-per-process comment above exists to prevent.
+      //
+      // The exported instances are the ones this module already created; the auth
+      // database client and the password hasher stay unexported, so no other module
+      // can reach them.
+      global: true,
+      exports: [AuthGuard, AuthService, CsrfValidator],
       imports: [AuthDatabaseModule.register(config, createClient)],
       controllers: [AuthController],
       providers: [
