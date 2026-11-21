@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **PREPARED — NOT EXECUTED.** No parameter is selected, no measurement exists |
+| Status | **LOCAL RUN EXECUTED 2026-11-21 (latency-only).** Production envelope still unknown; results in `phase-3.2-s7-local-argon2-benchmark-results.md` |
 | Prepared | 2026-11-20, from `1744f48` |
 | Revised | 2026-11-21: measurement stages isolated, memory guard hardened, cgroup ancestor limits resolved |
 | Scope | Resource envelope for `apps/api`, assessment of the previous benchmark sketch, and the harness that replaces it |
@@ -173,14 +173,14 @@ on the host's cgroup configuration or on the library being installed.
 
 ## 4. How to execute
 
-Prerequisite, owner action, **not performed here** — the dependency is approved but not
-added to any manifest, and adding it is out of scope for this task:
+Prerequisite, **now done** — the dependency is installed at `2.2.2` in
+`apps/api/package.json` (2026-11-21). The command that was run:
 
 ```
-pnpm --filter @agroclimate/api add @node-rs/argon2@2.2.2
+pnpm --filter @agroclimate/api add @node-rs/argon2@2.2.2 --save-exact
 ```
 
-Then, inside the deployment container (or on a host whose cgroup limit is explicit):
+Inside the deployment container (or on a host whose cgroup limit is explicit):
 
 ```
 node apps/api/scripts/benchmark-argon2.mjs --json > argon2-benchmark.json
@@ -191,9 +191,14 @@ node apps/api/scripts/benchmark-argon2.mjs --self-test                          
 ```
 
 `--allow-unbounded-memory` is accepted only with `--concurrency 1`; the harness refuses
-concurrency 4 whenever the effective memory limit is unknown. `--self-test` validates the
-percentile, stage, guard and cgroup logic without importing the library. It is the only
-part of the harness that has been executed so far.
+concurrency 4 whenever the effective memory limit is unknown.
+
+On 2026-11-21 the harness was executed on the development host, where the limit is
+unknown, so every run used `--concurrency 1 --allow-unbounded-memory` and is marked
+`suitableForResourceEvaluation: false`. Six parameter sets were measured; the results,
+including a recommended local configuration, are in
+[`phase-3.2-s7-local-argon2-benchmark-results.md`](./phase-3.2-s7-local-argon2-benchmark-results.md).
+Concurrency 4 has still never been measured, and no production run exists.
 
 ## 5. Interpretation
 
@@ -255,5 +260,6 @@ image or manifest exists to show it.
 | `pnpm exec prettier --check apps/api/scripts/benchmark-argon2.mjs` | `All matched files use Prettier code style!`, exit `0` |
 | `git diff --check` | exit `0` |
 
-No hashing benchmark was executed. No latency or memory number in this document is a
-measurement.
+No latency or memory number in this document is a measurement. The executed local run is
+recorded in
+[`phase-3.2-s7-local-argon2-benchmark-results.md`](./phase-3.2-s7-local-argon2-benchmark-results.md).
