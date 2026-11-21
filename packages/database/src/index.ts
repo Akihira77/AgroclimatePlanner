@@ -11,6 +11,12 @@ import { PrismaClient } from "./generated/prisma/client.js";
 
 export { PrismaClient } from "./generated/prisma/client.js";
 export { Prisma } from "./generated/prisma/client.js";
+export {
+  EmailAlreadyRegisteredError,
+  insertRegisteredUser,
+  isUniqueViolation,
+} from "./auth-registration.js";
+export type { RegisteredUser } from "./auth-registration.js";
 export { createTenantScope, normaliseTenantId, TenantContextError } from "./tenant.js";
 export type { TenantScope, TenantTransaction } from "./tenant.js";
 

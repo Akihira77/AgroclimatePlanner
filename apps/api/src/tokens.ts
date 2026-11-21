@@ -10,3 +10,7 @@ export const DATABASE_CLIENT = Symbol("DATABASE_CLIENT");
  * two clients must never be substitutable.
  */
 export const AUTH_DATABASE_CLIENT = Symbol("AUTH_DATABASE_CLIENT");
+/** Argon2id hashing, configured once from `RuntimeConfig.passwordHashing`. */
+export const PASSWORD_HASHER = Symbol("PASSWORD_HASHER");
+/** The in-process fixed-window limiter (`IG-7`). */
+export const AUTH_RATE_LIMITER = Symbol("AUTH_RATE_LIMITER");

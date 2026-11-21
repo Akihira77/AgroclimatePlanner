@@ -348,3 +348,26 @@ node apps/api/scripts/benchmark-argon2.mjs --self-test
 git diff --check
 git status --short
 ```
+
+## 11. Implementation run — 2026-11-21 (provisional baseline, unchanged)
+
+The S7 implementation re-ran the same harness with the parameters the code now uses by
+default, to confirm the shipped configuration is the one this document measured.
+
+| Field | Value |
+|---|---|
+| Command | `node apps/api/scripts/benchmark-argon2.mjs --samples 100 --warmup 5 --concurrency 1 --allow-unbounded-memory --json` |
+| Parameters | `m=19456 KiB`, `t=2`, `p=1`, salt 16 bytes, output 32 bytes |
+| Concurrency | 1 (the memory guard refuses 4 without a known limit) |
+| Sequential hash | p50 15.11 ms, p95 16.20 ms |
+| Sequential verify | p50 14.98 ms, p95 15.99 ms |
+| Concurrent (single-operation) hash | p50 15.47 ms, p95 16.74 ms |
+| Concurrent (single-operation) verify | p50 15.11 ms, p95 16.09 ms |
+| Process peak RSS | 76,128,256 bytes (72.6 MiB) |
+| Effective memory limit | **unknown** — `memory.max = max` at every cgroup ancestor |
+| Verdict | `latency-only`; `suitableForResourceEvaluation: false` |
+| Failures | 0; cross-parameter verification passed |
+
+This run **does not** satisfy `IG-6`: there is no memory limit to compute the 25 % bound
+against, and no concurrency-4 measurement. The parameters remain the provisional baseline,
+configurable through `ARGON2_MEMORY_KIB`, `ARGON2_TIME_COST`, and `ARGON2_PARALLELISM`.

@@ -277,6 +277,10 @@ Registration:
   prior existence check. That discloses existence; the disclosure is accepted and
   recorded in `docs/review/phase-3.2-s7-owner-decisions.md`.
 - No session, no token, no `Set-Cookie`. Registration never authenticates the caller.
+- The request body limit is explicit: **16 KiB** for JSON and urlencoded bodies. A
+  registration body is under 2 KiB by contract, so the bound is generous rather than
+  tight, and it replaces the adapter's implicit 100 KiB default. An oversized body is
+  `413` with `VALIDATION_FAILED`, rejected before validation or hashing.
 
 Credential verification (S7, internal — no route):
 

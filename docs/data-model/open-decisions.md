@@ -383,7 +383,7 @@ and "deferred" were doing too much work:
 | ID | Disposition | Assigned to | Why Phase 3 does not depend on it |
 |---|---|---|---|
 | `OPEN-09` | **DEFERRED** | the first `plantings` writer | the DDL half is settled by omission (`D26`): no default, no partial index |
-| `OPEN-01` | **DEFERRED** | authentication slice (`S7` registration, `S8` login) | decision half closed 2026-11-21: the owner confirmed the dedicated `app_auth` boundary as final (`docs/review/phase-3.2-owner-decisions.md` *Amendment 3*). What remains is the request path — `S7`/`S8` code — so the item is technical, not a judgement call. It stays unresolved until a login endpoint reads a credential through the boundary and the verification proves it |
+| `OPEN-01` | **DEFERRED** | authentication slice (`S7` registration, `S8` login) | decision half closed 2026-11-21: the owner confirmed the dedicated `app_auth` boundary as final (`docs/review/phase-3.2-owner-decisions.md` *Amendment 3*). The registration **write** path is now implemented and verified through `app_auth` (`test:integration`, 2026-11-21), but this row closes only when a login endpoint **reads** a credential through the boundary and the verification proves it. What remains is `S8` code — technical, not a judgement call |
 | `OPEN-13` | **RESOLVED** | — | not applicable now: `ADR-005` accepted, S5 applied canonically, and the S6 `auth-boundary` suite green (49 cases) |
 | `OPEN-17` | **BLOCKED_EXTERNAL_INPUT** | product decision, then the snapshot path | a `POINT` row is storable; only its snapshot is impossible |
 | `OPEN-18` | **DEFERRED** | ingestion; the rule is derivable from each grid's published resolution | `cell_key` is `text`; no constraint depends on its content |

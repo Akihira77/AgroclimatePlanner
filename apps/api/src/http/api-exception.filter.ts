@@ -67,7 +67,8 @@ const RESOURCE_NOT_FOUND = notFoundErrorCodeSchema.parse("RESOURCE_NOT_FOUND");
 
 /**
  * 4xx statuses Nest or `body-parser` raise before a handler runs — wrong method,
- * unacceptable response encoding, unsupported request media type.
+ * unacceptable response encoding, an oversized body, unsupported request media
+ * type.
  *
  * The status is kept because it is the precise transport reason, and the code is
  * `VALIDATION_FAILED` because that is the closed-set member meaning "the request
@@ -76,7 +77,7 @@ const RESOURCE_NOT_FOUND = notFoundErrorCodeSchema.parse("RESOURCE_NOT_FOUND");
  * common case. Collapsing these to `400` would delete information the transport
  * already knows; inventing three codes would grow a contract nobody asked to grow.
  */
-const PASS_THROUGH_4XX = new Set([405, 406, 415]);
+const PASS_THROUGH_4XX = new Set([405, 406, 413, 415]);
 
 /**
  * A single log line's worth of a failure. Deliberately a fixed field list rather

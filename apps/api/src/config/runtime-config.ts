@@ -24,7 +24,33 @@ export interface RuntimeConfig {
   readonly trustProxy: false | readonly string[];
   /** Accept a UUID `X-Request-Id` from the caller. Off unless an operator says otherwise. */
   readonly trustRequestIdHeader: boolean;
+  /**
+   * Argon2id cost. Configuration-driven so the benchmark can move the numbers
+   * without a code change; the defaults are the provisional baseline from
+   * `IG-6`, not a final parameter decision.
+   */
+  readonly passwordHashing: PasswordHashingConfig;
 }
+
+export interface PasswordHashingConfig {
+  /** `m=` in the PHC string, in KiB. */
+  readonly memoryCostKib: number;
+  /** `t=`: passes over memory. */
+  readonly timeCost: number;
+  /** `p=`: threads. */
+  readonly parallelism: number;
+}
+
+/**
+ * The approved provisional baseline (`IG-6`). Kept in one place so the endpoint
+ * and the benchmark cannot disagree, and so promoting the parameters after a
+ * deployment-envelope run is a configuration change rather than a rewrite.
+ */
+const PROVISIONAL_PASSWORD_HASHING: PasswordHashingConfig = {
+  memoryCostKib: 19456,
+  timeCost: 2,
+  parallelism: 1,
+};
 
 export type EnvironmentInput = Readonly<Record<string, string | undefined>>;
 
@@ -96,6 +122,7 @@ export function parseRuntimeConfig(env: EnvironmentInput): RuntimeConfig {
     corsOrigins: parseCorsOrigins(env, nodeEnv),
     trustProxy: parseTrustProxy(env["TRUST_PROXY"]),
     trustRequestIdHeader: parseBoolean(env["TRUST_REQUEST_ID_HEADER"], "TRUST_REQUEST_ID_HEADER"),
+    passwordHashing: parsePasswordHashing(env),
   };
 }
 
@@ -331,4 +358,54 @@ function parseBoolean(value: string | undefined, variable: string): boolean {
   if (value === undefined || value === "" || value === "false") return false;
   if (value === "true") return true;
   throw new ConfigurationError(`${variable} must be true or false`);
+}
+
+/**
+ * Argon2id cost overrides. Every value is optional and falls back to the
+ * provisional baseline; the ranges are the library's own documented bounds,
+ * narrowed to values that are not obviously a mistake.
+ */
+function parsePasswordHashing(env: EnvironmentInput): PasswordHashingConfig {
+  return {
+    memoryCostKib: parseIntegerHashed(
+      env["ARGON2_MEMORY_KIB"],
+      "ARGON2_MEMORY_KIB",
+      8,
+      1_048_576,
+      PROVISIONAL_PASSWORD_HASHING.memoryCostKib,
+    ),
+    timeCost: parseIntegerHashed(
+      env["ARGON2_TIME_COST"],
+      "ARGON2_TIME_COST",
+      1,
+      10,
+      PROVISIONAL_PASSWORD_HASHING.timeCost,
+    ),
+    parallelism: parseIntegerHashed(
+      env["ARGON2_PARALLELISM"],
+      "ARGON2_PARALLELISM",
+      1,
+      255,
+      PROVISIONAL_PASSWORD_HASHING.parallelism,
+    ),
+  };
+}
+
+/** The value is never echoed: an operator typo must not put a value in the log. */
+function parseIntegerHashed(
+  value: string | undefined,
+  variable: string,
+  minimum: number,
+  maximum: number,
+  fallback: number,
+): number {
+  if (value === undefined || value === "") return fallback;
+
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new ConfigurationError(
+      `${variable} must be an integer between ${minimum} and ${maximum}`,
+    );
+  }
+  return parsed;
 }

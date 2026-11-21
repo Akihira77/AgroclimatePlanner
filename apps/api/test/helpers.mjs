@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { createApplication } from "../dist/app.factory.js";
 
 /** Only the fields the application actually reads. */
@@ -15,6 +17,7 @@ export function testConfig(overrides = {}) {
     corsOrigins: ["http://localhost:5173"],
     trustProxy: false,
     trustRequestIdHeader: false,
+    passwordHashing: { memoryCostKib: 19456, timeCost: 2, parallelism: 1 },
     ...overrides,
   };
 }
@@ -33,37 +36,86 @@ export function testDatabase() {
     transactionOptions: [],
     /** Every statement issued through `$executeRawUnsafe`. */
     statements: [],
+    /** Every registration insert the auth client served: `{ email, passwordHash }`. */
+    inserts: [],
+    /** Addresses whose insert must fail with the PostgreSQL unique violation. */
+    duplicateEmails: new Set(),
+    /** Milliseconds the auth insert spends before answering, for timing assertions. */
+    insertDelayMs: 0,
   };
 
-  const factory = () => {
+  /** Shaped like the wrapped raw-query failure: `P2010` carrying SQLSTATE 23505. */
+  const uniqueViolation = () =>
+    Object.assign(new Error("Unique constraint failed on the fields: (`email`)"), {
+      code: "P2010",
+      meta: { code: "23505", message: "duplicate key value violates unique constraint" },
+    });
+
+  const tenantClient = () => ({
+    async $transaction(work, options) {
+      state.transactionOptions.push(options);
+      if (state.failTransaction) {
+        throw new Error("connect ECONNREFUSED 127.0.0.1:5442 password=hunter2");
+      }
+      if (state.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, state.delayMs));
+
+      const tx = {
+        async $executeRawUnsafe(sql) {
+          state.statements.push(sql);
+          return 0;
+        },
+        async $queryRaw() {
+          if (state.failQuery) {
+            throw new Error("canceling statement due to statement timeout (57014)");
+          }
+          return [{ "?column?": 1 }];
+        },
+      };
+
+      return work(tx);
+    },
+    async $disconnect() {
+      state.disconnected += 1;
+    },
+  });
+
+  /**
+   * The auth client. It answers exactly one statement shape — the registration
+   * insert — and never a transaction, so a handler that reached for the tenant
+   * pool would fail here instead of silently passing.
+   */
+  const authClient = () => ({
+    async $queryRaw(strings, ...values) {
+      const sql = Array.isArray(strings) ? strings.join("?") : String(strings);
+      if (!/INSERT INTO app\.users/.test(sql)) {
+        throw new Error(`unexpected auth statement: ${sql}`);
+      }
+
+      if (state.insertDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, state.insertDelayMs));
+      }
+
+      const [email, passwordHash] = values;
+      if (state.duplicateEmails.has(email)) throw uniqueViolation();
+
+      const user = {
+        id: randomUUID(),
+        email,
+        role: "owner",
+        locale: "id",
+        timezone: "Asia/Jakarta",
+      };
+      state.inserts.push({ email, passwordHash });
+      return [user];
+    },
+    async $disconnect() {
+      state.disconnected += 1;
+    },
+  });
+
+  const factory = (connectionString) => {
     state.created += 1;
-    return {
-      async $transaction(work, options) {
-        state.transactionOptions.push(options);
-        if (state.failTransaction) {
-          throw new Error("connect ECONNREFUSED 127.0.0.1:5442 password=hunter2");
-        }
-        if (state.delayMs > 0) await new Promise((resolve) => setTimeout(resolve, state.delayMs));
-
-        const tx = {
-          async $executeRawUnsafe(sql) {
-            state.statements.push(sql);
-            return 0;
-          },
-          async $queryRaw() {
-            if (state.failQuery) {
-              throw new Error("canceling statement due to statement timeout (57014)");
-            }
-            return [{ "?column?": 1 }];
-          },
-        };
-
-        return work(tx);
-      },
-      async $disconnect() {
-        state.disconnected += 1;
-      },
-    };
+    return connectionString.includes("app_auth") ? authClient() : tenantClient();
   };
 
   return { state, factory };

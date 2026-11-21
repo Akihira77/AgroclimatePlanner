@@ -5,6 +5,7 @@ import type { RuntimeConfig } from "./config/runtime-config.js";
 import { ConfigModule } from "./config/config.module.js";
 import type { DatabaseClientFactory } from "./database/database.module.js";
 import { DatabaseModule } from "./database/database.module.js";
+import { AuthModule } from "./auth/auth.module.js";
 import { HealthModule } from "./health/health.module.js";
 
 export interface AppDependencies {
@@ -26,6 +27,7 @@ export class AppModule {
       imports: [
         ConfigModule.forConfig(deps.config),
         DatabaseModule.register(deps.config, deps.createDatabaseClient),
+        AuthModule.register(deps.config, deps.createDatabaseClient),
         HealthModule,
       ],
     };
