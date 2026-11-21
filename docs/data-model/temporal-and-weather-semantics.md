@@ -67,18 +67,33 @@ DST)**.
 This is the binding table. A value outside its class's band is a modelling bug,
 not a display preference.
 
-| Lead | Days from today | Permitted `dataClass` | Product / provider |
-|---|---|---|---|
-| now – 3 d | 0–3 | `weather_forecast` | BMKG `prakiraan-cuaca` (gated), Open-Meteo deterministic |
-| 4 – 14 d | 4–14 | `weather_forecast` | Open-Meteo deterministic + `ecmwf_ifs025` ensemble |
-| 15 – 45 d | 15–45 | `subseasonal_forecast` | `ecmwf_ec46` (daily to 46 d, weekly stats to 42 d) |
-| months 2 – 7 | 46 d – ~7 mo | `seasonal_forecast` | `ecmwf_seas5` (6 monthly rows by default, 7 if `forecast_days ≥ 200`) |
-| months 8 – 12 | ~8–12 mo | `climatology` | 1991–2020 normal — **unless** ECMWF Set VII is obtained |
-| months 8 – 13 | ~8–13 mo | `annual_outlook` | ECMWF Set VII only (licence + GRIB PoC still pending) |
+| Days from today | Permitted `dataClass` | Product / provider |
+|---|---|---|
+| 0–3 | `weather_forecast` | BMKG `prakiraan-cuaca` (gated), Open-Meteo deterministic |
+| 4–14 | `weather_forecast` | Open-Meteo deterministic + `ecmwf_ifs025` ensemble |
+| 15–45 | `subseasonal_forecast` | `ecmwf_ec46` (daily to 46 d, weekly stats to 42 d) |
+| ~46 d – ~7 mo | `seasonal_forecast` | `ecmwf_seas5` (6 monthly rows by default, 7 if `forecast_days ≥ 200`) |
+| ~8–13 mo | `annual_outlook` | ECMWF Set VII only (licence + GRIB PoC still pending) |
+
+A month is an aggregate of days, so the monthly outlook uses a **1-based lead
+month, `1–12` inclusive**. There is no lead month 0 and no lead month 13; exactly
+twelve entries describe the horizon.
+
+| Lead month | Covering day band | Permitted `dataClass` |
+|---|---|---|
+| 1–2 | days 0–45, both bands | `weather_forecast` **or** `subseasonal_forecast` — whichever band each day came from; a month aggregated from days 15–45 is not relabelled short-range |
+| 3–7 | beyond subseasonal, within seasonal | `seasonal_forecast` |
+| 8–12 | beyond seasonal | `climatology` — the 1991–2020 normal, labelled as such |
+| — | beyond 12 | no entry; there is no month 13 |
+
+`leadMonth` is derived from the entry's `month` and the outlook's `firstMonth`
+(pure calendar arithmetic, year rollover included); the contract stores the
+calendar month, never a bare index. A forecast failure inside a band stays
+`missing_reason = 'ingest_failed'` with no value — it never becomes climatology.
 
 Derived rules:
 
-1. **A 12-month outlook is never a daily forecast.** Months 8–12 are
+1. **A 12-month outlook is never a daily forecast.** Lead months 8–12 are
    `climatology` and labelled as such; the UI string is "Normal historis
    (1991–2020)", never "prakiraan".
 2. **Missing bands are stated, not filled.** If `ecmwf_ec46` fails for a cycle,

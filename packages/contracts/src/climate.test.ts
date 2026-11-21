@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  LEAD_MONTHS,
   adapterResultSchema,
+  calendarMonthOf,
+  coveragePercentOf,
   forecastRunIdentitySchema,
   forecastRunSchema,
   ingestionRunIdentitySchema,
   ingestionRunSchema,
   ingestionVersionOf,
+  monthlyOutlookHorizonSchema,
   monthlyOutlookSchema,
+  outlookMonthSchema,
   permittedMonthlyDataClasses,
 } from "../src/climate.js";
 import { evaluationBasisSchema, weatherValueSchema } from "../src/index.js";
@@ -317,14 +322,22 @@ describe("reproducibility versus provenance", () => {
 });
 
 describe("MonthlyOutlook", () => {
-  it("maps lead months to the binding bands", () => {
-    expect(permittedMonthlyDataClasses(0)).toEqual(["weather_forecast", "subseasonal_forecast"]);
-    expect(permittedMonthlyDataClasses(2)).toEqual(["seasonal_forecast"]);
+  it("maps lead months 1–12 to the binding bands", () => {
+    expect(permittedMonthlyDataClasses(1)).toEqual(["weather_forecast", "subseasonal_forecast"]);
+    expect(permittedMonthlyDataClasses(2)).toEqual(["weather_forecast", "subseasonal_forecast"]);
+    expect(permittedMonthlyDataClasses(3)).toEqual(["seasonal_forecast"]);
     expect(permittedMonthlyDataClasses(7)).toEqual(["seasonal_forecast"]);
     expect(permittedMonthlyDataClasses(8)).toEqual(["climatology"]);
     expect(permittedMonthlyDataClasses(12)).toEqual(["climatology"]);
+    expect(permittedMonthlyDataClasses(0)).toEqual([]);
     expect(permittedMonthlyDataClasses(13)).toEqual([]);
     expect(permittedMonthlyDataClasses(-1)).toEqual([]);
+  });
+
+  it("covers every month from 1 to 12 exactly once", () => {
+    for (let leadMonth = 1; leadMonth <= 12; leadMonth += 1) {
+      expect(permittedMonthlyDataClasses(leadMonth).length).toBeGreaterThan(0);
+    }
   });
 
   const base = {
@@ -409,6 +422,7 @@ describe("MonthlyOutlook", () => {
       ...base,
       leadMonth: 9,
       dataClass: "climatology",
+      evaluationBasis: "climatology",
       missingReason: "ingest_failed",
       baselineVersion: "ERA5:1991-2020:v1",
     };
@@ -417,6 +431,7 @@ describe("MonthlyOutlook", () => {
       ...base,
       leadMonth: 9,
       dataClass: "climatology",
+      evaluationBasis: "climatology",
       missingReason: "beyond_horizon",
       baselineVersion: null,
     };
@@ -448,5 +463,323 @@ describe("MonthlyOutlook", () => {
         spreadUnavailableReason: "members_expired",
       }).success,
     ).toBe(true);
+  });
+});
+
+describe("AdapterResult coverage invariants — F-04", () => {
+  const meta = {
+    provider: "open-meteo",
+    model: "ecmwf_ifs025",
+    product: "forecast",
+    initializedAt: "2026-11-18T00:00:00Z",
+    horizonEnd: "2026-11-25T00:00:00Z",
+    attribution: "Open-Meteo",
+    sourceUrl: "https://example.test/forecast",
+    adapterVersion: "open-meteo-forecast@1.0.0",
+  };
+  const result = (
+    kind: "complete" | "partial",
+    requestedCells: number,
+    answeredCells: number,
+    coveragePercent: number,
+  ) => ({
+    kind,
+    meta,
+    receivedAt: "2026-11-18T00:10:00Z",
+    rawPayloadRef: null,
+    sourceUrl: meta.sourceUrl,
+    observations: [],
+    coverage: { requestedCells, answeredCells, coveragePercent },
+  });
+
+  it("rounds to basis points, half away from zero", () => {
+    expect(coveragePercentOf(3, 1)).toBe(33.33);
+    expect(coveragePercentOf(3, 2)).toBe(66.67);
+    expect(coveragePercentOf(4, 2)).toBe(50);
+    // 10 000 / 32 = 312.5 basis points → 313 → 3.13.
+    expect(coveragePercentOf(32, 1)).toBe(3.13);
+    expect(coveragePercentOf(4, 4)).toBe(100);
+  });
+
+  it("refuses to compute a percentage from a zero-cell request", () => {
+    expect(() => coveragePercentOf(0, 0)).toThrow(RangeError);
+    expect(() => coveragePercentOf(4, -1)).toThrow(RangeError);
+  });
+
+  it("accepts a complete result at 100%", () => {
+    expect(adapterResultSchema.safeParse(result("complete", 4, 4, 100)).success).toBe(true);
+  });
+
+  it("rejects a complete result that left a cell unanswered", () => {
+    expect(adapterResultSchema.safeParse(result("complete", 4, 2, 50)).success).toBe(false);
+  });
+
+  it("rejects a complete result whose percentage disagrees with its counts", () => {
+    expect(adapterResultSchema.safeParse(result("complete", 4, 4, 99)).success).toBe(false);
+  });
+
+  it("accepts a partial result with unanswered cells", () => {
+    expect(adapterResultSchema.safeParse(result("partial", 4, 2, 50)).success).toBe(true);
+  });
+
+  it("rejects a partial result that answered every cell", () => {
+    expect(adapterResultSchema.safeParse(result("partial", 4, 4, 100)).success).toBe(false);
+  });
+
+  it("rejects more answered cells than requested", () => {
+    expect(adapterResultSchema.safeParse(result("partial", 1, 2, 200)).success).toBe(false);
+  });
+
+  it("rejects a zero-cell request", () => {
+    expect(adapterResultSchema.safeParse(result("complete", 0, 0, 100)).success).toBe(false);
+  });
+
+  it("accepts the rounding boundary and rejects the raw fraction", () => {
+    expect(adapterResultSchema.safeParse(result("partial", 32, 1, 3.13)).success).toBe(true);
+    expect(adapterResultSchema.safeParse(result("partial", 32, 1, 3.125)).success).toBe(false);
+  });
+
+  it("rejects a percentage that no counts could produce", () => {
+    expect(adapterResultSchema.safeParse(result("partial", 4, 2, 50.01)).success).toBe(false);
+  });
+});
+
+describe("MonthlyOutlook cross-field validation — F-05", () => {
+  const ERA5 = "ERA5:1991-2020:v1";
+  const month = (overrides: Record<string, unknown> = {}) => ({
+    leadMonth: 4,
+    month: "2027-02-01",
+    dataClass: "seasonal_forecast",
+    evaluationBasis: "monthly",
+    valueMm: 210,
+    missingReason: null,
+    baselineVersion: null,
+    anomalyKind: null,
+    ensembleSpreadMm: 12,
+    spreadUnavailableReason: null,
+    ...overrides,
+  });
+
+  it("accepts a forecast month with a monthly basis", () => {
+    expect(outlookMonthSchema.safeParse(month()).success).toBe(true);
+  });
+
+  it("rejects a forecast value claiming the climatology basis", () => {
+    const result = outlookMonthSchema.safeParse(month({ evaluationBasis: "climatology" }));
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((issue) => issue.path.join("."))).toContain("evaluationBasis");
+  });
+
+  it("rejects a climatology value claiming a forecast basis", () => {
+    const result = outlookMonthSchema.safeParse(
+      month({
+        leadMonth: 9,
+        dataClass: "climatology",
+        evaluationBasis: "monthly",
+        missingReason: "beyond_horizon",
+        baselineVersion: ERA5,
+      }),
+    );
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((issue) => issue.path.join("."))).toContain("evaluationBasis");
+  });
+
+  it("rejects a pending month claiming the climatology basis", () => {
+    const result = outlookMonthSchema.safeParse(
+      month({
+        dataClass: null,
+        evaluationBasis: "climatology",
+        valueMm: null,
+        missingReason: "pending",
+        ensembleSpreadMm: null,
+        spreadUnavailableReason: "not_requested",
+      }),
+    );
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((issue) => issue.path.join("."))).toContain("evaluationBasis");
+  });
+
+  it("accepts a pending month with a monthly basis and no value", () => {
+    expect(
+      outlookMonthSchema.safeParse(
+        month({
+          dataClass: null,
+          valueMm: null,
+          missingReason: "pending",
+          ensembleSpreadMm: null,
+          spreadUnavailableReason: "not_requested",
+        }),
+      ).success,
+    ).toBe(true);
+  });
+
+  it("rejects an anomaly on a month with no value", () => {
+    const result = outlookMonthSchema.safeParse(
+      month({
+        dataClass: null,
+        valueMm: null,
+        missingReason: "ingest_failed",
+        anomalyKind: "model_anomaly",
+        ensembleSpreadMm: null,
+        spreadUnavailableReason: "ingest_failed",
+      }),
+    );
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((issue) => issue.path.join("."))).toContain("anomalyKind");
+  });
+
+  it("requires a baseline for a baseline_difference anomaly", () => {
+    const result = outlookMonthSchema.safeParse(month({ anomalyKind: "baseline_difference" }));
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.map((issue) => issue.path.join("."))).toContain("baselineVersion");
+    expect(
+      outlookMonthSchema.safeParse(
+        month({ anomalyKind: "baseline_difference", baselineVersion: ERA5 }),
+      ).success,
+    ).toBe(true);
+  });
+});
+
+describe("12-month horizon — F-03", () => {
+  const FIRST_MONTH = "2026-11-01";
+  const ERA5 = "ERA5:1991-2020:v1";
+
+  // No validation: an invalid lead month must still produce a parseable object so
+  // the schema, not the helper, is what rejects it.
+  const shiftMonth = (addMonths: number) => {
+    const total = 2026 * 12 + 10 + addMonths;
+    const year = Math.floor(total / 12);
+    const monthOfYear = (total % 12) + 1;
+    return `${year}-${String(monthOfYear).padStart(2, "0")}-01`;
+  };
+
+  const entryFor = (leadMonth: number) => {
+    const dataClass =
+      leadMonth <= 2 ? "weather_forecast" : leadMonth <= 7 ? "seasonal_forecast" : "climatology";
+    const isClimatology = dataClass === "climatology";
+    return {
+      leadMonth,
+      month: shiftMonth(leadMonth - 1),
+      dataClass,
+      evaluationBasis: isClimatology ? "climatology" : "monthly",
+      valueMm: 120,
+      missingReason: isClimatology ? "beyond_horizon" : null,
+      baselineVersion: isClimatology ? ERA5 : null,
+      anomalyKind: null,
+      ensembleSpreadMm: 8,
+      spreadUnavailableReason: null,
+    };
+  };
+  const twelve = () => Array.from({ length: 12 }, (_unused, index) => entryFor(index + 1));
+  const horizon = (months: readonly unknown[]) => ({ firstMonth: FIRST_MONTH, months });
+
+  it("defines the horizon as exactly lead months 1–12", () => {
+    expect(LEAD_MONTHS).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(permittedMonthlyDataClasses(1).length).toBeGreaterThan(0);
+    expect(permittedMonthlyDataClasses(12).length).toBeGreaterThan(0);
+    expect(permittedMonthlyDataClasses(0)).toEqual([]);
+    expect(permittedMonthlyDataClasses(13)).toEqual([]);
+  });
+
+  it("accepts lead month 1 and lead month 12, rejects 0 and 13", () => {
+    expect(outlookMonthSchema.safeParse(entryFor(1)).success).toBe(true);
+    expect(outlookMonthSchema.safeParse(entryFor(12)).success).toBe(true);
+    expect(outlookMonthSchema.safeParse(entryFor(0)).success).toBe(false);
+    expect(outlookMonthSchema.safeParse(entryFor(13)).success).toBe(false);
+  });
+
+  it("rejects a month key that is not the first of its calendar month", () => {
+    expect(outlookMonthSchema.safeParse(entryFor(1)).success).toBe(true);
+    expect(outlookMonthSchema.safeParse({ ...entryFor(1), month: "2026-11-15" }).success).toBe(
+      false,
+    );
+  });
+
+  it("accepts a complete twelve-month horizon", () => {
+    expect(monthlyOutlookHorizonSchema.safeParse(horizon(twelve())).success).toBe(true);
+  });
+
+  it("rejects eleven entries and thirteen entries", () => {
+    expect(monthlyOutlookHorizonSchema.safeParse(horizon(twelve().slice(0, 11))).success).toBe(
+      false,
+    );
+    expect(
+      monthlyOutlookHorizonSchema.safeParse(
+        horizon(Array.from({ length: 13 }, (_unused, index) => entryFor(Math.min(index + 1, 12)))),
+      ).success,
+    ).toBe(false);
+  });
+
+  it("rejects a duplicate lead month", () => {
+    const months = twelve().map((month, index) =>
+      index === 3 ? { ...month, leadMonth: 2 } : month,
+    );
+    expect(monthlyOutlookHorizonSchema.safeParse(horizon(months)).success).toBe(false);
+  });
+
+  it("rejects a missing lead month", () => {
+    const months = twelve().map((month, index) =>
+      index >= 4
+        ? {
+            ...month,
+            leadMonth: month.leadMonth + 1,
+            month: shiftMonth(month.leadMonth),
+          }
+        : month,
+    );
+    expect(monthlyOutlookHorizonSchema.safeParse(horizon(months)).success).toBe(false);
+  });
+
+  it("rejects out-of-order entries", () => {
+    const ordered = twelve();
+    const swapped = ordered.map((month, index) =>
+      index === 0
+        ? (ordered[1] as (typeof ordered)[number])
+        : index === 1
+          ? (ordered[0] as (typeof ordered)[number])
+          : month,
+    );
+    expect(monthlyOutlookHorizonSchema.safeParse(horizon(swapped)).success).toBe(false);
+  });
+
+  it("rejects a month bound to the wrong calendar month", () => {
+    const months = twelve().map((month, index) =>
+      index === 0 ? { ...month, month: "2027-01-01" } : month,
+    );
+    expect(monthlyOutlookHorizonSchema.safeParse(horizon(months)).success).toBe(false);
+  });
+
+  it("maps lead months across a year rollover", () => {
+    expect(calendarMonthOf("2026-11-01", 1)).toBe("2026-11-01");
+    expect(calendarMonthOf("2026-11-01", 2)).toBe("2026-12-01");
+    expect(calendarMonthOf("2026-11-01", 3)).toBe("2027-01-01");
+    expect(calendarMonthOf("2026-11-01", 12)).toBe("2027-10-01");
+    expect(calendarMonthOf("2026-12-01", 2)).toBe("2027-01-01");
+    expect(calendarMonthOf("2027-02-01", 11)).toBe("2027-12-01");
+    expect(calendarMonthOf("2027-02-01", 12)).toBe("2028-01-01");
+    expect(() => calendarMonthOf("2026-11-01", 0)).toThrow(RangeError);
+    expect(() => calendarMonthOf("2026-11-01", 13)).toThrow(RangeError);
+    expect(() => calendarMonthOf("2026-11-15", 1)).toThrow(RangeError);
+  });
+
+  it("keeps a failed forecast month pending instead of substituting climatology", () => {
+    const months = twelve().map((month, index) =>
+      index === 2
+        ? {
+            ...month,
+            dataClass: null,
+            evaluationBasis: "monthly",
+            valueMm: null,
+            missingReason: "ingest_failed",
+            baselineVersion: null,
+            ensembleSpreadMm: null,
+            spreadUnavailableReason: "ingest_failed",
+          }
+        : month,
+    );
+    const result = monthlyOutlookHorizonSchema.safeParse(horizon(months));
+    expect(result.success).toBe(true);
+    expect(result.data?.months[2]?.dataClass).toBeNull();
+    expect(result.data?.months[2]?.missingReason).toBe("ingest_failed");
   });
 });

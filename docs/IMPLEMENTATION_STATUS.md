@@ -1213,7 +1213,7 @@ of it is documentation; no sub-phase moved.
 
 | Item | Outcome |
 |---|---|
-| Months 8–12 count | Corrected from "eight months" to **five** (`OPEN-18`-independent). A 12-month response always has twelve entries; months 8–12 are `climatology` with `beyond_horizon`, months 0–7 are `pending` when no forecast exists. The temporal contract was not changed |
+| Months 8–12 count | Corrected from "eight months" to **five** (`OPEN-18`-independent). A 12-month response always has twelve entries; lead months 8–12 are `climatology` with `beyond_horizon`, lead months 1–7 are `pending` when no forecast exists. Lead month is 1-based (`1–12`) |
 | `OPEN-18` | Generic resolver contract **approved and implemented** (see below): provider/model-specific, explicit origin/spacing/orientation/revision, decimal-integer arithmetic, re-grid = new `model` string. Five provider grid configurations remain **pending external evidence** |
 | `Q-P5-1` queue backing | **PostgreSQL-first**, behind a job interface: atomic claim, lease expiry, retry scheduling, in-place `attempt`, idempotency key, dead-letter status, shutdown, observability. No `jobs` table, no code, no dependency |
 | `OPEN-03` Open-Meteo plan | **Deferred**, not closed. No paid-plan commitment; commercial operation conditional on verified licensing and an appropriate plan |
@@ -1221,7 +1221,7 @@ of it is documentation; no sub-phase moved.
 | `OPEN-16` weather-record retention | **No automatic pruning** until at least one month of measured 5.4 ingestion; never delete provenance or audit data silently |
 | Register consistency | The disposition counts said 18 DEFERRED / 9 BLOCKED, but the table held seven BLOCKED rows. Recomputed as 2 RESOLVED / 19 DEFERRED / 8 BLOCKED after `OPEN-18` moved; `open-decisions.md` §6 records `Q-P5-1`..`Q-P5-4` without changing the 29-item count |
 
-What remains true: no migration is proposed by the phase; months 8–12 stay
+What remains true: no migration is proposed by the phase; lead months 8–12 stay
 climatology; BMKG stays disabled by default; `bias_corrected` stays `false`.
 Sub-phases 5.1–5.8 have no work started.
 
@@ -1229,12 +1229,13 @@ Sub-phases 5.1–5.8 have no work started.
 
 | Item | State |
 |---|---|
-| `packages/contracts/src/climate.ts` | **Implemented.** `ForecastRun` identity + row, `IngestionRun` identity + row, `ingestionVersionOf`, `AdapterResult` (five classes), `MonthlyOutlook` + lead-month band rules |
+| `packages/contracts/src/climate.ts` | **Implemented.** `ForecastRun` identity + row, `IngestionRun` identity + row, `ingestionVersionOf`, `AdapterResult` (five classes with coverage invariants), `MonthlyOutlook` + `monthlyOutlookHorizonSchema` (lead month **1–12**, exactly twelve entries, calendar-month binding) |
 | `packages/contracts/src/grid.ts` | **Implemented.** `GridSpec`, `defineGridSpec`, `resolveGridCell`, `createGridRegistry`, `gridSpecHash`; integer micro-degree arithmetic; `south-west` orientation only |
 | `packages/contracts/src/provenance.ts` | **Implemented.** `Reproducibility` and `DerivationProvenance`; empty `inputRefs` fails on `inputRefs`, not as "not reproducible" |
 | `packages/contracts/src/weather.ts` | **Fixed.** `valueBase` uses `singleValueEvaluationBasisSchema`; `mixed` is container-only |
-| Tests | `grid.test.ts` (vectors 1–18 of §5.2.7, orientation, lattice, hash, registry) and `climate.test.ts` (bases, identities, adapter classes, reproducibility, month states) |
-| Executed | `pnpm --filter @agroclimate/contracts test` — **304 passed**; `typecheck` and `lint` clean |
+| Tests | `grid.test.ts` (vectors 1–18 of §5.2.7, orientation, lattice, hash, registry, F-06 immutability) and `climate.test.ts` (bases, identities, adapter coverage invariants, reproducibility, month cross-field rules, twelve-month horizon) |
+| Executed | `pnpm --filter @agroclimate/contracts test` — **341 passed**; `typecheck`, `lint`, `prettier --check`, `git diff --check` clean |
+| Corrective pass | F-03 (lead month 1–12, twelve entries, calendar rollover), F-04 (`coveragePercentOf`, complete/partial invariants, zero-request rejected), F-05 (`dataClass` × `evaluationBasis` cross-checks), F-06 (deep-frozen `GridSpec`, frozen registry value) |
 | Not implemented | No adapter, no HTTP client, no queue, no worker runtime, no migration, no Prisma change, no route, no dependency, no persistence. No provider grid is asserted |
 | Still open in 5.0 | `OPEN-14` vocabulary freeze; the job-lifecycle interface (now scoped to 5.3) |
 | Layout deviation | Resolver is `packages/contracts/src/grid.ts`, not `packages/weather-core/cells/`; creating a package for one pure module had no consumer and `weather-core` is 5.1's |

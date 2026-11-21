@@ -243,6 +243,74 @@ describe("serialization precision — F-01", () => {
   });
 });
 
+describe("GridSpec runtime immutability — F-06", () => {
+  it("copies the caller's range arrays instead of aliasing them", () => {
+    const latRange: [string, string] = ["-90", "90"];
+    const lonRange: [string, string] = ["-180", "180"];
+    const grid = defineGridSpec({ ...BASE, lonDomain: "bounded", latRange, lonRange });
+
+    latRange[0] = "-10";
+    lonRange[1] = "10";
+
+    expect(grid.latRange).toEqual(["-90", "90"]);
+    expect(grid.lonRange).toEqual(["-180", "180"]);
+  });
+
+  it("freezes the nested latitude range", () => {
+    const grid = spec({});
+    expect(Object.isFrozen(grid.latRange)).toBe(true);
+    expect(() => {
+      (grid.latRange as [string, string])[0] = "-45";
+    }).toThrow(TypeError);
+    expect(grid.latRange[0]).toBe("-90");
+  });
+
+  it("freezes the nested longitude range", () => {
+    const grid = bounded({});
+    expect(Object.isFrozen(grid.lonRange)).toBe(true);
+    expect(() => {
+      (grid.lonRange as [string, string])[0] = "0";
+    }).toThrow(TypeError);
+    expect(grid.lonRange?.[0]).toBe("-180");
+  });
+
+  it("freezes the spec object itself", () => {
+    const grid = spec({});
+    expect(Object.isFrozen(grid)).toBe(true);
+    expect(() => {
+      (grid as { gridId: string }).gridId = "tampered";
+    }).toThrow(TypeError);
+  });
+
+  it("keeps the hash consistent with the frozen spec", () => {
+    const grid = spec({});
+    expect(assertGridSpecIntegrity(grid)).toBeUndefined();
+    expect(
+      assertGridSpecIntegrity(createGridRegistry([{ model: "m", spec: grid }]).specFor("m")),
+    ).toBeUndefined();
+  });
+
+  it("registry lookup cannot mutate the registered specification", () => {
+    const registry = createGridRegistry([{ model: "synthetic-1", spec: spec({}) }]);
+    const looked = registry.specFor("synthetic-1");
+    expect(Object.isFrozen(looked)).toBe(true);
+    expect(() => {
+      (looked.latRange as [string, string])[1] = "0";
+    }).toThrow(TypeError);
+    expect(registry.resolve("synthetic-1", { lat: "0.5", lon: "0.5" }).cellKey).toBe(
+      resolveGridCell(spec({}), { lat: "0.5", lon: "0.5" }).cellKey,
+    );
+  });
+
+  it("registry lookup does not hand back the caller's mutable object", () => {
+    const handed = spec({});
+    const registry = createGridRegistry([{ model: "synthetic-1", spec: handed }]);
+    expect(registry.specFor("synthetic-1")).not.toBe(handed);
+    expect(registry.specFor("synthetic-1").gridSpecHash).toBe(handed.gridSpecHash);
+    expect(registry.models()).not.toBe(registry.models());
+  });
+});
+
 describe("grid registry", () => {
   it("binds one spec per model", () => {
     const registry = createGridRegistry([

@@ -180,9 +180,26 @@ export const adapterObservationSchema = z.strictObject({
 });
 export type AdapterObservation = z.infer<typeof adapterObservationSchema>;
 
+/**
+ * Coverage percentage, in basis points, rounded half away from zero.
+ *
+ * One implementation so the schema and a producer cannot disagree. `requestedCells`
+ * must be at least one: a request for nothing is a programming error, not a result,
+ * which removes the division-by-zero case instead of inventing a meaning for it.
+ */
+export function coveragePercentOf(requestedCells: number, answeredCells: number): number {
+  if (!Number.isInteger(requestedCells) || requestedCells < 1) {
+    throw new RangeError("requestedCells must be a positive integer");
+  }
+  if (!Number.isInteger(answeredCells) || answeredCells < 0) {
+    throw new RangeError("answeredCells must be a non-negative integer");
+  }
+  return Math.round((answeredCells * 10_000) / requestedCells) / 100;
+}
+
 export const adapterCoverageSchema = z
   .strictObject({
-    requestedCells: z.number().int().nonnegative(),
+    requestedCells: z.number().int().min(1),
     answeredCells: z.number().int().nonnegative(),
     coveragePercent: z.number().min(0).max(100),
   })
@@ -192,6 +209,17 @@ export const adapterCoverageSchema = z
         code: "custom",
         path: ["answeredCells"],
         message: "answeredCells cannot exceed requestedCells",
+      });
+    }
+    if (
+      coverage.requestedCells >= 1 &&
+      coverage.coveragePercent !==
+        coveragePercentOf(coverage.requestedCells, coverage.answeredCells)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["coveragePercent"],
+        message: `coveragePercent must equal coveragePercentOf(${coverage.requestedCells}, ${coverage.answeredCells})`,
       });
     }
   });
@@ -209,12 +237,25 @@ const adapterResponseBase = {
  * the adapter classifies and stops there.
  */
 export const adapterResultSchema = z.discriminatedUnion("kind", [
-  z.strictObject({
-    ...adapterResponseBase,
-    kind: z.literal("complete"),
-    observations: z.array(adapterObservationSchema),
-    coverage: adapterCoverageSchema,
-  }),
+  z
+    .strictObject({
+      ...adapterResponseBase,
+      kind: z.literal("complete"),
+      observations: z.array(adapterObservationSchema),
+      coverage: adapterCoverageSchema,
+    })
+    .superRefine((result, ctx) => {
+      if (
+        result.coverage.answeredCells !== result.coverage.requestedCells ||
+        result.coverage.coveragePercent !== 100
+      ) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["coverage", "answeredCells"],
+          message: "a complete result must answer every requested cell at 100%",
+        });
+      }
+    }),
   z
     .strictObject({
       ...adapterResponseBase,
@@ -223,11 +264,14 @@ export const adapterResultSchema = z.discriminatedUnion("kind", [
       coverage: adapterCoverageSchema,
     })
     .superRefine((result, ctx) => {
-      if (result.coverage.coveragePercent >= 100) {
+      if (
+        result.coverage.answeredCells >= result.coverage.requestedCells ||
+        result.coverage.coveragePercent >= 100
+      ) {
         ctx.addIssue({
           code: "custom",
-          path: ["coverage", "coveragePercent"],
-          message: "a partial result must report coverage below 100",
+          path: ["coverage", "answeredCells"],
+          message: "a partial result must leave at least one requested cell unanswered",
         });
       }
     }),
@@ -264,13 +308,17 @@ export type AdapterResult = z.infer<typeof adapterResultSchema>;
  * ------------------------------------------------------------------ */
 
 /**
- * Lead month index, 0 = the current month. The bands are the binding table's,
- * not an extrapolation: months 0–1 are assembled from the daily and subseasonal
- * bands, months 2–7 are seasonal, months 8–12 are the historical normal.
+ * Lead month is **1-based and inclusive: 1–12**. Exactly twelve entries describe
+ * the rolling outlook; there is no month 0 and no month 13.
+ *
+ * The bands follow `temporal-and-weather-semantics.md` §3. Months 1–2 are composed
+ * from the days 0–45 bands, so both `weather_forecast` and `subseasonal_forecast`
+ * are permitted there: the architecture binds days 15–45 to subseasonal, and a
+ * month aggregated from those days may not be relabelled as short-range.
  */
 export const MONTHLY_OUTLOOK_BANDS = [
-  { fromLeadMonth: 0, toLeadMonth: 1, permitted: ["weather_forecast", "subseasonal_forecast"] },
-  { fromLeadMonth: 2, toLeadMonth: 7, permitted: ["seasonal_forecast"] },
+  { fromLeadMonth: 1, toLeadMonth: 2, permitted: ["weather_forecast", "subseasonal_forecast"] },
+  { fromLeadMonth: 3, toLeadMonth: 7, permitted: ["seasonal_forecast"] },
   { fromLeadMonth: 8, toLeadMonth: 12, permitted: ["climatology"] },
 ] as const satisfies ReadonlyArray<{
   fromLeadMonth: number;
@@ -278,7 +326,10 @@ export const MONTHLY_OUTLOOK_BANDS = [
   permitted: readonly WeatherDataClass[];
 }>;
 
-/** Empty for an index outside `0..12`; the schema rejects rather than guesses. */
+/** The twelve valid lead months, in order. */
+export const LEAD_MONTHS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] as const;
+
+/** Empty for anything outside `1..12`; the schema rejects rather than guesses. */
 export function permittedMonthlyDataClasses(leadMonth: number): readonly WeatherDataClass[] {
   const band = MONTHLY_OUTLOOK_BANDS.find(
     (candidate) => leadMonth >= candidate.fromLeadMonth && leadMonth <= candidate.toLeadMonth,
@@ -286,7 +337,30 @@ export function permittedMonthlyDataClasses(leadMonth: number): readonly Weather
   return band ? band.permitted : [];
 }
 
-/** The five reasons that mean "no value may be claimed". */
+/**
+ * The calendar month that lead month `n` refers to, given the month lead month 1
+ * refers to. Pure string arithmetic: no `Date`, no timezone, and December→January
+ * rollover is a year increment by construction.
+ */
+export function calendarMonthOf(firstMonth: string, leadMonth: number): string {
+  if (!isoDateSchema.safeParse(firstMonth).success || firstMonth.slice(8, 10) !== "01") {
+    throw new RangeError("firstMonth must be a valid calendar date on the first of a month");
+  }
+  if (!Number.isInteger(leadMonth) || leadMonth < 1 || leadMonth > 12) {
+    throw new RangeError("leadMonth must be an integer between 1 and 12");
+  }
+  const year = Number(firstMonth.slice(0, 4));
+  const month = Number(firstMonth.slice(5, 7));
+  const total = year * 12 + (month - 1) + (leadMonth - 1);
+  const monthOfYear = (total % 12) + 1;
+  return `${String(Math.floor(total / 12)).padStart(4, "0")}-${String(monthOfYear).padStart(2, "0")}-01`;
+}
+
+/** The two bases a materialised outlook month may carry. */
+export const outlookEvaluationBasisSchema = z.enum(["monthly", "climatology"]);
+export type OutlookEvaluationBasis = z.infer<typeof outlookEvaluationBasisSchema>;
+
+/** The reasons that mean "no value may be claimed" (`beyond_horizon` is separate). */
 const noValueReasons = new Set([
   "pending",
   "ingest_failed",
@@ -298,9 +372,11 @@ const noValueReasons = new Set([
 
 export const outlookMonthSchema = z
   .strictObject({
-    leadMonth: z.number().int().min(0).max(12),
+    leadMonth: z.number().int().min(1).max(12),
+    /** First day of the calendar month this entry describes. */
     month: isoDateSchema,
     dataClass: weatherDataClassSchema.nullable(),
+    evaluationBasis: outlookEvaluationBasisSchema,
     valueMm: z.number().nonnegative().nullable(),
     missingReason: missingReasonSchema.nullable(),
     baselineVersion: z.string().min(1).nullable(),
@@ -309,6 +385,13 @@ export const outlookMonthSchema = z
     spreadUnavailableReason: z.string().min(1).nullable(),
   })
   .superRefine((month, ctx) => {
+    if (month.month.slice(8, 10) !== "01") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["month"],
+        message: "month must be the first day of a calendar month",
+      });
+    }
     // Value presence and class presence move together. A value with no class has
     // no label; a class with no value is a fabricated number.
     if ((month.valueMm === null) !== (month.dataClass === null)) {
@@ -334,6 +417,45 @@ export const outlookMonthSchema = z
         code: "custom",
         path: ["valueMm"],
         message: `missingReason "${month.missingReason}" forbids a value`,
+      });
+    }
+    // F-05: class and basis are two statements about the same value and may not
+    // contradict. A climatology value is not a forecast; a forecast value is not
+    // a historical normal; a month with no value is neither.
+    if (month.dataClass === null) {
+      if (month.evaluationBasis !== "monthly") {
+        ctx.addIssue({
+          code: "custom",
+          path: ["evaluationBasis"],
+          message: "a month with no value cannot claim a climatology evaluation basis",
+        });
+      }
+    } else {
+      const isClimatology = month.dataClass === "climatology";
+      if (isClimatology !== (month.evaluationBasis === "climatology")) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["evaluationBasis"],
+          message: isClimatology
+            ? "a climatology month must use the climatology evaluation basis"
+            : "a forecast month must not claim a climatology evaluation basis",
+        });
+      }
+    }
+    // An anomaly is derived from a value; a month without one has nothing to
+    // compare, and a baseline difference must name its baseline.
+    if (month.valueMm === null && month.anomalyKind !== null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["anomalyKind"],
+        message: "a month with no value cannot carry an anomaly",
+      });
+    }
+    if (month.anomalyKind === "baseline_difference" && month.baselineVersion === null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["baselineVersion"],
+        message: "a baseline_difference anomaly must name its baseline",
       });
     }
     // Climatology is a labelled historical normal, never a filled forecast.
@@ -382,13 +504,13 @@ export const outlookMonthSchema = z
       });
     }
     // A missing forecast must not silently become climatology: only the band that
-    // permits climatology may carry it, and months before it may not.
+    // permits climatology may carry it, and earlier months may not.
     const permitted = permittedMonthlyDataClasses(month.leadMonth);
     if (permitted.length === 0) {
       ctx.addIssue({
         code: "custom",
         path: ["leadMonth"],
-        message: "leadMonth must be between 0 and 12",
+        message: "leadMonth must be between 1 and 12",
       });
     } else if (month.dataClass !== null && !permitted.includes(month.dataClass)) {
       ctx.addIssue({
@@ -400,12 +522,55 @@ export const outlookMonthSchema = z
   });
 export type OutlookMonth = z.infer<typeof outlookMonthSchema>;
 
+/**
+ * A complete rolling outlook: twelve months, lead months 1–12 in order, each
+ * bound to its calendar month. The array is a **sequence**, so position carries
+ * meaning and no normalisation is attempted.
+ *
+ * One equality per index enforces range, completeness, uniqueness, and order:
+ * entry `i` must be lead month `i + 1`. A duplicate therefore also leaves a gap.
+ */
+export const monthlyOutlookHorizonSchema = z
+  .strictObject({
+    /** The calendar month lead month 1 describes. */
+    firstMonth: isoDateSchema,
+    months: z.array(outlookMonthSchema).length(12),
+  })
+  .superRefine((horizon, ctx) => {
+    if (horizon.firstMonth.slice(8, 10) !== "01") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["firstMonth"],
+        message: "firstMonth must be the first day of a calendar month",
+      });
+      return;
+    }
+    horizon.months.forEach((month, index) => {
+      const expectedLeadMonth = index + 1;
+      if (month.leadMonth !== expectedLeadMonth) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["months", index, "leadMonth"],
+          message: `entry ${index} must be lead month ${expectedLeadMonth}; entries are ordered 1–12`,
+        });
+      }
+      const expectedMonth = calendarMonthOf(horizon.firstMonth, expectedLeadMonth);
+      if (month.month !== expectedMonth) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["months", index, "month"],
+          message: `lead month ${expectedLeadMonth} of ${horizon.firstMonth} is ${expectedMonth}`,
+        });
+      }
+    });
+  });
+export type MonthlyOutlookHorizon = z.infer<typeof monthlyOutlookHorizonSchema>;
+
 /** The materialised row the read path serves, built on the month-state rules. */
 export const monthlyOutlookSchema = outlookMonthSchema.extend({
   id: z.uuid({ version: "v7" }),
   outlookCellId: z.uuid({ version: "v7" }),
   variable: z.literal("precipitation"),
-  evaluationBasis: z.enum(["monthly", "climatology"]),
   derivationVersion: z.string().min(1),
   inputRefs: z.array(dataInputRefSchema).min(1),
   inputSnapshotHash: sha256HexSchema,

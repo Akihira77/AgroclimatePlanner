@@ -216,6 +216,11 @@ function preimageOf(spec: Omit<GridSpec, "gridSpecHash">): GridPreimage {
       };
 }
 
+/** A frozen copy: callers keep their arrays, and the spec keeps its own. */
+function frozenRange(range: readonly [string, string]): readonly [string, string] {
+  return Object.freeze([range[0], range[1]]) as readonly [string, string];
+}
+
 function requireLatticePoint(delta: number, step: number, what: string): void {
   if (delta % step !== 0) {
     throw new GridConfigurationError("invalid_range", `${what} is not on the grid lattice`);
@@ -301,7 +306,7 @@ export function defineGridSpec(input: GridSpecInput): GridSpec {
       "invalid_range",
       "lonRange span",
     );
-    lonRange = [input.lonRange[0], input.lonRange[1]];
+    lonRange = frozenRange(input.lonRange);
   } else if (input.lonDomain === "global") {
     if (input.lonRange) {
       throw new GridConfigurationError("invalid_domain", "a global grid does not take lonRange");
@@ -320,7 +325,7 @@ export function defineGridSpec(input: GridSpecInput): GridSpec {
     originLon: input.originLon,
     stepLat: input.stepLat,
     stepLon: input.stepLon,
-    latRange: [input.latRange[0], input.latRange[1]],
+    latRange: frozenRange(input.latRange),
     lonDomain: input.lonDomain,
     ...(lonRange ? { lonRange } : {}),
     orientation,
@@ -493,7 +498,23 @@ export function createGridRegistry(entries: readonly GridRegistryEntry[]): GridR
         `model "${entry.model}" already has a grid spec; a re-grid needs a new model string`,
       );
     }
-    byModel.set(entry.model, entry.spec);
+    // Store a re-defined spec, not the caller's object: a hand-built spec with a
+    // matching hash is otherwise mutable state inside the registry.
+    byModel.set(
+      entry.model,
+      defineGridSpec({
+        gridId: entry.spec.gridId,
+        originLat: entry.spec.originLat,
+        originLon: entry.spec.originLon,
+        stepLat: entry.spec.stepLat,
+        stepLon: entry.spec.stepLon,
+        latRange: entry.spec.latRange,
+        lonDomain: entry.spec.lonDomain,
+        ...(entry.spec.lonRange ? { lonRange: entry.spec.lonRange } : {}),
+        orientation: entry.spec.orientation,
+        spatialResolutionKm: entry.spec.spatialResolutionKm,
+      }),
+    );
   }
   return Object.freeze({
     specFor(model: string): GridSpec {
@@ -510,7 +531,7 @@ export function createGridRegistry(entries: readonly GridRegistryEntry[]): GridR
       return resolveGridCell(this.specFor(model), request);
     },
     models(): readonly string[] {
-      return [...byModel.keys()];
+      return Object.freeze([...byModel.keys()]);
     },
   });
 }
