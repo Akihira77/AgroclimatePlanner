@@ -5,6 +5,7 @@ import type {
   FieldListQuery,
   FieldUpdateRequest,
 } from "@agroclimate/contracts";
+import { polygonGeometrySchema } from "@agroclimate/contracts";
 import type {
   Field as FieldRow,
   FieldCreate,
@@ -132,25 +133,48 @@ function updateInput(input: FieldUpdateRequest): FieldUpdate {
 }
 
 /**
- * `Date` → ISO-8601 UTC, and geometry exactly as `ST_AsGeoJSON` rendered it.
+ * `Date` → ISO-8601 UTC, and geometry re-validated against the *public* contract
+ * before it is serialised.
+ *
+ * `app.fields` accepts more than the API does. Its column is a generic
+ * `geometry(Geometry, 4326)`: the CHECKs cover type, SRID, validity, and
+ * emptiness, not coordinate range, so a row written outside this API — a seeded
+ * fixture, an earlier importer — can hold ordinates far outside WGS 84. The
+ * typmod is two-dimensional and PostGIS refuses a `Z` write with `22023`, so
+ * truncation is not reachable *through this column today*; the ordinate rule
+ * stays because the response must never be assembled by destructuring a position
+ * (a silent rewrite of stored data), and a future typmod or a different column
+ * would make it reachable.
+ *
+ * The contract is the single definition of acceptable geometry, so this is the
+ * same schema the request body is parsed with rather than a second copy of the
+ * rules. A violation is an internal error: the stored row is unrepresentable, no
+ * client input can fix it, and the diagnosis is not disclosed.
+ *
  * Mapping the seven public fields explicitly is what keeps `userId`, `deletedAt`,
  * and the agronomic columns from leaking through a spread.
  */
 function toResource(row: FieldRow): FieldResource {
-  // The stored geometry is readonly and typed as a tuple per position; the wire
-  // type is a plain nested array. Copying is what makes the response independent
-  // of the row object instead of a cast that hides the difference.
-  const coordinates = row.geometry.coordinates.map((ring) =>
-    ring.map(([longitude, latitude]) => [longitude, latitude] as [number, number]),
-  );
-
   return {
     id: row.id,
     farmId: row.farmId,
     name: row.name,
-    geometry: { type: "Polygon", coordinates },
+    geometry: storedGeometry(row),
     areaHa: row.areaHa,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
+}
+
+/**
+ * The stored geometry as the wire type, or a failure that names no internals.
+ * `parse` also returns mutable coordinate arrays, which is the only reason the
+ * response does not need a copy that could lose an ordinate.
+ */
+function storedGeometry(row: FieldRow): FieldResource["geometry"] {
+  const parsed = polygonGeometrySchema.safeParse(row.geometry);
+  if (!parsed.success) {
+    throw new Error(`field ${row.id} stores geometry outside the public contract`);
+  }
+  return parsed.data;
 }

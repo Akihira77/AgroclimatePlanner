@@ -12,6 +12,7 @@ import { after, before, describe, it } from "node:test";
 
 import {
   SQUARE,
+  SQUARE_JSON,
   UUID,
   apiFor,
   cleanupUsers,
@@ -43,6 +44,7 @@ let call;
 let alice;
 let bob;
 let lister;
+let corrupt;
 
 const ownerRow = (table, id) => readOwnerRow(harness.owner, table, id);
 const seedUser = (label) => seedFixture(harness.owner, EMAIL_PREFIX, label);
@@ -100,6 +102,7 @@ before(async () => {
   alice = await seedUser("alice");
   bob = await seedUser("bob");
   lister = await seedUser("lister");
+  corrupt = await seedUser("corrupt");
 });
 
 after(async () => {
@@ -577,6 +580,137 @@ describe("DELETE /v1/fields/:fieldId", () => {
         .response.status,
       403,
     );
+  });
+});
+
+describe("stored geometry outside the public contract", () => {
+  /**
+   * Writes a row as the owner. `app.fields.geom` is a generic
+   * `geometry(Geometry, 4326)`: its CHECKs cover type, SRID, validity, and
+   * emptiness, and the column's typmod pins two dimensions — but nothing bounds
+   * the coordinates, so an off-grid polygon is storable and only the API can
+   * refuse it.
+   */
+  async function seedStored(user, label, geojson) {
+    const farm = await createFarm(user, `${label} farm`);
+    const rows = await harness.owner.$queryRawUnsafe(
+      `INSERT INTO app.fields (farm_id, user_id, name, geom)
+       VALUES ($1::uuid, $2::uuid, $3, ST_GeomFromGeoJSON($4::text))
+       RETURNING id::text AS id`,
+      farm.id,
+      user.id,
+      label,
+      JSON.stringify(geojson),
+    );
+    return { farmId: farm.id, fieldId: rows[0].id };
+  }
+
+  const OFF_GRID = {
+    type: "Polygon",
+    coordinates: [
+      [
+        [206.8, -6.2],
+        [206.9, -6.2],
+        [206.9, -6.1],
+        [206.8, -6.2],
+      ],
+    ],
+  };
+
+  it("returns a stored 2D polygon unchanged", async () => {
+    const seeded = await seedStored(corrupt, "plain", SQUARE);
+    const { response, body } = await call(corrupt, "GET", `/v1/fields/${seeded.fieldId}`);
+
+    assert.equal(response.status, 200);
+    assertSamePolygon(body.data.geometry);
+    assert.equal(body.data.areaHa, await storedArea(seeded.fieldId));
+    assert.equal(
+      (
+        await harness.owner.$queryRawUnsafe(
+          "SELECT ST_NDims(geom) AS dims FROM app.fields WHERE id = $1::uuid",
+          seeded.fieldId,
+        )
+      )[0].dims,
+      2,
+    );
+  });
+
+  it("refuses stored coordinates outside WGS 84 instead of echoing them", async () => {
+    const seeded = await seedStored(corrupt, "off grid", OFF_GRID);
+
+    // Storable: a 4326 SRID does not bound the ordinates, and the shape is valid.
+    assert.equal(
+      (
+        await harness.owner.$queryRawUnsafe(
+          "SELECT ST_IsValid(geom) AS valid FROM app.fields WHERE id = $1::uuid",
+          seeded.fieldId,
+        )
+      )[0].valid,
+      true,
+    );
+
+    const { response, body } = await call(corrupt, "GET", `/v1/fields/${seeded.fieldId}`);
+    assert.equal(response.status, 500);
+    assert.equal(body.error.code, "INTERNAL_ERROR");
+    assert.equal(JSON.stringify(body).includes("206.8"), false, "no geometry is echoed");
+  });
+
+  it("cannot store a 3D polygon, so no response can drop an ordinate", async () => {
+    // The column is `geometry(Geometry, 4326)` — two dimensions — so PostGIS
+    // refuses a Z write with `22023`. That is why the truncation this task fixes
+    // was latent rather than observed: there was no reachable 3D row. The rule
+    // that a 3D polygon is unacceptable is still enforced by the contract
+    // (`packages/contracts/src/field.test.ts`) and applied to every stored row by
+    // the resource mapper.
+    const z = {
+      type: "Polygon",
+      coordinates: [
+        [
+          [106.8, -6.2, 100],
+          [106.9, -6.2, 110],
+          [106.9, -6.1, 120],
+          [106.8, -6.2, 100],
+        ],
+      ],
+    };
+    const farm = await createFarm(corrupt, "three dimensional farm");
+    const before = await fieldCount(corrupt);
+
+    await assert.rejects(
+      harness.owner.$queryRawUnsafe(
+        `INSERT INTO app.fields (farm_id, user_id, name, geom)
+         VALUES ($1::uuid, $2::uuid, 'z', ST_GeomFromGeoJSON($3::text))`,
+        farm.id,
+        corrupt.id,
+        JSON.stringify(z),
+      ),
+      (error) => String(error.message).includes("22023"),
+      "the column's typmod refuses a Z geometry",
+    );
+
+    assert.equal(await fieldCount(corrupt), before, "nothing was written");
+  });
+
+  it("refuses a stored POINT or MULTIPOLYGON instead of labelling it Polygon", async () => {
+    for (const [label, geometry] of Object.entries({
+      point: { type: "Point", coordinates: [106.8, -6.2] },
+      multipolygon: { type: "MultiPolygon", coordinates: [SQUARE.coordinates] },
+    })) {
+      const seeded = await seedStored(corrupt, label, geometry);
+      const { response, body } = await call(corrupt, "GET", `/v1/fields/${seeded.fieldId}`);
+      assert.equal(response.status, 500, label);
+      assert.equal(body.error.code, "INTERNAL_ERROR", label);
+    }
+  });
+
+  it("fails the collection rather than omitting or rewriting a bad row", async () => {
+    // Same tenant as the shapes above: the page holds good and unrepresentable
+    // rows. Omitting them would be silent data loss; a partial rewrite would be
+    // the bug this task removes.
+    const { response, body } = await call(corrupt, "GET", "/v1/fields");
+
+    assert.equal(response.status, 500);
+    assert.equal(body.error.code, "INTERNAL_ERROR");
   });
 });
 

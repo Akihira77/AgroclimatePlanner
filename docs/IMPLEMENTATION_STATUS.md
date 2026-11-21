@@ -1055,3 +1055,38 @@ Not done, and not claimed: the nested farm collection route, `If-Match`, additio
 (`Q7`), the eight agronomic columns, viewport queries, farm geometry, and every 4.5/4.6 item. No
 database test asserts `listAllFields` directly; it is covered through the HTTP list suite and the
 RLS suite's predicates, and that is a gap rather than a claim.
+
+### Phase 4.4.1 — stored geometry validation — **implemented and verified**
+
+Status: corrective fix. `FieldService` re-validates every stored geometry with
+`polygonGeometrySchema` before serialising it; a row outside the public contract is an explicit
+`500 INTERNAL_ERROR`, never a rewritten shape. No migration, constraint, grant, dependency, or
+route changed.
+
+Root cause: `toResource` rebuilt the response with `ring.map(([longitude, latitude]) => …)`. A
+third ordinate would have been dropped, and out-of-range ordinates were passed through, so the
+API could serve a geometry that its own request contract rejects.
+
+Measured before the fix (`migration_owner` seeded row, real `app_api` request): an off-grid
+polygon (`lon 206.8`) was served as `200` with the out-of-range coordinates; a `POLYGON Z` could
+not be stored at all — the column typmod is two-dimensional and PostGIS refuses the write with
+`22023`, so the truncation was latent rather than observed; stored `POINT` and `MULTIPOLYGON` rows
+were already `500`. After the fix the off-grid and non-polygon rows are `500 INTERNAL_ERROR` with
+no geometry echoed, and a valid stored 2D polygon is still returned unchanged.
+
+The mapper now uses the contract schema rather than a second copy of the rules, so input and
+output agree by construction; it also returns mutable coordinate arrays, which removes the copy
+that could lose an ordinate. Topological validity remains PostgreSQL's (`23514` → `400` on write).
+
+| Check | Command | Result |
+|---|---|---|
+| Farm + Field HTTP integration | `pnpm --filter @agroclimate/api test:integration` | **60 pass, 0 fail** (35 Field, 25 Farm) |
+| API unit suite | `pnpm --filter @agroclimate/api test` | **206 pass, 0 fail** |
+| Contract suite | `pnpm --filter @agroclimate/contracts test` | **239 pass, 0 fail** |
+| Workspace tests | `pnpm test` | database 34 pass, 0 fail |
+| Database integration / RLS / schema | `test:integration`, `test:rls`, `test:schema` | 66 / 90 / 22 pass, 0 fail |
+| Privileges | `db:verify` | all checks passed |
+
+Limitation, deliberate: one unrepresentable row makes the whole page `500` rather than the row
+being skipped, because omitting it would be silent data loss. The row can only be created outside
+the API.
