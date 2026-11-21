@@ -294,6 +294,7 @@ const EXPECTED_SESSION_CHECKS = [
   "CHECK (absolute_expires_at >= expires_at AND expires_at > created_at)",
   "CHECK (token_hash ~ '^[0-9a-f]{64}$')",
   "CHECK (absolute_expires_at <= created_at + INTERVAL '90 days')",
+  "CHECK (csrf_token IS NULL OR csrf_token ~ '^[A-Za-z0-9_-]{43}$')",
 ];
 
 /**
@@ -353,7 +354,7 @@ export function checkSessionConstraints(check, constraints) {
   const expected = EXPECTED_SESSION_CHECKS.map(normaliseConstraint).sort();
   const actual = [...checks].sort();
   check(
-    "app.sessions enforces exactly the three approved CHECK constraints",
+    "app.sessions enforces exactly the four approved CHECK constraints",
     actual.length === expected.length &&
       actual.every((definition, index) => definition === expected[index]),
     JSON.stringify(actual),
@@ -489,7 +490,7 @@ export function checkSessionColumnGrants(check, held) {
   const update = held?.update_columns ?? [];
 
   check(
-    "app_auth SELECTs exactly the eight approved columns of app.sessions",
+    "app_auth SELECTs exactly the nine approved columns of app.sessions",
     sameSet(select, [
       "id",
       "user_id",
@@ -499,6 +500,7 @@ export function checkSessionColumnGrants(check, held) {
       "revoked_at",
       "last_seen_at",
       "created_at",
+      "csrf_token",
     ]),
     JSON.stringify([...select].sort()),
   );
@@ -508,8 +510,8 @@ export function checkSessionColumnGrants(check, held) {
     JSON.stringify([...insert].sort()),
   );
   check(
-    "app_auth UPDATEs exactly the three approved columns of app.sessions",
-    sameSet(update, ["expires_at", "last_seen_at", "revoked_at"]),
+    "app_auth UPDATEs exactly the four approved columns of app.sessions",
+    sameSet(update, ["expires_at", "last_seen_at", "revoked_at", "csrf_token"]),
     JSON.stringify([...update].sort()),
   );
 }

@@ -5,13 +5,16 @@ import type { PrismaClient } from "@agroclimate/database";
 import {
   findAuthUserByEmail,
   insertSession,
+  readSessionCsrfToken,
   resolveSession,
+  resolveSessionCsrfToken,
   revokeSession,
 } from "@agroclimate/database";
 
 import { AUTH_DATABASE_CLIENT, PASSWORD_HASHER } from "../tokens.js";
 import { MalformedPasswordHashError } from "./password-hasher.js";
 import type { PasswordHasher } from "./password-hasher.js";
+import { createCsrfToken } from "./csrf-token.js";
 import { createSessionToken, hashSessionToken } from "./session-token.js";
 
 /**
@@ -131,6 +134,32 @@ export class AuthService {
         },
       };
     });
+  }
+
+  /**
+   * The CSRF token for this session, minted on the first retrieval.
+   *
+   * `null` means the session is no longer usable — revoked, expired, or gone
+   * between the guard's statement and this one. The controller answers that with the
+   * same `401` the guard would have given, so the caller learns nothing new.
+   *
+   * Nothing here logs the value: it is a secret in transit, and a length is the most
+   * that may appear in a diagnostic.
+   */
+  async issueCsrfToken(sessionId: string): Promise<string | null> {
+    return this.withDatabaseErrors(() =>
+      resolveSessionCsrfToken(this.client, sessionId, createCsrfToken),
+    );
+  }
+
+  /**
+   * The token already stored for this session, for comparison against a header.
+   *
+   * A read, not a mint: validation must never create a token, or a request that
+   * never fetched one would be authenticated by the act of being checked.
+   */
+  async storedCsrfToken(sessionId: string): Promise<string | null> {
+    return this.withDatabaseErrors(() => readSessionCsrfToken(this.client, sessionId));
   }
 
   /**

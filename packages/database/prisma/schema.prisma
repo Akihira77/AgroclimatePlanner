@@ -81,6 +81,9 @@ model Session {
   revokedAt         DateTime? @map("revoked_at") @db.Timestamptz(6)
   lastSeenAt        DateTime  @default(now()) @map("last_seen_at") @db.Timestamptz(6)
   createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  // `Amendment 4`: plaintext, nullable, generated lazily on first retrieval and
+  // never rotated. `NULL` is "not issued yet", not "no token required".
+  csrfToken         String?   @map("csrf_token") @db.Text
 
   user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 

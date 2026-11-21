@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: 2026-11-18.
+Last updated: 2026-11-21.
 
 ## Phase 0 — Research & validation — **DONE (revised after adversarial review)**
 
@@ -460,7 +460,7 @@ approvals, one amendment `IG-5-A1`, one later gate `IG-12`).
 | S7 — registration and credential verification | **implemented, verified, committed, pushed** | `7eef8ce` | `POST /v1/auth/register` exists and creates a user; credential verification with a dummy hash is **not yet implemented** (it lands with S8's login). Decisions: `IG-1`/`IG-2`/`IG-3`/`IG-7`/`IG-10` approved, `IG-4` approved with its revised rule, `IG-6` **conditional** — `docs/review/phase-3.2-s7-owner-decisions.md` *Amendment 1*. Delivered: `registerRequestSchema` + `normalizeEmail` + code-point/byte password rule in `packages/contracts`; Argon2id via `@node-rs/argon2@2.2.2` with configuration-driven cost (`ARGON2_MEMORY_KIB`/`ARGON2_TIME_COST`/`ARGON2_PARALLELISM`, defaults `19456`/`2`/`1`); in-process fixed-window limiter, 30 req/min/IP, before hashing and lookup; `insertRegisteredUser` in `packages/database` writing through `app_auth` and returning five safe columns; unique violations mapped to `409 CONFLICT` without a prior existence check; explicit 16 KiB body limit. Tests: contracts 208, api 118, database unit 34, `test:schema` 22, `test:rls` 88, `test:integration` 6 (real `app_auth`, including concurrent duplicate and 42501 denials for `app_api`). Benchmark: local latency-only run 2026-11-21 (`m=19456,t=2,p=1`, concurrency 1, no memory limit) — hash p95 16.2 ms, verify p95 16.0 ms, peak RSS 76.1 MiB; it does **not** satisfy `IG-6`. No session, cookie, token, or CSRF exists |
 
 @106@
-| S8 — login, session flow, guard, `/me`, logout | **implemented, verified, committed and pushed (`7c7b61a`), then hardened — CSRF synchronizer token still absent** | `7c7b61a` + hardening in the working tree | `POST /v1/auth/login`, `GET /v1/auth/me`, `POST /v1/auth/logout`, `AuthGuard`, the `__Host-` session cookie, and login-side rate limiting are implemented and tested against a real database. Credential lookup reads `password_hash` through `app_auth` with no `withTenant` and no `app.user_id`, which is what `OPEN-01` required. **Not implemented: the `IG-9` synchronizer token** — `ADR-006` §D2.2 `Origin` validation is implemented, §D2.1 is specified only, in `docs/review/s8-csrf-token-design-proposal.md`, because token storage needs a migration and a grant change this phase was scoped without. The four remaining CSRF details (storage, lifecycle, validation behaviour, migration ownership) are **approved** in *Amendment 4* of `docs/review/phase-3.2-owner-decisions.md`; the implementation is a separate task. `S8` is therefore **not complete** |
+| S8 — login, session flow, guard, `/me`, logout, CSRF token | **complete: implemented and verified, CSRF synchronizer token included; migration applied to the canonical development database; the CSRF work is uncommitted** | `7c7b61a`, `913b041` + CSRF and lock-wait work in the working tree | `POST /v1/auth/login`, `GET /v1/auth/me`, `POST /v1/auth/logout`, `AuthGuard`, the `__Host-` session cookie, and login-side rate limiting are implemented and tested against a real database. Credential lookup reads `password_hash` through `app_auth` with no `withTenant` and no `app.user_id`, which is what `OPEN-01` required. `ADR-006` §D2.2 (`Origin` validation) and §D2.1 (the session-bound synchronizer token) are both implemented. The token is a plaintext, nullable `app.sessions.csrf_token`, minted lazily on first retrieval at `GET /v1/auth/csrf`, never rotated, and required on authenticated `POST`/`PUT`/`PATCH`/`DELETE` with `403 FORBIDDEN` on failure. `register`, `login`, and `logout` stay exempt because they are not behind `AuthGuard`; `Origin` validation still covers them. The decisions are *Amendment 4* of `docs/review/phase-3.2-owner-decisions.md`; the implementation record is `docs/review/s8-csrf-token-design-proposal.md`. `S8` is therefore **complete** — but the CSRF work is uncommitted, so the deployed state is `913b041` plus this working tree. |
 | S9 — docs reconciliation | partially done | — | `ADR-004`/`ADR-005` accepted, `ADR-006` accepted 2026-11-21 (`IG-8`/`IG-9`, *Amendment 3*); `entity-catalog` now carries `sessions` (23 tables) and `IMPLEMENTATION_STATUS` records S3–S6 — done in `e9d1621`. `api-conventions` now documents registration and the S7/S8 split (§8.1), and §8 carries the approved cookie and CSRF wording. Still absent: the `auth-deferred.md` pointer (`consistency-checklist.md` §6.1) |
 
 Gates this phase answered: `AG-1`, `AG-2`, `IG-5`, `IG-11`, plus `IG-5-A1` and
@@ -507,18 +507,20 @@ and are listed there.
 ### S8 verification, 2026-11-21
 
 The base implementation is committed and pushed as `7c7b61a` (`feat(auth): implement S8
-login and sessions`). The session-resolution and CORS `PUT` hardening described below is
-in the working tree after that commit and is not committed.
+login and sessions`); the session-resolution and CORS `PUT` hardening is committed and
+pushed as `913b041` (`fix(auth): resolve sessions in one locked statement`). The
+expiry-during-lock-wait correction described at the end of the hardening section is in the
+working tree after `913b041` and is not committed.
 
 | Check | Command | Result |
 |---|---|---|
 | Workspace build | `pnpm build` | exit 0 — 5/5 tasks |
 | Workspace typecheck | `pnpm typecheck` | exit 0 — 7/7 tasks |
 | Workspace lint | `pnpm lint` | exit 0 — 5/5 tasks |
-| Workspace tests | `pnpm test` | exit 0 — contracts **213**, api **171**, database **34** |
+| Workspace tests | `pnpm test` | exit 0 — contracts **213**, api **199**, database **34** |
 | Schema suite | `pnpm --filter @agroclimate/database test:schema` | **22 passed** |
-| RLS suite | `pnpm --filter @agroclimate/database test:rls` | **88 passed** |
-| Real-role integration | `NODE_ENV=development pnpm --filter @agroclimate/database test:integration` | **25 passed** |
+| RLS suite | `pnpm --filter @agroclimate/database test:rls` | **90 passed** |
+| Real-role integration | `NODE_ENV=development pnpm --filter @agroclimate/database test:integration` | **38 passed** |
 | Prettier | `pnpm format:check` | exit 0 |
 | Whitespace | `git diff --check` | exit 0 |
 
@@ -541,7 +543,53 @@ through `app_auth`, the lookup needs no `app.user_id`, and `findAuthUserByEmail`
 covered by an integration test that asserts `current_user = app_auth` and
 `current_setting('app.user_id') = NULL`. `IG-10` and `IG-6` are unchanged.
 
-### S8 hardening, 2026-11-21 (working tree, not committed)
+### S8 CSRF completion, 2026-11-21
+
+**Approved, implemented, verified, applied to the canonical development database, not
+committed.** These are four different states and only the first three hold.
+
+| Layer | State |
+|---|---|
+| Owner decision | *Amendment 4* (A4.1–A4.4) — storage, lifecycle, validation, migration ownership |
+| Migration file | `prisma/migrations/20261121000000_session_csrf_token/migration.sql` |
+| Applied to canonical dev DB | **yes** — `pnpm db:migrate`, 6/6 migrations; custom-format backup taken and validated first |
+| Runtime code | `packages/database/src/auth-csrf.ts`, `apps/api/src/auth/csrf-token.ts`, `csrf-validator.ts`, `AuthGuard`, `GET /v1/auth/csrf` |
+| Committed / pushed | **no** |
+
+**Schema and grants.** One nullable `text` column (`csrf_token`), one CHECK
+(`csrf_token IS NULL OR csrf_token ~ '^[A-Za-z0-9_-]{43}$'`), and two column grants to
+`app_auth` — `SELECT (csrf_token)` and `UPDATE (csrf_token)`. No `NOT NULL`, no default,
+no backfill, no generated column, no `SECURITY DEFINER`, no RLS change, no table
+privilege, and `app_api`/`app_system` still hold nothing on `app.sessions`. Every existing
+session kept `NULL` and stayed valid.
+
+**Behaviour.** `GET /v1/auth/csrf` (behind `AuthGuard`) mints 32 CSPRNG bytes as
+base64url on the first retrieval, stores them, and returns the same value on every later
+retrieval — no rotation, so a second tab or a reload keeps working. The write is
+conditional (`WHERE csrf_token IS NULL`), so a race leaves one token and the loser adopts
+it. `Cache-Control: no-store`; the token appears in no other response, log line, or error
+detail.
+
+**Enforcement.** `AuthGuard` validates `X-CSRF-Token` on `POST`/`PUT`/`PATCH`/`DELETE`
+after the session is resolved and before the handler. It is deliberately not route
+metadata: a route behind the guard is protected by construction, so a new authenticated
+mutation cannot be added with the check forgotten. `register`, `login`, and `logout` are
+exempt because they never reach the guard, and `Origin` validation — unchanged and still
+independent — covers them.
+
+**Verification.** Real PostgreSQL, real roles: the migration applies; a `NULL`-token
+session still resolves; lazy init mints once and never rotates; two concurrent retrievals
+leave one value; revoked and both classes of expired session can neither read nor mint;
+the CHECK refuses 42/44-character, padded, `+`/`/`, dot, space, and empty values with
+`23514`; `app_api` is refused `42501` on `SELECT csrf_token`, `UPDATE csrf_token`, and any
+`SELECT` of the table; `app_auth` still cannot rewrite `token_hash`, `created_at`,
+`absolute_expires_at`, cannot `DELETE`, and cannot insert `csrf_token`. API tests cover
+retrieval, `no-store`, `401` for every unusable session, stable repeat retrievals, the
+guard's method matrix (missing/empty/short/non-canonical/duplicate/joined/foreign/absent
+token → one `403 FORBIDDEN`), safe methods needing no token, the three exemptions, and
+`Origin` still refusing a foreign origin on those exempt routes.
+
+### S8 hardening, 2026-11-21 (committed as `913b041`, except the last correction)
 
 **Session authentication could accept stale state.** `authenticate` ran
 `findActiveSession` and then `extendSession`. The second call returned `null` both when
@@ -582,6 +630,22 @@ deadline; a revocation that commits while the authentication statement is blocke
 row lock is rejected; an extension that races a revoke cannot resurrect the session. API
 tests add the same distinction against the double, plus `503 DEPENDENCY_UNAVAILABLE` when
 the session store is unreachable.
+
+**Expiry during the lock wait (correction, working tree after `913b041`).** The row lock
+closed the revocation race, not the clock. `now()` is `transaction_timestamp()`: it is
+fixed when the transaction begins, which for a single statement is *before* the scan
+reaches the row. An authentication statement that queues behind another transaction's
+`FOR UPDATE` could therefore outlive the session's deadline and still classify the row
+`active` on the earlier instant — and, because the throttle was open, extend it. The
+statement now reads `clock_timestamp()` once into a `MATERIALIZED` CTE that selects `FROM
+candidate`, and every deadline check, the throttle, `last_seen_at`, the `LEAST(...)` clamp,
+and the final classification use that one value. `MATERIALIZED` is required, not stylistic:
+an inlined CTE is re-evaluated per reference, so the extension and the classification could
+disagree. The dependency is the guarantee — `evaluation` cannot run before the candidate
+scan yields its row, and the scan cannot yield it before the lock is granted. Proven by a
+real PostgreSQL test that holds the row, asserts via `pg_locks` that the authentication
+backend is blocked, waits past the deadline, releases the lock, and gets `expired` with
+`last_seen_at` untouched. The same test fails against the `now()` form.
 
 Remaining concurrency limitation, stated rather than implied: the guarantee is about the
 window *inside* the statement. A revocation that commits after the statement returns but

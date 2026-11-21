@@ -218,6 +218,15 @@ tested against the real roles:
 The earlier two-call shape (`find`, then `extend`) could not distinguish a throttled
 extension from a revoked session, which is why it was replaced rather than patched.
 
+**The statement's clock is read after the lock, not at transaction start.** `now()` is
+`transaction_timestamp()` and is frozen before the scan reaches the row, so a statement
+that waits behind another transaction's `FOR UPDATE` can evaluate a deadline that has
+already passed and still call the session live. The single statement therefore takes
+`clock_timestamp()` once, after the candidate row is locked, and uses that one value for
+both expiry checks, the throttle, `last_seen_at`, the clamp, and the classification. This
+is a property of the query, not a new object: no column, grant, or constraint expresses it,
+and `db:verify` cannot assert it — only the lock-wait test can.
+
 The clamp bounds the *result* of any number of racing extensions — `expires_at` can
 never pass `absolute_expires_at` — but bounding the result is not enforcing the
 throttle, and the two must not be conflated.
@@ -245,16 +254,26 @@ Ownership: `app.sessions` and its indexes are created by the migration connectio
 are owned by `migration_owner`, like every other object in `app`.
 
 ```sql
--- Proposed by the S5 migration. NOT APPLIED.
+-- S5's grants, plus one column each from S8's CSRF follow-up. Applied.
 GRANT SELECT (id, user_id, token_hash, expires_at, absolute_expires_at,
-              revoked_at, last_seen_at, created_at) ON app.sessions TO app_auth;
+              revoked_at, last_seen_at, created_at, csrf_token) ON app.sessions TO app_auth;
 GRANT INSERT (user_id, token_hash, expires_at, absolute_expires_at) ON app.sessions TO app_auth;
-GRANT UPDATE (expires_at, last_seen_at, revoked_at) ON app.sessions TO app_auth;
+GRANT UPDATE (expires_at, last_seen_at, revoked_at, csrf_token) ON app.sessions TO app_auth;
 -- no DELETE grant to any runtime role
 -- no table privilege of any kind to app_api or app_system
 -- app_system receives EXECUTE on app.purge_expired_sessions() instead — see
 -- "Garbage collection"; that is a function privilege, not a table one
 ```
+
+`csrf_token` is the one column added after S5 (`20261121000000_session_csrf_token`). It is
+nullable, plaintext, and readable and writable by `app_auth` only; `app_api` and
+`app_system` still hold nothing on the table. It is **not** held to the session token's
+hash-only rule, and that difference is deliberate rather than a relaxation: the session
+token *is* the credential, while the CSRF token only proves a request came from a page
+that could read the session's own response. It must be re-served unchanged on every
+retrieval, which a hash cannot do — and reissuing on retrieval would be rotation, which
+`ADR-006` D2.1 does not have. Its shape is a `CHECK`, because a column grant can say
+*which* column a credential may write but never *what* it may write.
 
 What the column grants do and do not do, stated because it is easy to over-read them:
 

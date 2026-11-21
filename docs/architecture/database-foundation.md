@@ -18,6 +18,7 @@ migration ledger — not the schema author.
 | Privilege verification against the real roles | `packages/database/scripts/lib/privilege-verification.mjs` |
 | Probe isolation and cleanup-safety test | `packages/database/scripts/verify-probe-isolation.mjs` |
 | Tenant tables, RLS policies, runtime grants | `packages/database/prisma/migrations/20261118020000_tenant_tables/` |
+| Session CSRF token: one nullable column, one CHECK, two column grants | `packages/database/prisma/migrations/20261121000000_session_csrf_token/` |
 | `withTenant` — the only tenant entry point | `packages/database/src/tenant.ts` |
 | Unit tests (no database) and RLS integration tests | `packages/database/test/unit/`, `packages/database/test/rls/` |
 

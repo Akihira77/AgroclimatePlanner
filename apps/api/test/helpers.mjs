@@ -22,6 +22,12 @@ export function testConfig(overrides = {}) {
   };
 }
 
+/** The validity predicates every CSRF statement repeats. */
+function usable(session) {
+  const now = Date.now();
+  return session.revokedAt === null && session.expiresAt > now && session.absoluteExpiresAt > now;
+}
+
 export function testDatabase() {
   const state = {
     created: 0,
@@ -155,6 +161,7 @@ export function testDatabase() {
           absoluteExpiresAt: now + 90 * 24 * 60 * 60 * 1000,
           revokedAt: null,
           lastSeenAt: now,
+          csrfToken: null,
         };
         state.sessions.set(tokenHash, session);
         return [
@@ -164,6 +171,31 @@ export function testDatabase() {
             absolute_expires_at: new Date(session.absoluteExpiresAt),
           },
         ];
+      }
+
+      /**
+       * `readSessionCsrfToken`: the token, only for a session that is still usable.
+       * A revoked or expired row answers `[]`, which is what makes "a dead session
+       * has no usable token" testable without a real database.
+       */
+      if (/SELECT csrf_token/.test(sql)) {
+        const session = [...state.sessions.values()].find((entry) => entry.id === values[0]);
+        if (session === undefined || !usable(session)) return [];
+        return [{ csrf_token: session.csrfToken }];
+      }
+
+      /**
+       * The lazy claim. The predicate is `csrf_token IS NULL`, so a second caller
+       * matches no row and falls through to the re-read — exactly the shape the real
+       * statement has.
+       */
+      if (/SET csrf_token = /.test(sql)) {
+        // Positional, in SQL order: the `SET` value comes before the `WHERE` id.
+        const [candidate, sessionId] = values;
+        const session = [...state.sessions.values()].find((entry) => entry.id === sessionId);
+        if (session === undefined || !usable(session) || session.csrfToken !== null) return [];
+        session.csrfToken = candidate;
+        return [{ csrf_token: candidate }];
       }
 
       /**
@@ -284,6 +316,7 @@ export function seedSession(database, { userId, tokenHash, ...overrides }) {
     absoluteExpiresAt: now + 90 * 24 * 60 * 60 * 1000,
     revokedAt: null,
     lastSeenAt: now,
+    csrfToken: null,
     ...overrides,
   };
   database.state.sessions.set(tokenHash, session);

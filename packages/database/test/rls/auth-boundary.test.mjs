@@ -410,6 +410,43 @@ describe("app_auth on app.sessions", () => {
     assert.equal(result.rowCount, 1);
   });
 
+  it("can read and lazily set csrf_token, and only while it is null", async () => {
+    const read = await allowed(auth, "select csrf_token from app.sessions where token_hash = $1", [
+      fixtures.tokenHash,
+    ]);
+    assert.equal(read.rowCount, 1);
+    assert.equal(read.rows[0].csrf_token, null, "not issued yet");
+
+    const token = "A".repeat(42) + "B";
+    const claimed = await allowed(
+      auth,
+      `update app.sessions set csrf_token = $2
+        where token_hash = $1 and csrf_token is null`,
+      [fixtures.tokenHash, token],
+    );
+    assert.equal(claimed.rowCount, 1);
+
+    // The claim predicate is the rotation guard: a second write matches nothing.
+    const again = await allowed(
+      auth,
+      `update app.sessions set csrf_token = $2
+        where token_hash = $1 and csrf_token is null`,
+      [fixtures.tokenHash, "C".repeat(43)],
+    );
+    assert.equal(again.rowCount, 0);
+  });
+
+  it("cannot store a csrf_token the format rule excludes", async () => {
+    for (const value of ["A".repeat(42), "A".repeat(44), `${"A".repeat(42)}=`, ""]) {
+      await deniedCode(
+        auth,
+        "update app.sessions set csrf_token = $2 where token_hash = $1",
+        [fixtures.tokenHash, value],
+        "23514",
+      );
+    }
+  });
+
   it("cannot rewrite token_hash, user_id, created_at or absolute_expires_at", async () => {
     // The UPDATE grant is exactly the sliding window plus logout. `created_at`
     // and the cap are outside it, so a stolen credential cannot mint or extend.
@@ -460,6 +497,7 @@ describe("other roles on app.sessions", () => {
   ]) {
     it(`${label} is denied all four table verbs`, async () => {
       await deniedCode(client, "select * from app.sessions", [], "42501");
+      await deniedCode(client, "select csrf_token from app.sessions", [], "42501");
       await deniedCode(
         client,
         `insert into app.sessions (user_id, token_hash, expires_at, absolute_expires_at)

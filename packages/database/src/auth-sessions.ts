@@ -96,6 +96,20 @@ export type SessionResolution =
  *   the throttle's predicate is evaluated against the winner's write rather than a
  *   stale snapshot.
  *
+ * **Time is taken after the lock, not at transaction start.** `now()` is
+ * `transaction_timestamp()`: it is frozen when the transaction begins, which for a
+ * `BEGIN`-less single statement is before the scan reaches the row. If this statement
+ * queues behind another transaction's `FOR UPDATE`, the session can expire during the
+ * wait and `now()` would still report the earlier instant — the row would be classified
+ * `active` on a deadline that had already passed. So the evaluation instant is
+ * `clock_timestamp()`, read once into a `MATERIALIZED` CTE that selects `FROM
+ * candidate`. The dependency is the guarantee: `evaluation` cannot run before the
+ * candidate scan has produced its row, and that scan cannot produce it before the row
+ * lock is granted. `MATERIALIZED` is what makes "once" true — an inlined CTE is
+ * re-evaluated per reference and would let the extension and the classification see
+ * different instants. Every time-dependent predicate and write below reads `ev.at`
+ * only; a stray `now()` would reintroduce the bug for that one clause.
+ *
  * The outcome is classified in SQL, but the classification is only used to *describe*
  * a failure for the operator (`revoked`, `expired`, `unknown`); every non-active
  * outcome collapses to the same `null` in the service and the same `401` on the
@@ -117,21 +131,25 @@ export async function resolveSession(
        WHERE token_hash = ${tokenHash}
        FOR UPDATE
     ),
+    evaluation AS MATERIALIZED (
+      SELECT clock_timestamp() AS at
+        FROM candidate
+    ),
     extended AS (
       UPDATE app.sessions s
-         SET last_seen_at = now(),
-             expires_at   = LEAST(now() + INTERVAL '30 days', s.absolute_expires_at)
-        FROM candidate c
+         SET last_seen_at = ev.at,
+             expires_at   = LEAST(ev.at + INTERVAL '30 days', s.absolute_expires_at)
+        FROM candidate c, evaluation ev
        WHERE s.id = c.id
          AND c.revoked_at IS NULL
-         AND c.expires_at > now()
-         AND c.absolute_expires_at > now()
-         AND c.last_seen_at <= now() - INTERVAL '5 minutes'
+         AND c.expires_at > ev.at
+         AND c.absolute_expires_at > ev.at
+         AND c.last_seen_at <= ev.at - INTERVAL '5 minutes'
       RETURNING s.id, s.expires_at, s.absolute_expires_at
     )
     SELECT CASE
              WHEN c.revoked_at IS NOT NULL THEN 'revoked'
-             WHEN c.expires_at <= now() OR c.absolute_expires_at <= now() THEN 'expired'
+             WHEN c.expires_at <= ev.at OR c.absolute_expires_at <= ev.at THEN 'expired'
              ELSE 'active'
            END AS outcome,
            (e.id IS NOT NULL) AS extended,
@@ -144,6 +162,7 @@ export async function resolveSession(
            u.locale,
            u.timezone
       FROM candidate c
+      CROSS JOIN evaluation ev
       LEFT JOIN extended e ON e.id = c.id
       LEFT JOIN app.users u ON u.id = c.user_id
   `;

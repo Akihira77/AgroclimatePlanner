@@ -5,6 +5,7 @@ import type { Response } from "express";
 import type { ApiRequest } from "../http/request-id.middleware.js";
 import type { AuthenticatedUser } from "./auth.service.js";
 import { AuthService } from "./auth.service.js";
+import { CSRF_PROTECTED_METHODS, CsrfValidator } from "./csrf-validator.js";
 import { clearSessionCookie, readSessionToken, setSessionCookie } from "./session-cookie.js";
 import { isWellFormedSessionToken } from "./session-token.js";
 
@@ -32,10 +33,21 @@ export type AuthenticatedRequest = ApiRequest & { auth?: AuthenticatedContext };
  * Missing, malformed, unknown, expired, and revoked sessions are one answer:
  * `401 UNAUTHENTICATED`. The distinctions are useful in an operator's log and
  * dangerous in a response; none of them is a client's business.
+ *
+ * **CSRF is enforced here, not by route metadata.** Once the subject exists, a
+ * `POST`/`PUT`/`PATCH`/`DELETE` must also present a valid synchronizer token. Any
+ * authenticated mutation route gets that for free, and there is no per-route
+ * annotation that can be forgotten — a route that uses this guard is protected,
+ * and a route that does not use it is not authenticated either. `register`,
+ * `login`, and `logout` are exempt because they never reach this guard; `Origin`
+ * validation still covers them.
  */
 @Injectable()
 export class AuthGuard implements CanActivate {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly csrf: CsrfValidator,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const http = context.switchToHttp();
@@ -54,6 +66,13 @@ export class AuthGuard implements CanActivate {
     }
 
     request.auth = { user: session.user, sessionId: session.sessionId };
+
+    // After authentication, before the handler. A `403` here means the session is
+    // valid and the request is not authorised — re-authenticating would not help,
+    // which is why it is not a `401`.
+    if (CSRF_PROTECTED_METHODS.has(request.method.toUpperCase())) {
+      await this.csrf.assertValid(request, session.sessionId);
+    }
 
     // The deadline comes from the row, already clamped to the absolute deadline by
     // the extension statement. It is never computed here, so the cookie cannot

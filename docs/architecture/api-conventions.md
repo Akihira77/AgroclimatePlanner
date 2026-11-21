@@ -244,7 +244,7 @@ GET    /health  |  /health/ready
 ## 8. Auth and authorization
 
 - Session cookie: `__Host-agroclimate_session`, host-only (`Domain` unset), `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`; server-side session table; sliding expiry 30 d, absolute 90 d. Only `sha256(token)` is stored, and the raw token never appears in a response body. Approved 2026-11-21 (`IG-8`, `ADR-006`). Delivered in S8; the table exists since S5.
-- CSRF: synchronizer token bound to the authenticated session, sent as `X-CSRF-Token` and validated server-side, plus exact `Origin` validation against `CORS_ORIGINS` on `POST`, `PUT`, `PATCH`, and `DELETE`. Registration, login, and logout are covered by `Origin` validation, because no authenticated session exists to bind a token to yet. `SameSite=Lax` is defence in depth, never the mechanism. Approved 2026-11-21 (`IG-9`, `ADR-006`); this replaces the earlier "double-submit token on non-GET" wording. **S8 implements the `Origin` half only**; the synchronizer token is specified in `docs/review/s8-csrf-token-design-proposal.md` and is not implemented, because its storage needs a migration and a grant change. `IG-9` is partially satisfied.
+- CSRF: synchronizer token bound to the authenticated session, sent as `X-CSRF-Token` and validated server-side, plus exact `Origin` validation against `CORS_ORIGINS` on `POST`, `PUT`, `PATCH`, and `DELETE`. Registration, login, and logout are covered by `Origin` validation, because no authenticated session exists to bind a token to. `SameSite=Lax` is defence in depth, never the mechanism. Approved 2026-11-21 (`IG-9`, `ADR-006`) and **both halves implemented** in `S8`: `Origin` in the middleware chain, the token in `AuthGuard`. This replaces the earlier "double-submit token on non-GET" wording; the design record is `docs/review/s8-csrf-token-design-proposal.md`.
 - Authorization: ownership checked at the controller boundary, mirrored by Postgres RLS. A `404` is returned for another user's resource — never `403`, which leaks existence.
 - Roles: `owner` (everything on own data), `admin` (catalog and profile publishing, read-only on other users' farms). No per-field granularity in v1.
 
@@ -324,6 +324,20 @@ Credential verification (S7, internal — no route):
 - Validation and extension are **one statement** holding a row lock. A revocation that
   races an authentication either lands before the read or after the subject is
   established; it cannot land in between and be mistaken for a throttled extension.
+- `GET /v1/auth/csrf` returns `{ data: { token } }` for the authenticated session with
+  `Cache-Control: no-store`. The token is 32 CSPRNG bytes as unpadded base64url — 43
+  characters — stored **plaintext** in a nullable `app.sessions.csrf_token`, minted on the
+  first retrieval and never rotated, so a second tab or a reload receives the same value.
+  A missing, malformed, revoked, or expired session is the guard's `401`; the endpoint has
+  no failure branch of its own.
+- Authenticated `POST`/`PUT`/`PATCH`/`DELETE` must present that token in `X-CSRF-Token`.
+  Validation runs inside `AuthGuard` after the session is resolved and before the handler,
+  so an authenticated route cannot be added without it. Comparison is
+  `crypto.timingSafeEqual` over 32-byte buffers, after a shape check that also rejects
+  duplicated and comma-joined headers. Every failure — absent, empty, malformed,
+  non-canonical, foreign, or never issued — is one `403 FORBIDDEN`; the session is valid
+  and re-authenticating would not help. `register`, `login`, and `logout` are exempt
+  because they are not behind the guard, and `Origin` validation still covers them.
 
 Passwords are hashed with Argon2id (`IG-6`): a fresh 16-byte random salt per hash,
 32-byte output, PHC string encoding, and parameters held in one configuration constant.

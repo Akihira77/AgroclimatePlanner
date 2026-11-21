@@ -18,8 +18,10 @@ credential `app_auth` holds column grants on
 `app.users` (`users_auth_lookup`, `users_auth_register`) applied by
 `prisma/migrations/20261118040000_auth_boundary/migration.sql` (`b9a27c6`), and on
 `app.sessions` (`sessions_auth_all`) applied by
-`prisma/migrations/20261118050000_sessions/migration.sql` (`8fb2270`); `app_api` holds
-nothing on either table.
+`prisma/migrations/20261118050000_sessions/migration.sql` (`8fb2270`), plus one column —
+`csrf_token`, `SELECT`/`UPDATE` to `app_auth` only — from
+`prisma/migrations/20261121000000_session_csrf_token/`; `app_api` holds nothing on either
+table.
 
 `OPEN-01` is still open in the register: the boundary that answers it exists on the
 canonical database and is exercised by `db:verify` and the `auth-boundary` suite, but

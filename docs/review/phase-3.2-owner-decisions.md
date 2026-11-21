@@ -1614,3 +1614,22 @@ carve-out.
 | `IG-8` implementation | implemented in `S8` | unchanged |
 | Schema, migrations, grants | — | unchanged |
 | Sessions valid | — | unchanged; no backfill required by design |
+
+## A4.7 Implementation status (2026-11-21, later the same day)
+
+A4.1–A4.4 were written as approvals and deliberately recorded nothing as implemented. A
+follow-up task implemented them, and this note records that without altering the approved
+text above.
+
+| Item | State |
+|---|---|
+| `CSRF-1` plaintext nullable column | implemented — `20261121000000_session_csrf_token` |
+| `CSRF-2` lifecycle, `GET /v1/auth/csrf`, no rotation | implemented, with lazy generation at first retrieval |
+| `CSRF-3` `X-CSRF-Token`, constant time, `403`, methods, exemptions | implemented in `AuthGuard` (not per-route metadata) |
+| `CSRF-4` migration scope and grants | implemented exactly as specified: one column, one CHECK, `SELECT`/`UPDATE` to `app_auth` only |
+| Applied to canonical development database | **yes** — `db:migrate`, 6/6, after a validated backup |
+| Committed / pushed | **no** |
+| Verified | real-role integration (12 tests), API route and guard tests, schema, RLS, build, typecheck, lint |
+
+Nothing in A4.5 was contradicted: the amendment itself still added nothing, and the
+implementation is a separate task that this note points at.

@@ -8,6 +8,7 @@ import { AUTH_RATE_LIMITER, PASSWORD_HASHER } from "../tokens.js";
 import { AuthController } from "./auth.controller.js";
 import { AuthGuard } from "./auth.guard.js";
 import { AuthService } from "./auth.service.js";
+import { CsrfValidator } from "./csrf-validator.js";
 import { createPasswordHasher } from "./password-hasher.js";
 import {
   AUTH_RATE_LIMIT,
@@ -50,6 +51,7 @@ export class AuthModule {
         AuthRateLimitGuard,
         AuthService,
         AuthGuard,
+        CsrfValidator,
       ],
     };
   }

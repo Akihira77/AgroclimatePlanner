@@ -26,6 +26,7 @@ export type {
   SessionOutcome,
   SessionResolution,
 } from "./auth-sessions.js";
+export { readSessionCsrfToken, resolveSessionCsrfToken } from "./auth-csrf.js";
 export { createTenantScope, normaliseTenantId, TenantContextError } from "./tenant.js";
 export type { TenantScope, TenantTransaction } from "./tenant.js";
 

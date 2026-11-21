@@ -1,4 +1,5 @@
 import type {
+  CsrfTokenResponse,
   Envelope,
   LoginRequest,
   RegisterRequest,
@@ -112,6 +113,36 @@ export class AuthController {
     // not a second authentication check.
     if (context === undefined) throw unauthenticated();
     return { data: context.user };
+  }
+
+  /**
+   * The CSRF synchronizer token for this session (`ADR-006` §D2.1, `Amendment 4`).
+   *
+   * Generated on first retrieval and never rotated, so a second tab or a reload gets
+   * the same value. `no-store` because the value is session-scoped: a shared cache
+   * that kept it would hand one session's token to another.
+   *
+   * This is the **only** response that carries the token. It is not in `/me`, login,
+   * registration, an error body, or a log line.
+   *
+   * `null` from the service means the session became unusable between the guard's
+   * statement and this read; the same `401` the guard would have answered is the
+   * only honest reply.
+   */
+  @Get("csrf")
+  @UseGuards(AuthGuard)
+  async csrf(
+    @Req() request: AuthenticatedRequest,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<Envelope<CsrfTokenResponse>> {
+    const context = request.auth;
+    if (context === undefined) throw unauthenticated();
+
+    const token = await this.auth.issueCsrfToken(context.sessionId);
+    if (token === null) throw unauthenticated();
+
+    response.setHeader("Cache-Control", "no-store");
+    return { data: { token } };
   }
 
   /**

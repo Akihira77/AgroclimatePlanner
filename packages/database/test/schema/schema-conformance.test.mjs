@@ -351,7 +351,7 @@ function normaliseCheck(definition) {
 }
 
 describe("app.sessions structure", () => {
-  test("the eight columns match the definition in attnum order", async () => {
+  test("the nine columns match the definition in attnum order", async () => {
     const expected = [
       { name: "id", type: "uuid", notNull: true, default: "uuidv7()" },
       { name: "user_id", type: "uuid", notNull: true, default: null },
@@ -386,6 +386,9 @@ describe("app.sessions structure", () => {
         notNull: true,
         default: "now()",
       },
+      // `Amendment 4`: nullable by design — `NULL` is "not issued yet" — and
+      // plaintext because the value must be re-served on every retrieval.
+      { name: "csrf_token", type: "text", notNull: false, default: null },
     ];
 
     const { rows } = await owner.query(
@@ -409,15 +412,16 @@ describe("app.sessions structure", () => {
         default: row.default,
       })),
       expected,
-      "app.sessions columns must be exactly the eight approved definitions",
+      "app.sessions columns must be exactly the nine approved definitions",
     );
   });
 
-  test("the three CHECK constraints are an exact inventory", async () => {
+  test("the four CHECK constraints are an exact inventory", async () => {
     const expected = [
       "CHECK (absolute_expires_at >= expires_at AND expires_at > created_at)",
       "CHECK (token_hash ~ '^[0-9a-f]{64}$')",
       "CHECK (absolute_expires_at <= created_at + INTERVAL '90 days')",
+      "CHECK (csrf_token IS NULL OR csrf_token ~ '^[A-Za-z0-9_-]{43}$')",
     ]
       .map(normaliseCheck)
       .sort();
@@ -431,15 +435,15 @@ describe("app.sessions structure", () => {
 
     assert.equal(
       rows.length,
-      3,
-      `app.sessions must carry exactly three CHECK constraints (found ${rows
+      4,
+      `app.sessions must carry exactly four CHECK constraints (found ${rows
         .map((row) => row.conname)
         .join(", ")})`,
     );
     assert.deepEqual(
       rows.map((row) => normaliseCheck(row.definition)).sort(),
       expected,
-      "app.sessions CHECK definitions must match the expiry order, hash shape and 90-day cap",
+      "app.sessions CHECK definitions must match the expiry order, hash shape, 90-day cap and CSRF shape",
     );
   });
 
@@ -607,7 +611,7 @@ describe("app.sessions structure", () => {
     );
     const names = columns.map((column) => column.name);
     const insertable = new Set(["user_id", "token_hash", "expires_at", "absolute_expires_at"]);
-    const updatable = new Set(["expires_at", "last_seen_at", "revoked_at"]);
+    const updatable = new Set(["expires_at", "last_seen_at", "revoked_at", "csrf_token"]);
 
     const { rows } = await owner.query(
       `select a.attname as name,
@@ -643,7 +647,7 @@ describe("app.sessions structure", () => {
         canUpdate: updatable.has(name),
         canDelete: false,
       })),
-      "app_auth column grants must be SELECT all, INSERT four, UPDATE three, DELETE none",
+      "app_auth column grants must be SELECT all, INSERT four, UPDATE four, DELETE none",
     );
   });
 

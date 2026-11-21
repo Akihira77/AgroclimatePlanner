@@ -103,6 +103,32 @@ async function backdateLastSeen(sessionId, minutes) {
   );
 }
 
+/**
+ * Waits until a backend in this database is blocked acquiring a lock.
+ *
+ * `pg_stat_activity` masks another role's `wait_event_type` as `NULL` unless the
+ * reader holds `pg_read_all_stats`, which `migration_owner` does not — a query that
+ * waited on it would silently never detect the lock. `pg_locks` is readable by every
+ * role, so the wait is observed there instead.
+ */
+async function waitForLockWaiter(timeoutMs = 5_000) {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    const { rows } = await owner.query(
+      // `pg_locks.database` is NULL for the `transactionid` lock this wait is on, so
+      // the blocked backend is identified through `pg_stat_activity` instead.
+      `SELECT count(*)::int AS n
+         FROM pg_locks l
+         JOIN pg_stat_activity a USING (pid)
+        WHERE NOT l.granted
+          AND a.datname = current_database()`,
+    );
+    if (rows[0].n > 0) return true;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return false;
+}
+
 async function issue(label = "session") {
   const raw = token();
   const session = await insertSession(auth, userId, hashOf(raw));
@@ -395,6 +421,63 @@ describe("logout", () => {
     ]);
     assert.equal(count.rows[0].n, 1);
     assert.equal((await resolveSession(auth, hashOf(raw))).outcome, "revoked");
+  });
+});
+
+describe("expiry while waiting for the row lock", () => {
+  it("classifies as expired a session that dies during the lock wait", async () => {
+    // `now()` is `transaction_timestamp()`, frozen before the scan reaches the row.
+    // While this statement queues behind another transaction's `FOR UPDATE`, the
+    // session can expire; a transaction-start reference would still report the row as
+    // live and authenticate it. `clock_timestamp()` read after the lock decides.
+    const { raw, session } = await issue();
+
+    await owner.query(
+      `UPDATE app.sessions
+          SET created_at          = clock_timestamp() - interval '1 day',
+              expires_at          = clock_timestamp() + interval '700 milliseconds',
+              absolute_expires_at = clock_timestamp() + interval '1 day'
+        WHERE id = $1`,
+      [session.id],
+    );
+    // Six minutes old, so an incorrectly-timed statement would not merely call it
+    // active — it would find the throttle open and extend the row, resetting the
+    // deadline. The bug then survives any later check of `expires_at`.
+    await backdateLastSeen(session.id, 6);
+
+    const before = await readSession(session.id);
+    assert.equal(before.expires_at.getTime() > Date.now(), true, "live when the lock is taken");
+
+    await owner.query("BEGIN");
+    try {
+      await owner.query("SELECT 1 FROM app.sessions WHERE token_hash = $1 FOR UPDATE", [
+        hashOf(raw),
+      ]);
+
+      let settled = false;
+      const pending = resolveSession(auth, hashOf(raw)).finally(() => {
+        settled = true;
+      });
+
+      assert.equal(await waitForLockWaiter(), true, "authentication is blocked on the lock");
+      assert.equal(settled, false, "and has therefore read no deadline yet");
+
+      // Now let the deadline pass while the statement is still waiting.
+      const remaining = before.expires_at.getTime() - Date.now();
+      await new Promise((resolve) => setTimeout(resolve, Math.max(0, remaining) + 60));
+
+      await owner.query("COMMIT");
+
+      const resolution = await pending;
+      assert.equal(resolution.outcome, "expired");
+      assert.equal(settled, true);
+    } finally {
+      await owner.query("ROLLBACK").catch(() => {});
+    }
+
+    const after = await readSession(session.id);
+    assert.equal(after.expires_at.getTime(), before.expires_at.getTime(), "never extended");
+    assert.equal(after.last_seen_at.getTime(), before.last_seen_at.getTime(), "never touched");
   });
 });
 

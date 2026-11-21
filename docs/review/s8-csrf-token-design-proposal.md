@@ -1,8 +1,10 @@
 # S8 — CSRF synchronizer token: design record
 
-**Status: decisions approved, implementation not started.**
+**Status: decisions approved (Amendment 4); implemented and verified 2026-11-21; not committed.**
 **Decided in:** *Amendment 4* of `docs/review/phase-3.2-owner-decisions.md` (2026-11-21).
 **Durable architectural record:** `docs/adr/ADR-006-session-transport-and-csrf.md` §D2.
+**Migration:** `prisma/migrations/20261121000000_session_csrf_token/` — applied to the
+canonical development database, not yet committed.
 
 `IG-9` approved the pattern (synchronizer token, `X-CSRF-Token`, constant-time
 comparison, `POST`/`PUT`/`PATCH`/`DELETE`) and *Amendment 3* left token length, encoding,
@@ -10,9 +12,9 @@ storage, retrieval, and rotation open. *Amendment 4* closes those four. This doc
 the design record those decisions produced, plus the implementation plan they authorise
 and the boundaries that plan must not cross.
 
-Nothing below is implemented. No column, migration, grant, endpoint, middleware, or guard
-exists for CSRF. `Origin` validation (`ADR-006` §D2.2) is implemented and is the only
-CSRF control shipping today.
+Both halves of `ADR-006` §D2 now exist: `Origin` validation in the middleware chain, and
+the synchronizer token in the database, the guard, and one endpoint. §2 and §3 below are
+kept as the approved design; §6 records what was built and where it differs.
 
 ---
 
@@ -22,11 +24,12 @@ CSRF control shipping today.
 |---|---|
 | `Origin` exact-match on `POST`/`PUT`/`PATCH`/`DELETE`, before body parsing | **implemented** |
 | `SameSite=Lax` cookie, `__Host-` prefix, `HttpOnly`, `Secure` | **implemented** |
-| Synchronizer token — generation, storage, retrieval | **not implemented** |
-| Synchronizer token — validation (`X-CSRF-Token`, constant time) | **not implemented** |
+| Synchronizer token — generation, storage, retrieval | **implemented** (`GET /v1/auth/csrf`) |
+| Synchronizer token — validation (`X-CSRF-Token`, constant time) | **implemented** (`AuthGuard`) |
 
-`ADR-006` §D2 requires both controls. Until the token exists, `IG-9` is partially
-implemented and `S8` is not complete.
+`ADR-006` §D2 requires both controls and both are now in place, so `IG-9` is satisfied by
+implementation rather than by approval. The remaining state difference is delivery: the
+code is uncommitted, so the deployed commit is still `913b041`.
 
 ## 2. Approved design
 
@@ -127,20 +130,76 @@ its token has not proven it can read the session's response.
 
 ## 4. Boundaries this document respects
 
-- No column, migration, or grant is added by the documentation task that recorded these
-  decisions, and nothing in the runtime reads a CSRF token today.
+- The documentation task that recorded these decisions added no column, migration, or
+  grant, and nothing in the runtime read a CSRF token then. A separate implementation task
+  has since added exactly one column, one CHECK, and two column grants (§6).
 - `app_api` gains nothing. `app_auth` gains read and write on one column.
 - No `SECURITY DEFINER` object, no `BYPASSRLS`, no RLS change.
 - Existing sessions remain valid, and no session is invalidated by adding the column.
 
 ## 5. Consequences to state plainly
 
-1. `IG-9` is approved and fully specified but **not implemented**; `S8` must not be
-   reported complete until it is.
-2. The migration is small but it is still a migration: it needs the same review as the
-   session migration, and `db:verify` must gain the two grants and the CHECK.
+1. `IG-9` is approved, fully specified, and — as of 2026-11-21 — **implemented and
+   verified**; `S8` may be reported complete on that basis, while the code remains
+   uncommitted (§6).
+2. The migration is small but it is still a migration: it needed the same review as the
+   session migration, and `db:verify` gained the two grants and the CHECK. It is applied
+   to the canonical development database; the code that depends on it is not committed.
 3. `app_auth` gains the ability to write one column on a session row it can already read.
    That is the minimum the lazy write needs; it does not grant access to any other column.
 4. A session whose token was never retrieved refuses state-changing requests. This is
    correct, and it is the one behaviour change clients must handle by fetching the token
    once per session.
+
+## 6. Implementation record (2026-11-21)
+
+What shipped, where it lives, and the three places the implementation is more specific
+than the plan above.
+
+| Piece | Location |
+|---|---|
+| Column, CHECK, two column grants | `prisma/migrations/20261121000000_session_csrf_token/migration.sql` |
+| Prisma model field | `packages/database/prisma/schema.prisma` — `csrfToken String? @map("csrf_token")` |
+| Lazy mint + conditional claim | `packages/database/src/auth-csrf.ts` — `resolveSessionCsrfToken` |
+| Validation read | `packages/database/src/auth-csrf.ts` — `readSessionCsrfToken` |
+| Generation, strict shape, constant-time compare, header reading | `apps/api/src/auth/csrf-token.ts` |
+| Enforcement | `apps/api/src/auth/csrf-validator.ts`, called from `AuthGuard` |
+| Endpoint | `apps/api/src/auth/auth.controller.ts` — `GET /v1/auth/csrf` |
+| Contract | `packages/contracts/src/auth.ts` — `CSRF_TOKEN_PATTERN`, `csrfTokenResponseSchema` |
+
+**Delta 1 — enforcement is inside `AuthGuard`, not in per-route metadata.** The plan
+proposed a separate guard applied alongside `AuthGuard`. Building it that way would make
+"authenticated mutation" and "CSRF-checked mutation" two lists that can drift, and the
+failure mode is silent: a new route that forgets the second guard is authenticated and
+unprotected. The requirement is derived from the method inside the guard that already
+authenticates, so the two sets cannot diverge. It also produces the exemptions without a
+list — `register`, `login`, and `logout` are not behind the guard at all.
+
+**Delta 2 — the read and the claim repeat the session's validity predicates.** The plan
+scoped both statements by `id` alone, relying on the guard's statement microseconds
+earlier. They now also require `revoked_at IS NULL` and both deadlines, so a session that
+becomes unusable between the two statements cannot hand out or accept a token. This is
+what makes "a revoked or expired session cannot retrieve or validate its token" true of
+the data layer and not only of the request path.
+
+**Delta 3 — the shape check is canonical, not just a regex.** A 43-character value can
+carry two bits that are not part of the 32-byte payload, so decoding is checked for
+exactly 32 bytes and the value must re-encode to itself. The regex is exported from
+`packages/contracts` so the wire contract and the validator cannot drift.
+
+**Test evidence.** `test/integration/csrf.test.mjs` (12 real-role tests) proves the
+migration's column, CHECK (`23514` on eight malformed values), lazy init, single-winner
+concurrency, unusable-session refusal, `app_auth`'s exact column rights, and `app_api`'s
+`42501` on `SELECT csrf_token`, `UPDATE csrf_token`, and the table itself.
+`apps/api/test/csrf-token.test.mjs` covers entropy, encoding, the non-canonical case,
+length-mismatch safety, and header ambiguity. `apps/api/test/auth-csrf.test.mjs` covers the
+endpoint, `no-store`, `401` for every unusable session, stable repeat retrieval, the guard
+method matrix (`403 FORBIDDEN` for missing/empty/short/non-canonical/duplicate/joined/
+foreign/never-issued), safe methods needing no token, the three exemptions, `Origin` still
+refusing a foreign origin on those exemptions, and no token through `/me`, login, or
+registration. Unit and route suites run without a database; the integration suite runs as
+the real roles.
+
+**Known limitation.** Validation costs one extra `SELECT` of one column per authenticated
+state-changing request; there is no cache, deliberately, because a cached token would be a
+second source of truth for a value whose whole purpose is to be checked against the row.

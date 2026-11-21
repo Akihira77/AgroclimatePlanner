@@ -170,3 +170,24 @@ export const registeredUserSchema = z.strictObject({
   timezone: z.string().min(1),
 });
 export type RegisteredUser = z.infer<typeof registeredUserSchema>;
+
+/**
+ * The CSRF synchronizer token, as it appears on the wire (`ADR-006` §D2,
+ * *Amendment 4*).
+ *
+ * 32 random bytes, base64url, unpadded — 43 characters from the URL-safe alphabet.
+ * The pattern is exported rather than written twice so the contract and the
+ * validator cannot drift; the validator adds the checks a regex cannot express
+ * (canonical round-trip, exactly 32 decoded bytes).
+ *
+ * The token is not a bearer credential and is never echoed inside an error, a log
+ * line, or any response other than its own retrieval endpoint.
+ */
+export const CSRF_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
+export const csrfTokenSchema = z.string().regex(CSRF_TOKEN_PATTERN);
+export type CsrfToken = z.infer<typeof csrfTokenSchema>;
+
+/** `GET /v1/auth/csrf` — the only response that carries the token. */
+export const csrfTokenResponseSchema = z.strictObject({ token: csrfTokenSchema });
+export type CsrfTokenResponse = z.infer<typeof csrfTokenResponseSchema>;

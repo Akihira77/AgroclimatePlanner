@@ -305,6 +305,72 @@ describe("session validation", () => {
   });
 });
 
+describe("CSRF token issuance", () => {
+  it("mints once and then returns the stored value", async () => {
+    const { database, service } = setup();
+    const user = seedUser(database, { email: "csrf@example.com", passwordHash: "hash" });
+    const session = seedSession(database, { userId: user.id, tokenHash: "a".repeat(64) });
+
+    const first = await service.issueCsrfToken(session.id);
+    const second = await service.issueCsrfToken(session.id);
+
+    assert.match(first, /^[A-Za-z0-9_-]{43}$/);
+    assert.equal(second, first, "a retrieval must never rotate the token");
+    assert.equal(database.state.sessions.get(session.tokenHash).csrfToken, first);
+  });
+
+  it("keeps one token when two retrievals race", async () => {
+    const { database, service } = setup();
+    const user = seedUser(database, { email: "race@example.com", passwordHash: "hash" });
+    const session = seedSession(database, { userId: user.id, tokenHash: "b".repeat(64) });
+
+    const [left, right] = await Promise.all([
+      service.issueCsrfToken(session.id),
+      service.issueCsrfToken(session.id),
+    ]);
+
+    assert.equal(left, right, "the loser adopts the winner's token");
+    assert.equal(database.state.sessions.get(session.tokenHash).csrfToken, left);
+  });
+
+  it("returns null for a session that is no longer usable, and mints nothing", async () => {
+    const { database, service } = setup();
+    const user = seedUser(database, { email: "dead@example.com", passwordHash: "hash" });
+    const session = seedSession(database, {
+      userId: user.id,
+      tokenHash: "c".repeat(64),
+      revokedAt: Date.now(),
+    });
+
+    assert.equal(await service.issueCsrfToken(session.id), null);
+    assert.equal(database.state.sessions.get(session.tokenHash).csrfToken, null);
+    assert.equal(await service.storedCsrfToken(session.id), null);
+  });
+
+  it("propagates an unreachable session store as 503, never as a CSRF failure", async () => {
+    const client = {
+      async $queryRaw() {
+        throw Object.assign(new Error("connect ECONNREFUSED"), { code: "P1001" });
+      },
+    };
+    const { hasher } = stubHasher();
+    const service = new AuthService(client, hasher);
+
+    await assert.rejects(
+      () => service.issueCsrfToken("01a1fca5-f4c1-7fba-860a-d013ac82089c"),
+      (error) => {
+        assert.equal(error.getStatus(), 503);
+        assert.equal(error.getResponse().code, "DEPENDENCY_UNAVAILABLE");
+        return true;
+      },
+    );
+    await assert.rejects(
+      () => service.storedCsrfToken("01a1fca5-f4c1-7fba-860a-d013ac82089c"),
+      (error) => error.getStatus() === 503,
+    );
+  });
+});
+
 describe("logout", () => {
   it("revokes the matching session and is idempotent", async () => {
     const { database, service } = setup();

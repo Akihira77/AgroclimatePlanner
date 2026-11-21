@@ -17,9 +17,11 @@
   double-submit CSRF token). Both recommendations are **declined by the owner** — see
   *Alternatives that were rejected*. The review document itself is left unedited because
   it is a snapshot of what was recommended on 2026-11-18, not a live decision record.
-- Implemented by: nothing yet. `S8` (login, session issuance, guard, `/me`, logout) owns
-  every element of this ADR.
-- Register entry: `IG-8`, `IG-9` — **approved 2026-11-21, not implemented, not verified**.
+- Implemented by: `S8` — login, session issuance, guard, `/me`, logout, and (as a
+  follow-up to the same milestone) the session-bound synchronizer token.
+- Register entry: `IG-8`, `IG-9` — **approved 2026-11-21; implemented and verified
+  2026-11-21**. The CSRF migration is applied to the canonical development database; the
+  code that uses it is in the working tree after `913b041` and is not committed.
 
 ## Context
 
@@ -181,21 +183,26 @@ every route.
 
 ## Explicit limitations
 
-1. **Partially implemented (2026-11-21).** `S8` implements D1 (the cookie) and D2.2
-   (`Origin` validation); D2.1 (the synchronizer token) is **not** implemented, so no
-   `X-CSRF-Token` is read and `IG-9` is partially satisfied. Acceptance of this ADR
-   remains an approval, not a delivery claim.
-2. **The CSRF token mechanism is decided, not implemented (2026-11-21).** D2.1 fixes the
-   constraints; *Amendment 4* of `docs/review/phase-3.2-owner-decisions.md` decides the
-   remaining four — plaintext storage in a nullable `app.sessions` column, lazy
-   generation on first retrieval, `GET /v1/auth/csrf`, no rotation — and
-   `docs/review/s8-csrf-token-design-proposal.md` records the design and its migration
-   plan. No column, grant, endpoint, or middleware exists yet; a later task ships them.
-3. **`Origin` validation assumes correct proxy behaviour.** If a deployment terminates TLS
+1. **Implemented and verified (2026-11-21), uncommitted.** `S8` implements D1 (the
+   cookie), D2.2 (`Origin` validation), and D2.1 (the synchronizer token).
+   `IG-9` is therefore satisfied by implementation, not by approval alone. The runtime
+   code is not committed and the deployed state is still `913b041`, so this is a delivery
+   record with one step outstanding rather than a released feature.
+2. **D2.1's remaining four details were decided by *Amendment 4*.** Plaintext storage in a
+   nullable `app.sessions.csrf_token`, lazy generation on first retrieval at
+   `GET /v1/auth/csrf`, no rotation, `403 FORBIDDEN`, exempt `register`/`login`/`logout`.
+   `docs/review/s8-csrf-token-design-proposal.md` is the implementation record; the
+   migration is `20261121000000_session_csrf_token`.
+3. **Enforcement lives in `AuthGuard`, not in route metadata.** An authenticated mutation
+   is CSRF-checked because the guard refuses to authenticate one without the token, so
+   there is no per-route annotation a new endpoint can omit. The three exempt endpoints
+   are exempt structurally — they never reach the guard — and `Origin` validation is what
+   covers them, independently and before body parsing.
+4. **`Origin` validation assumes correct proxy behaviour.** If a deployment terminates TLS
    at a proxy, the API must see the real client `Origin`; the existing `TRUST_PROXY`
    handling already refuses an unconditional `true` (`runtime-config.ts`), and this ADR
    adds no second mechanism.
-4. **`__Host-` forbids cross-subdomain sharing.** If the product ever needs one session at
+5. **`__Host-` forbids cross-subdomain sharing.** If the product ever needs one session at
    `app.` and `api.` on different hosts, this ADR must be amended — not worked around by
    dropping the prefix.
 5. **CSRF tokens do not cover `GET`.** No current `GET` mutates; that invariant is a
