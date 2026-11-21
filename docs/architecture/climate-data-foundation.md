@@ -396,7 +396,9 @@ a scientific claim nobody has made.
 
 The monthly normalizer validates and orders; it converts nothing. Only `mm` is
 accepted, a null stays `provider_null` with no value, a negative or non-finite value is
-refused, and the month key must be a first-of-month date in strictly increasing order.
+refused, and the month key must be a first-of-month date whose every entry is the
+**calendar successor** of the one before it — a continuous axis, not merely an ordered
+one (`F-10`).
 Its output carries `reproducible: false` with `raw_payload_not_retained` — the honest
 state per §5.4, since nothing retains the bytes.
 
