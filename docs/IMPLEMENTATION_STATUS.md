@@ -827,17 +827,18 @@ What this does **not** mean:
 
 ### Phase 4.1 — domain contracts, **design only**
 
-Status: **designed, not implemented.** No source file, migration, grant, policy, role, or
-dependency was added. The document is `docs/architecture/farm-field-domain-contracts.md`.
+Status: **designed, not implemented** — as a phase of its own. This phase added no source file,
+migration, grant, policy, role, or dependency; the layers designed here shipped in 4.2–4.4. The
+document is `docs/architecture/farm-field-domain-contracts.md`.
 
-Phases 4.4–4.6 remain **not started**. Nothing below claims their work.
+Phases 4.5–4.6 remain **not started**. Nothing below claims their work.
 
 | Item | State |
 |---|---|
 | Domain definitions for Farm and Field | designed (§3) |
 | Invariants, each assigned to contract / database / derived | designed (§5) |
 | Tenant API surface, 10 endpoints | designed (§6) |
-| Contract schemas | `farm` and `pageMeta` **written in 4.3**; `field` and `geometry` proposed (§7) |
+| Contract schemas | `farm` and `pageMeta` **written in 4.3**; `field` and `geometry` **written in 4.4** (§7) |
 | Tenant isolation behaviour, including nested access | designed (§9.4) |
 | Implementation sequence 4.2–4.6 | proposed (§13) |
 | Migration | **none needed** — `farms`/`fields` were applied in Phase 2.2.3 |
@@ -858,9 +859,14 @@ v1 requirement, and the database CHECK remains untouched.
 
 Three `ST_GeomFromGeoJSON` behaviours were measured against the applied database. The first
 statement of this paragraph was wrong when written and is corrected here: an unclosed ring is
-stored unclosed (so `ST_IsValid` refuses it), a `crs` member is **honoured** (so the SRID CHECK
-refuses it, and `ST_SetSRID` must not be used to mask it), and 3D positions are accepted with no
-database objection. See Phase 4.2.
+stored unclosed (so `ST_IsValid` refuses it), and a `crs` member is **honoured** (so the SRID
+CHECK refuses it, and `ST_SetSRID` must not be used to mask it). The third statement was wrong
+too: this paragraph originally said 3D positions were accepted with no database objection.
+Measured against the applied column, a `POLYGON Z` is **refused** — `app.fields.geom` is
+`geometry(Geometry,4326)`, whose typmod is two-dimensional, so PostGIS answers `22023`
+(`Geometry has Z dimension but column does not`). The correction was made in 4.4.2 and the
+dimensionality is now asserted by `packages/database/test/schema/schema-conformance.test.mjs`.
+See Phase 4.2 and §Phase 4.4.2.
 
 ### Phase 4.2 — database layer — **implemented and verified**
 
@@ -1090,3 +1096,52 @@ that could lose an ordinate. Topological validity remains PostgreSQL's (`23514` 
 Limitation, deliberate: one unrepresentable row makes the whole page `500` rather than the row
 being skipped, because omitting it would be silent data loss. The row can only be created outside
 the API.
+
+### Phase 4.4.2 — geometry documentation and transaction consistency — **implemented and verified**
+
+Status: corrective. Documentation and comments were reconciled with measured PostGIS behaviour,
+the schema suite now asserts geometry dimensionality, and `FieldService.update()` maps its
+resource inside the tenant transaction. No migration, contract, route, grant, or dependency
+changed. Scope was one runtime file, one schema test, one HTTP test, and two documents.
+
+Geometry dimensionality: three places claimed or implied that a 3D position was stored as
+`POLYGON Z`. None do now. `app.fields.geom` is `geometry(Geometry,4326)`; its typmod is
+two-dimensional, so PostGIS refuses a `Z` assignment with `22023`. The API accepts a 2D Polygon
+only (`polygonGeometrySchema`), and geometry returned by the API must satisfy that same schema
+(4.4.1). The historical claim is preserved as a correction rather than deleted — §Phase 4.1
+records that the original statement was wrong and why, and
+`docs/architecture/farm-field-domain-contracts.md` §8 and §10.2 carry the measured result.
+
+Schema conformance: a new test reads `public.postgis_typmod_dims(a.atttypmod)` for
+`app.fields.geom` from the catalogue and requires exactly `2`. Measured on this database
+(PostGIS 3.6): `2` for `geometry(Geometry,4326)`, `3` for `geometry(GeometryZ,4326)`, and `NULL`
+for an unconstrained `geometry` — so the assertion fails both if the column gains a Z dimension
+and if it loses its type modifier. Existing schema assertions were not replaced.
+
+PATCH transaction: previously, the `UPDATE` ran inside `withTenant`, but `toResource` ran after
+the transaction resolved. Consequently, a stored geometry the contract refuses produced a
+committed `UPDATE` plus a `500`. The mapping now runs inside the callback, which is the same
+transaction `withTenant` opens and therefore rolls back on throw. Measured before the change: the
+`name` was persisted and `updated_at` moved while the client received `500 INTERNAL_ERROR`. After
+it, the request still answers `500` and the row is unchanged.
+
+The regression test seeds an off-grid geometry as `migration_owner`, records `name`,
+`updated_at`, `geom`, `area_ha`, and `deleted_at`, sends a `name`-only PATCH as `app_api`, then
+reads the row back and asserts all five are identical. The 4.4.1 checks are retained: 2D round
+trip, off-grid refusal, `POLYGON Z` refused by the column (`22023`), stored `POINT` and
+`MULTIPOLYGON` refused with `500`, and the collection failing closed rather than skipping a row.
+
+| Check | Command | Result |
+|---|---|---|
+| Schema conformance | `pnpm --filter @agroclimate/database test:schema` | **23 pass, 0 fail** (was 22) |
+| Farm + Field HTTP integration | `pnpm --filter @agroclimate/api test:integration` | **61 pass, 0 fail** (36 Field, 25 Farm; supersedes the 60 in §4.4.1) |
+| Database integration / RLS | `test:integration`, `test:rls` | 66 / 90 pass, 0 fail |
+| Privileges | `db:verify` | all checks passed |
+| Workspace typecheck / build / lint / tests / format | `pnpm typecheck`, `pnpm build`, `pnpm lint`, `pnpm test`, `pnpm format:check` | exit 0 |
+| Whitespace | `git diff --check` | exit 0 |
+
+Not run: a sensitivity check that alters `app.fields` to `GeometryZ` — a schema mutation outside
+this task; `postgis_typmod_dims` returning `3` for such a typmod was measured on a temporary
+table instead. `db:reset` and `db:verify:probes` were not run (destructive / grant-mutating).
+
+Phases 4.5 and 4.6 remain **not started**.
