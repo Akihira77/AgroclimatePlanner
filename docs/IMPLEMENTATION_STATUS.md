@@ -979,3 +979,79 @@ soft-deleted; and two seeded tenants proving isolation.
 
 Not done, and not claimed: Field CRUD (4.4), `geometry.ts`/`field.ts` contracts, `If-Match`,
 additional rate limiting (`Q7`), viewport queries, and every 4.5 hardening item.
+
+### Phase 4.4 — Field CRUD API — **implemented and verified**
+
+Status: implemented. Five endpoints are routed, validated, authenticated, tenant-scoped, and
+tested through the real HTTP pipeline against PostgreSQL, including geometry. No migration,
+grant, role, policy, or dependency was added; no Field agronomic column is exposed.
+
+| File | Contents |
+|---|---|
+| `packages/contracts/src/geometry.ts` | `polygonGeometrySchema` (Polygon only, 2D, closed ring, WGS 84 bounds, strict) |
+| `packages/contracts/src/field.ts` | `fieldCreateSchema`, `fieldUpdateSchema`, `fieldSchema`, `fieldSortSchema`, `fieldListQuerySchema`, `fieldIdSchema`, both envelopes |
+| `packages/contracts/src/field.test.ts` | 16 contract assertions (type, dimension, closure, extra members, bounds, strictness, paging) |
+| `apps/api/src/field/field.controller.ts` | five routes, pipes, relative `Location`, `FIELD_NOT_FOUND`/`FARM_NOT_FOUND` |
+| `apps/api/src/field/field.service.ts` | one `withTenant` per request, geometry→resource mapping, offset clamp |
+| `apps/api/src/field/field-errors.ts` | `FieldGeometryError` + SQLSTATE `23514` → `400 VALIDATION_FAILED` |
+| `apps/api/src/field/field.module.ts` | controller + service, no imports |
+| `apps/api/src/app.module.ts` | registers `FieldModule` |
+| `apps/api/src/auth/auth.guard.ts` | `authenticatedUserId(request)`, shared by both controllers |
+| `packages/database/src/fields.ts` | `listAllFields(tx, options)` for the flat collection |
+| `apps/api/test/integration/field.test.mjs` | 30 assertions, real `app_api`/`app_auth`, real RLS |
+| `apps/api/test/integration/support.mjs` | harness shared with the Farm suite |
+
+Endpoints: `POST /v1/fields` (`201` + relative `Location`), `GET /v1/fields`
+(`{ data, meta }`, default `page=1&pageSize=20&sort=-createdAt`, optional `?farmId=` filter),
+`GET /v1/fields/:fieldId`, `PATCH /v1/fields/:fieldId` (last-write-wins, `Q8`),
+`DELETE /v1/fields/:fieldId` (`204`). The nested `POST/GET /v1/farms/:farmId/fields` shape is not
+routed: `Q3` chose the flat collection, and the `farmId` filter carries the parent semantics.
+
+Geometry is validated in two places on purpose. The contract owns everything structural — type
+must be `Polygon`, positions are exactly two finite numbers in WGS 84 range, rings have at least
+four positions and are closed, `crs`/`bbox`/other members are refused — and PostgreSQL owns
+topology (`ST_IsValid`, `ST_IsEmpty`, the SRID check). A self-intersecting ring passes validation
+and is refused by the database with `23514`; the API maps that SQLSTATE to
+`400 VALIDATION_FAILED` with `details: [{ path: "geometry", issue: "invalid_geometry" }]`. No
+geometry is repaired, simplified, reprojected, or re-serialised in JavaScript: `ST_GeomFromGeoJSON`
+parses the request and `ST_AsGeoJSON` renders the response. `ST_SetSRID` is not used, so a declared
+foreign CRS cannot be relabelled as 4326. `areaHa` is read from the generated column and never
+accepted as input.
+
+Integration: tenant from `request.auth.user.id` only; exactly one `withTenant` per request; the
+service holds no SQL. A create whose parent is missing, foreign, or deleted returns
+`FARM_NOT_FOUND`; a field that is missing, foreign, or deleted returns `FIELD_NOT_FOUND`, always
+identically. `GET` needs no CSRF token; `POST`/`PATCH`/`DELETE` need session, trusted `Origin`, and
+`X-CSRF-Token`, all from the existing guard and middleware.
+
+| Check | Command | Result |
+|---|---|---|
+| Farm + Field HTTP integration | `pnpm --filter @agroclimate/api test:integration` | **55 pass, 0 fail** (30 Field, 25 Farm) |
+| API unit suite | `pnpm --filter @agroclimate/api test` | **206 pass, 0 fail** |
+| Contract suite | `pnpm --filter @agroclimate/contracts test` | **239 pass, 0 fail** |
+| Database integration / RLS / schema | `pnpm --filter @agroclimate/database test:integration`, `test:rls`, `test:schema` | **66 / 90 / 22 pass, 0 fail** |
+| Privileges | `pnpm --filter @agroclimate/database db:verify` | all checks passed |
+| Workspace typecheck / build / lint | `pnpm typecheck`, `pnpm build`, `pnpm lint` | exit 0 |
+| Format / whitespace | `pnpm format:check`, `git diff --check` | exit 0 |
+
+What the Field suite covers: `201` + `Location` + the seven public keys only + ownership read back
+as `migration_owner`; `areaHa` equal to the stored generated value and rejected as input;
+`FARM_NOT_FOUND` for a foreign, missing, or deleted parent with no row written; every geometry
+refusal (Point, MultiPolygon, LineString, GeometryCollection, 3D, empty, short ring, unclosed
+ring, `crs`, `bbox`, string ordinates, out-of-range); the self-intersecting ring as `400` with the
+documented detail and no row; `userId`, `deletedAt`, agronomic columns, and snake_case columns
+rejected; `401` without a session on all five routes; `403` for an untrusted `Origin` and a
+missing CSRF token; flat list scoping, `farmId` filter with farm-scoped `total`, paging, `sort=areaHa`
+ordering, and `400`s for an unknown parameter, a non-UUID filter, `page=0`, `page=1.5`,
+`pageSize=101`; `404` for a foreign or deleted farm filter; soft-deleted fields hidden from list,
+read, and update; PATCH presence semantics (`name` only leaves geometry and area unchanged,
+geometry replacement recomputes the area) and rejection of `{}`, unknown keys, `areaHa`, `farmId`,
+and `name: null`; a rejected geometry rolls the whole transaction back (name, geometry, area, and
+`updated_at` unchanged); `204` soft delete with the row still present and a second delete `404`;
+`409 CONFLICT` while the farm has a live field, then `204` after it is soft-deleted; and two
+tenants proving read, update, delete, and create-under-foreign-farm isolation.
+
+Not done, and not claimed: the nested farm collection route, `If-Match`, additional rate limiting
+(`Q7`), the eight agronomic columns, viewport queries, farm geometry, and every 4.5/4.6 item. No
+database test asserts `listAllFields` directly; it is covered through the HTTP list suite and the
+RLS suite's predicates, and that is a gap rather than a claim.

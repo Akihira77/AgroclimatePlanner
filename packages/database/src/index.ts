@@ -41,6 +41,7 @@ export {
   createField,
   FieldGeometryError,
   findField,
+  listAllFields,
   listFields,
   softDeleteField,
   updateField,

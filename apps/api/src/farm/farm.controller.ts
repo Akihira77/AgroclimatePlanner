@@ -32,7 +32,7 @@ import {
 import type { Response } from "express";
 
 import type { AuthenticatedRequest } from "../auth/auth.guard.js";
-import { AuthGuard, unauthenticated } from "../auth/auth.guard.js";
+import { AuthGuard, authenticatedUserId } from "../auth/auth.guard.js";
 import { ZodValidationPipe } from "../http/zod-validation.pipe.js";
 import { FarmService } from "./farm.service.js";
 
@@ -59,7 +59,7 @@ export class FarmController {
     @Body(new ZodValidationPipe(farmCreateSchema)) body: FarmCreateRequest,
     @Res({ passthrough: true }) response: Response,
   ): Promise<Envelope<Farm>> {
-    const farm = await this.farms.create(subjectOf(request), body);
+    const farm = await this.farms.create(authenticatedUserId(request), body);
     // Relative on purpose: `Location` may be relative to the effective request
     // URI, and the API is served behind a single origin. No scheme or host is
     // invented from a `Host` header the server does not trust.
@@ -72,7 +72,7 @@ export class FarmController {
     @Req() request: AuthenticatedRequest,
     @Query(new ZodValidationPipe(farmListQuerySchema)) query: FarmListQuery,
   ): Promise<Envelope<Farm[], PageMeta>> {
-    const page = await this.farms.list(subjectOf(request), query);
+    const page = await this.farms.list(authenticatedUserId(request), query);
     return {
       data: [...page.items],
       meta: { page: query.page, pageSize: query.pageSize, total: page.total },
@@ -84,7 +84,7 @@ export class FarmController {
     @Req() request: AuthenticatedRequest,
     @Param("farmId", new ZodValidationPipe(farmIdSchema)) farmId: FarmId,
   ): Promise<Envelope<Farm>> {
-    const farm = await this.farms.find(subjectOf(request), farmId);
+    const farm = await this.farms.find(authenticatedUserId(request), farmId);
     if (farm === null) throw farmNotFound();
     return { data: farm };
   }
@@ -99,7 +99,7 @@ export class FarmController {
     @Param("farmId", new ZodValidationPipe(farmIdSchema)) farmId: FarmId,
     @Body(new ZodValidationPipe(farmUpdateSchema)) body: FarmUpdateRequest,
   ): Promise<Envelope<Farm>> {
-    const farm = await this.farms.update(subjectOf(request), farmId, body);
+    const farm = await this.farms.update(authenticatedUserId(request), farmId, body);
     if (farm === null) throw farmNotFound();
     return { data: farm };
   }
@@ -116,20 +116,10 @@ export class FarmController {
     @Req() request: AuthenticatedRequest,
     @Param("farmId", new ZodValidationPipe(farmIdSchema)) farmId: FarmId,
   ): Promise<void> {
-    const outcome = await this.farms.remove(subjectOf(request), farmId);
+    const outcome = await this.farms.remove(authenticatedUserId(request), farmId);
     if (outcome === "not_found") throw farmNotFound();
     if (outcome === "has_live_fields") throw new ConflictException();
   }
-}
-
-/**
- * A missing subject is a wiring fault, not a second authentication check: the
- * guard either attached one or refused the request.
- */
-function subjectOf(request: AuthenticatedRequest): string {
-  const context = request.auth;
-  if (context === undefined) throw unauthenticated();
-  return context.user.id;
 }
 
 /** The branded `404` family, so the client learns which noun was missing. */

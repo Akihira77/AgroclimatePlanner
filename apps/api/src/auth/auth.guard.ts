@@ -95,3 +95,15 @@ export class AuthGuard implements CanActivate {
 export function unauthenticated(): HttpException {
   return new HttpException({ code: "UNAUTHENTICATED" }, 401);
 }
+
+/**
+ * The authenticated subject, or the `401` the guard would have answered. A handler
+ * behind `AuthGuard` cannot reach this without a subject; the throw is a wiring
+ * assertion, not a second authentication check, and it means a controller reads
+ * the tenant from one place instead of repeating the same `undefined` guard.
+ */
+export function authenticatedUserId(request: AuthenticatedRequest): string {
+  const context = request.auth;
+  if (context === undefined) throw unauthenticated();
+  return context.user.id;
+}

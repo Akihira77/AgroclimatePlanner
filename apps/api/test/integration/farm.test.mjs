@@ -13,87 +13,34 @@
  * `NODE_ENV=development` so `connections.mjs` may derive the local role DSNs.
  */
 import assert from "node:assert/strict";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { after, before, describe, it } from "node:test";
 
-import { createPrismaClient } from "@agroclimate/database";
+import {
+  SQUARE_JSON,
+  UUID,
+  apiFor,
+  cleanupUsers,
+  headers,
+  ownerRow as readOwnerRow,
+  seedUser as seedFixture,
+  startHarness,
+  stopHarness,
+  token,
+} from "./support.mjs";
 
-import { createApplication } from "../../dist/app.factory.js";
-import { SESSION_COOKIE_NAME } from "../../dist/auth/session-cookie.js";
-import { testConfig } from "../helpers.mjs";
-// The package has no runtime export for its scripts, and re-deriving the DSNs here
-// would be a second source of truth for the role rules.
-import { roleConnectionString } from "../../../../packages/database/scripts/lib/connections.mjs";
-
-const ORIGIN = "http://localhost:5173";
 const EMAIL_PREFIX = "farm-api-";
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** 106.8°E–106.9°E, 6.2°S–6.1°S: a valid, non-empty polygon. */
-const SQUARE = JSON.stringify({
-  type: "Polygon",
-  coordinates: [
-    [
-      [106.8, -6.2],
-      [106.9, -6.2],
-      [106.9, -6.1],
-      [106.8, -6.1],
-      [106.8, -6.2],
-    ],
-  ],
-});
-
-const owner = createPrismaClient({ connectionString: roleConnectionString("migration_owner") });
-
-let app;
+let harness;
+let call;
 let base;
 let alice;
 let bob;
 let carol;
 let dave;
 
-function token() {
-  return randomBytes(32).toString("base64url");
-}
-
-async function seedUser(label) {
-  const email = `${EMAIL_PREFIX}${label}-${Date.now()}-${Math.random().toString(16).slice(2)}@example.test`;
-  const rows = await owner.$queryRawUnsafe(
-    "INSERT INTO app.users (email, password_hash) VALUES ($1, 'x') RETURNING id::text AS id",
-    email,
-  );
-  const user = { id: rows[0].id, email, token: token(), csrfToken: token() };
-
-  await owner.$executeRawUnsafe(
-    `INSERT INTO app.sessions (user_id, token_hash, expires_at, absolute_expires_at, csrf_token)
-     VALUES ($1::uuid, $2, now() + interval '30 days', now() + interval '90 days', $3)`,
-    user.id,
-    createHash("sha256").update(user.token, "utf8").digest("hex"),
-    user.csrfToken,
-  );
-
-  return user;
-}
-
-function headers(user, { csrf = true, origin = ORIGIN } = {}) {
-  const result = {
-    cookie: `${SESSION_COOKIE_NAME}=${user.token}`,
-    origin,
-    "content-type": "application/json",
-  };
-  if (csrf) result["x-csrf-token"] = user.csrfToken;
-  return result;
-}
-
-async function call(user, method, path, { body, csrf, origin, anonymous = false } = {}) {
-  const response = await fetch(`${base}${path}`, {
-    method,
-    headers: anonymous ? { origin: origin ?? ORIGIN } : headers(user, { csrf, origin }),
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const text = await response.text();
-  return { response, body: text === "" ? undefined : JSON.parse(text) };
-}
+const ownerRow = (table, id) => readOwnerRow(harness.owner, table, id);
+const seedUser = (label) => seedFixture(harness.owner, EMAIL_PREFIX, label);
 
 /** Creates a farm through HTTP and returns the resource. */
 async function createFarm(user, body) {
@@ -102,34 +49,23 @@ async function createFarm(user, body) {
   return payload.data;
 }
 
-/** Reads the row as the owner, so a grant or a policy cannot hide it. */
-async function ownerRow(table, id) {
-  const rows = await owner.$queryRawUnsafe(`SELECT * FROM app.${table} WHERE id = $1::uuid`, id);
-  return rows[0];
-}
-
+/** A live field written as the owner, for the farm-delete conflict. */
 async function insertLiveField(user, farmId) {
-  const rows = await owner.$queryRawUnsafe(
+  const rows = await harness.owner.$queryRawUnsafe(
     `INSERT INTO app.fields (farm_id, user_id, name, geom)
      VALUES ($1::uuid, $2::uuid, 'Live field', ST_GeomFromGeoJSON($3::text))
      RETURNING id::text AS id`,
     farmId,
     user.id,
-    SQUARE,
+    SQUARE_JSON,
   );
   return rows[0].id;
 }
 
 before(async () => {
-  app = await createApplication({
-    config: testConfig({
-      databaseUrl: roleConnectionString("app_api"),
-      authDatabaseUrl: roleConnectionString("app_auth"),
-    }),
-    createDatabaseClient: (connectionString) => createPrismaClient({ connectionString }),
-  });
-  await app.listen(0, "127.0.0.1");
-  base = (await app.getUrl()).replace("[::1]", "127.0.0.1");
+  harness = await startHarness();
+  base = harness.base;
+  call = apiFor(base).call;
 
   alice = await seedUser("alice");
   bob = await seedUser("bob");
@@ -138,20 +74,8 @@ before(async () => {
 });
 
 after(async () => {
-  if (app !== undefined) await app.close();
-
-  const users = await owner.$queryRawUnsafe(
-    "SELECT id::text AS id FROM app.users WHERE email LIKE $1",
-    `${EMAIL_PREFIX}%`,
-  );
-  for (const { id } of users) {
-    await owner.$executeRawUnsafe("DELETE FROM app.fields WHERE user_id = $1::uuid", id);
-    await owner.$executeRawUnsafe("DELETE FROM app.farms WHERE user_id = $1::uuid", id);
-    await owner.$executeRawUnsafe("DELETE FROM app.sessions WHERE user_id = $1::uuid", id);
-    await owner.$executeRawUnsafe("DELETE FROM app.users WHERE id = $1::uuid", id);
-  }
-
-  await owner.$disconnect();
+  await cleanupUsers(harness.owner, EMAIL_PREFIX);
+  await stopHarness(harness);
 });
 
 describe("POST /v1/farms", () => {
@@ -462,7 +386,7 @@ describe("DELETE /v1/farms/:farmId", () => {
     assert.equal(refused.body.error.code, "CONFLICT");
     assert.equal((await ownerRow("farms", farm.id)).deleted_at, null);
 
-    await owner.$executeRawUnsafe(
+    await harness.owner.$executeRawUnsafe(
       "UPDATE app.fields SET deleted_at = now() WHERE id = $1::uuid",
       fieldId,
     );

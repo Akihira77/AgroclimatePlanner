@@ -192,6 +192,42 @@ export async function listFields(
   };
 }
 
+/**
+ * The tenant's live fields across every farm, for the flat collection
+ * (`/v1/fields`, `Q3`). The parent check in `listFields` does not apply: a field
+ * whose farm is soft-deleted is not reachable through this list either, because
+ * the API soft-deletes fields before it allows the farm to go, and the field's own
+ * `deleted_at IS NULL` predicate is the one that decides.
+ *
+ * `total` is counted in its own statement, with the same consequence documented on
+ * `listFarms`: a concurrent insert can move the total by one.
+ */
+export async function listAllFields(
+  tx: TenantTransaction,
+  options: FieldListOptions,
+): Promise<FieldPage> {
+  const rows = await tx.$queryRaw<RawField[]>`
+    SELECT ${FIELD_COLUMNS}
+      FROM app.fields
+     WHERE user_id = NULLIF(current_setting('app.user_id', true), '')::uuid
+       AND deleted_at IS NULL
+     ORDER BY ${rawOrder(options.sort)}
+     LIMIT ${options.limit} OFFSET ${options.offset}
+  `;
+
+  const counted = await tx.$queryRaw<{ total: number }[]>`
+    SELECT count(*)::int AS total
+      FROM app.fields
+     WHERE user_id = NULLIF(current_setting('app.user_id', true), '')::uuid
+       AND deleted_at IS NULL
+  `;
+
+  return {
+    items: rows.map(toField),
+    total: counted[0]?.total ?? 0,
+  };
+}
+
 /** Another tenant's field and a field that does not exist both return `null`. */
 export async function findField(tx: TenantTransaction, fieldId: string): Promise<Field | null> {
   const rows = await tx.$queryRaw<RawField[]>`

@@ -1,9 +1,10 @@
-# Farm & Field — domain contracts (Phase 4.1), database layer (4.2) and Farm CRUD (4.3)
+# Farm & Field — domain contracts (Phase 4.1), database layer (4.2), Farm CRUD (4.3) and Field CRUD (4.4)
 
-**Status: the design is approved, the database layer is implemented (§10.2, §5), and the Farm
-half of the API surface is implemented and verified.** `POST/GET/PATCH/DELETE /v1/farms` exist
-and are exercised through the real HTTP pipeline against PostgreSQL; nothing Field-shaped is
-routed yet (4.4).
+**Status: the design is approved, the database layer is implemented (§10.2, §5), and both the
+Farm and Field halves of the API surface are implemented and verified.**
+`POST/GET/PATCH/DELETE /v1/farms` and `POST/GET/PATCH/DELETE /v1/fields` exist and are exercised
+through the real HTTP pipeline against PostgreSQL, including geometry validation and the
+Farm/Field deletion rule.
 **Owner decisions:** `Q1`–`Q8` were answered on 2026-11-21 and are recorded as approved in
 §12; they are not reinterpreted here.
 **Authoritative for:** the Farm and Field API surface, contracts, invariants, and the
@@ -36,8 +37,8 @@ Supersedes nothing. `docs/architecture/domain-model.md` §2 remains the conceptu
 - Any Farm or Field CRUD implementation, controller, service, or SQL module.
 - Any migration, Prisma schema change, RLS change, grant change, role change, or spatial
   function.
-- Any contract source file: `packages/contracts/src/farm.ts` and `field.ts` do not exist
-  and are not created in this phase. The schemas in §7 are proposals.
+- Any contract source file: this was the 4.1 scope; 4.3 wrote `farm.ts` and `page.ts`, and 4.4
+  wrote `geometry.ts` and `field.ts` (§7, §13).
 - `POINT`-shaped fields, and therefore any resolution of `OPEN-17`.
 - The eight agronomic columns on `app.fields` as an API surface (`soil_type`,
   `drainage_class`, `irrigation_availability`, `water_source`, …); `OPEN-21` has not
@@ -310,8 +311,8 @@ also require `X-CSRF-Token` (§9.5) and pass `Origin` validation. No endpoint ac
 | 3 | `GET` | `/v1/farms/:farmId` | — | `200` `{ data: Farm }` | |
 | 4 | `PATCH` | `/v1/farms/:farmId` | `FarmUpdate` | `200` `{ data: Farm }` | returns the updated row |
 | 5 | `DELETE` | `/v1/farms/:farmId` | — | `204` | `409` if live fields exist |
-| 6 | `POST` | `/v1/farms/:farmId/fields` | `FieldCreate` | `201` `{ data: Field }` + `Location` | |
-| 7 | `GET` | `/v1/farms/:farmId/fields` | `?page&pageSize&sort` | `200` `{ data: Field[], meta }` | |
+| 6 | `POST` | `/v1/farms/:farmId/fields` | `FieldCreate` | not routed — 4.4 ships the flat collection only (`Q3`) | |
+| 7 | `GET` | `/v1/farms/:farmId/fields` | `?page&pageSize&sort` | not routed — `GET /v1/fields?farmId=` covers it | |
 | 8 | `GET` | `/v1/fields/:fieldId` | — | `200` `{ data: Field }` | flat, per `api-conventions.md` §6 |
 | 9 | `PATCH` | `/v1/fields/:fieldId` | `FieldUpdate` | `200` `{ data: Field }` | |
 | 10 | `DELETE` | `/v1/fields/:fieldId` | — | `204` | |
@@ -393,14 +394,14 @@ and any farm-level geometry or map viewport query.
 
 ## 7. Contract schemas
 
-`page.ts` and `farm.ts` were written in 4.3 and are exported from the barrel with colocated
-Vitest suites (`farm.test.ts`). `geometry.ts` and `field.ts` are still the design below and land
-in 4.4. The shapes follow the package's conventions: `z` from `"zod"`, `.js` specifiers,
-`strictObject`, one schema plus one inferred type per concept, doc comment naming the normative
-source.
+All four files are written and exported from the barrel with colocated Vitest suites:
+`page.ts` and `farm.ts` in 4.3 (`farm.test.ts`), `geometry.ts` and `field.ts` in 4.4
+(`field.test.ts`). The shapes below are the ones that shipped; they follow the package's
+conventions: `z` from `"zod"`, `.js` specifiers, `strictObject`, one schema plus one inferred type
+per concept, doc comment naming the normative source.
 
 ```ts
-// packages/contracts/src/geometry.ts  (proposed)
+// packages/contracts/src/geometry.ts
 import { z } from "zod";
 
 /**
@@ -433,7 +434,7 @@ export type PolygonGeometry = z.infer<typeof polygonGeometrySchema>;
 ```
 
 ```ts
-// packages/contracts/src/page.ts  (proposed — the schema the convention already shows)
+// packages/contracts/src/page.ts
 export const pageMetaSchema = z.strictObject({
   page: z.number().int().positive(),
   pageSize: z.number().int().positive().max(100),
@@ -443,7 +444,7 @@ export type PageMeta = z.infer<typeof pageMetaSchema>;
 ```
 
 ```ts
-// packages/contracts/src/farm.ts  (proposed)
+// packages/contracts/src/farm.ts
 export const farmCreateSchema = z.strictObject({
   name: z.string().trim().min(1).max(100),
   region: z.string().trim().max(120).nullable().optional(),
@@ -768,14 +769,44 @@ non-UUID path parameter. A global `AuthGuard` applied per feature module is the 
 - **`farmUpdateSchema` uses `.partial()` plus a root refinement**, so an empty body is a `400`
   whose `details[].path` is `(root)`; no synthetic key is invented.
 
-### 4.4 — Field CRUD — **not started**
+### 4.4 — Field CRUD — **implemented**
 
-`apps/api/src/field/**` over the same primitives, flat at `/v1/fields/:fieldId` (`Q3`), plus
-`POST/GET /v1/farms/:farmId/fields`.
+`packages/contracts/src/geometry.ts` (`polygonGeometrySchema`) and `field.ts` (`fieldCreateSchema`,
+`fieldUpdateSchema`, `fieldSchema`, `fieldSortSchema`, `fieldListQuerySchema`, `fieldIdSchema`,
+both envelopes) are exported from the barrel with `field.test.ts`. `apps/api/src/field/**` adds
+`FieldController`, `FieldService`, `FieldModule`, and the geometry-error translation;
+`FieldModule` is registered in `AppModule`.
 
-Exit: `FIELD_NOT_FOUND` on every cross-tenant field attempt; `400` for a non-polygon or a
-`crs` member, mapped from `FieldGeometryError` rather than from `23514`; pagination metadata
-asserted on both collections.
+The collection is flat only (`Q3`): `POST/GET /v1/fields`, `GET/PATCH/DELETE /v1/fields/:fieldId`.
+The nested `POST/GET /v1/farms/:farmId/fields` route the earlier design sketched was **not**
+routed, and the flat list carries an optional `farmId` filter instead, so a parent's not-found
+semantics survive without a second URL shape.
+
+Exit, met: `FIELD_NOT_FOUND` on every cross-tenant field attempt, identical to a missing or
+deleted one; `FARM_NOT_FOUND` when the *parent* was named (create body, `farmId` filter);
+`400 VALIDATION_FAILED` for a non-polygon type, a `crs`/`bbox` member, a third ordinate, an
+unclosed or short ring, out-of-range coordinates, and out-of-bounds paging; `201` + relative
+`Location`; `204` soft delete with the row preserved; `409 CONFLICT` when a farm still has live
+fields and `204` once they are deleted; pagination metadata asserted on both collections.
+
+#### 4.4.1 Deviations recorded while implementing 4.4
+
+- **A `listAllFields(tx, options)` primitive was added next to `listFields`** in
+  `packages/database/src/fields.ts`. The flat collection needs the tenant's fields across every
+  farm, and `listFields` requires a `farmId`; the alternative was reimplementing the statement in
+  the API service, which the phase forbids. It follows `listFarms`'s shape exactly — same
+  `user_id` predicate, same `deleted_at IS NULL`, same second `count(*)` statement — and performs
+  no write.
+- **Geometry refusals are translated by SQLSTATE, not by constraint name.** The contract owns
+  structure (type, dimension, ring closure, bounds, extra members); `ST_IsValid`/`ST_IsEmpty`
+  own topology. A `FieldGeometryError` from the database layer and a `23514` from either write
+  statement both become `400 VALIDATION_FAILED` with `details: [{ path: "geometry", issue:
+  "invalid_geometry" }]`. `23503` and every other SQLSTATE keep propagating as a `500`. The
+  mapping lives in `apps/api/src/field/field-errors.ts`.
+- **`authenticatedUserId(request)` moved into `auth.guard.ts`** and the Farm controller was
+  switched to it, so both controllers read the tenant from one function. It still throws the
+  guard's `401`; it is not a second authentication check.
+- **`location` is relative** for Field as it is for Farm (`/v1/fields/{id}`).
 
 ### 4.5 — Hardening — **not started**
 
