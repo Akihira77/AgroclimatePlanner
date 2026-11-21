@@ -178,7 +178,7 @@ export function testDatabase() {
        * A revoked or expired row answers `[]`, which is what makes "a dead session
        * has no usable token" testable without a real database.
        */
-      if (/SELECT csrf_token/.test(sql)) {
+      if (/SELECT s\.csrf_token/.test(sql)) {
         const session = [...state.sessions.values()].find((entry) => entry.id === values[0]);
         if (session === undefined || !usable(session)) return [];
         return [{ csrf_token: session.csrfToken }];
@@ -190,8 +190,9 @@ export function testDatabase() {
        * statement has.
        */
       if (/SET csrf_token = /.test(sql)) {
-        // Positional, in SQL order: the `SET` value comes before the `WHERE` id.
-        const [candidate, sessionId] = values;
+        // Positional, in SQL order: the locking `candidate` CTE interpolates the id
+        // before the `SET` value does.
+        const [sessionId, candidate] = values;
         const session = [...state.sessions.values()].find((entry) => entry.id === sessionId);
         if (session === undefined || !usable(session) || session.csrfToken !== null) return [];
         session.csrfToken = candidate;

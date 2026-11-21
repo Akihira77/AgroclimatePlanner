@@ -321,6 +321,10 @@ Credential verification (S7, internal — no route):
 - Sliding expiry is extended at most once per five minutes, atomically, and clamped to
   `absolute_expires_at` by `LEAST(...)`. The cookie's `Expires` always mirrors the
   database's deadline, so it can never outlive the row.
+- The cookie is written **after authentication and before the CSRF check**, once. An
+  extension is already committed by then, so a `403` — a refusal of this request, not a
+  revocation of the session — still leaves the browser holding the new deadline. Writing
+  it after the check would let a client's cookie expire up to 30 days before its session.
 - Validation and extension are **one statement** holding a row lock. A revocation that
   races an authentication either lands before the read or after the subject is
   established; it cannot land in between and be mistaken for a throttled extension.
@@ -329,7 +333,9 @@ Credential verification (S7, internal — no route):
   characters — stored **plaintext** in a nullable `app.sessions.csrf_token`, minted on the
   first retrieval and never rotated, so a second tab or a reload receives the same value.
   A missing, malformed, revoked, or expired session is the guard's `401`; the endpoint has
-  no failure branch of its own.
+  no failure branch of its own. Each statement compares both deadlines against one
+  `clock_timestamp()` read into a `MATERIALIZED` CTE — and, for the claim, read *after* the
+  row lock — so a session that expires while the statement waits cannot be treated as live.
 - Authenticated `POST`/`PUT`/`PATCH`/`DELETE` must present that token in `X-CSRF-Token`.
   Validation runs inside `AuthGuard` after the session is resolved and before the handler,
   so an authenticated route cannot be added without it. Comparison is

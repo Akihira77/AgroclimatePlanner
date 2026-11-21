@@ -35,12 +35,27 @@ function sessionRequest({ method, raw, headers = {} }) {
   };
 }
 
-const fakeResponse = () => ({ cookie() {}, clearCookie() {} });
+/**
+ * A response that records what the guard told the browser to do, so a `Set-Cookie`
+ * can be asserted on a request that never reaches a handler.
+ */
+function fakeResponse() {
+  return {
+    cookies: [],
+    cleared: [],
+    cookie(name, value, options) {
+      this.cookies.push({ name, value, options });
+    },
+    clearCookie(name, options) {
+      this.cleared.push({ name, options });
+    },
+  };
+}
 
 /** Calls `canActivate` with just enough of an `ExecutionContext`. */
-function activate(guard, request) {
+function activate(guard, request, response = fakeResponse()) {
   return guard.canActivate({
-    switchToHttp: () => ({ getRequest: () => request, getResponse: () => fakeResponse() }),
+    switchToHttp: () => ({ getRequest: () => request, getResponse: () => response }),
   });
 }
 
@@ -334,5 +349,171 @@ describe("guard method matrix", () => {
     for (const method of ["GET", "HEAD", "OPTIONS"]) {
       assert.equal(await activate(guard, sessionRequest({ method, raw })), true, method);
     }
+  });
+});
+
+describe("cookie expiry synchronization", () => {
+  let app;
+  let guard;
+  let database;
+
+  before(async () => {
+    ({ app, database } = await startApp());
+    guard = app.get(AuthGuard);
+  });
+
+  after(async () => {
+    await app.close();
+  });
+
+  /** Ten minutes since the last request, so the guard's statement extends the row. */
+  const stale = () => Date.now() - 10 * 60 * 1000;
+  /** A slid window shorter than 30 days, so an extension is observable as a move. */
+  const shortWindow = () => Date.now() + 10 * 24 * 60 * 60 * 1000;
+
+  it("serves the extended deadline after a successful mutation", async () => {
+    const raw = rawToken("extended-ok");
+    const csrf = "g".repeat(42) + "A";
+    const { session } = seedActiveSession(database, {
+      raw,
+      csrfToken: csrf,
+      lastSeenAt: stale(),
+      expiresAt: shortWindow(),
+    });
+    const seededExpiry = session.expiresAt;
+
+    const response = fakeResponse();
+    assert.equal(
+      await activate(
+        guard,
+        sessionRequest({ method: "POST", raw, headers: { "x-csrf-token": csrf } }),
+        response,
+      ),
+      true,
+    );
+
+    assert.equal(database.state.extensions.includes(session.tokenHash), true, "the row moved");
+    assert.equal(session.expiresAt > seededExpiry, true);
+    assert.equal(response.cookies.length, 1, "exactly one Set-Cookie");
+    assert.equal(response.cookies[0].options.expires.getTime(), session.expiresAt);
+  });
+
+  it("serves the row deadline unchanged when the throttle holds", async () => {
+    const raw = rawToken("no-extension");
+    const csrf = "h".repeat(42) + "A";
+    const { session } = seedActiveSession(database, { raw, csrfToken: csrf });
+    const seededExpiry = session.expiresAt;
+
+    const response = fakeResponse();
+    await activate(
+      guard,
+      sessionRequest({ method: "POST", raw, headers: { "x-csrf-token": csrf } }),
+      response,
+    );
+
+    assert.equal(database.state.extensions.includes(session.tokenHash), false, "no extension");
+    assert.equal(response.cookies.length, 1);
+    assert.equal(response.cookies[0].options.expires.getTime(), seededExpiry);
+  });
+
+  it("serves the extended deadline even though CSRF answers 403", async () => {
+    // The bug this covers: authentication commits the extension, then the CSRF check
+    // refuses, and the browser is never told — so its cookie keeps the old deadline
+    // while the row has a new one. The refusal is of the request, not the session.
+    const raw = rawToken("extended-403");
+    const { session } = seedActiveSession(database, {
+      raw,
+      csrfToken: "i".repeat(42) + "A",
+      lastSeenAt: stale(),
+      expiresAt: shortWindow(),
+    });
+    const seededExpiry = session.expiresAt;
+
+    const response = fakeResponse();
+    await assert.rejects(
+      () => activate(guard, sessionRequest({ method: "PUT", raw }), response),
+      (error) => {
+        assert.equal(error.getStatus(), 403, "still a CSRF refusal");
+        assert.equal(error.getResponse().code, "FORBIDDEN");
+        return true;
+      },
+    );
+
+    assert.equal(
+      database.state.extensions.includes(session.tokenHash),
+      true,
+      "the row was extended",
+    );
+    assert.equal(session.expiresAt > seededExpiry, true);
+    assert.equal(response.cookies.length, 1, "and the browser still learned it");
+    assert.equal(response.cookies[0].options.expires.getTime(), session.expiresAt);
+  });
+
+  it("serves a refreshed deadline on a safe method while the CSRF token was never issued", async () => {
+    const raw = rawToken("safe-extended");
+    const { session } = seedActiveSession(database, {
+      raw,
+      lastSeenAt: stale(),
+      expiresAt: shortWindow(),
+    });
+
+    const response = fakeResponse();
+    assert.equal(await activate(guard, sessionRequest({ method: "GET", raw }), response), true);
+
+    assert.equal(response.cookies.length, 1);
+    assert.equal(response.cookies[0].options.expires.getTime(), session.expiresAt);
+  });
+
+  it("writes no cookie for a session that cannot authenticate", async () => {
+    const revoked = rawToken("dead-cookie");
+    seedActiveSession(database, { raw: revoked, revokedAt: Date.now() });
+
+    for (const [label, raw] of [
+      ["revoked", revoked],
+      ["unknown", rawToken("never-seeded")],
+      ["malformed", "nope"],
+      ["absent", undefined],
+    ]) {
+      const response = fakeResponse();
+      await assert.rejects(
+        () => activate(guard, sessionRequest({ method: "GET", raw }), response),
+        (error) => error.getStatus() === 401,
+        label,
+      );
+      assert.equal(response.cookies.length, 0, `${label}: no refreshed cookie`);
+    }
+  });
+
+  it("keeps the clearing behaviour of an unusable session unchanged", async () => {
+    const raw = rawToken("clears");
+    seedActiveSession(database, { raw, revokedAt: Date.now() });
+
+    const response = fakeResponse();
+    await assert.rejects(
+      () => activate(guard, sessionRequest({ method: "GET", raw }), response),
+      (error) => error.getStatus() === 401,
+    );
+
+    assert.equal(response.cookies.length, 0, "nothing to refresh");
+    assert.equal(response.cleared.length, 1, "the dead cookie is removed");
+    assert.equal(response.cleared[0].name, SESSION_COOKIE_NAME);
+    assert.equal(response.cleared[0].options.expires.getTime(), 0);
+  });
+
+  it("keeps the cookie attributes of the issued session cookie", async () => {
+    const raw = rawToken("attributes");
+    seedActiveSession(database, { raw, lastSeenAt: stale() });
+
+    const response = fakeResponse();
+    await activate(guard, sessionRequest({ method: "GET", raw }), response);
+
+    const [cookie] = response.cookies;
+    assert.equal(cookie.name, SESSION_COOKIE_NAME);
+    assert.equal(cookie.value, raw);
+    assert.equal(cookie.options.httpOnly, true);
+    assert.equal(cookie.options.secure, true);
+    assert.equal(cookie.options.sameSite, "lax");
+    assert.equal(cookie.options.path, "/");
+    assert.equal("domain" in cookie.options, false, "__Host- forbids a Domain");
   });
 });

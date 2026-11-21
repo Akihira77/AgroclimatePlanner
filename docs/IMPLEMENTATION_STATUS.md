@@ -653,6 +653,35 @@ before the response is written is not visible to that request — no design can 
 and it is the price of not holding a transaction open across response serialisation. What
 is closed is the window that the two-call shape created.
 
+### S8 CSRF hardening, 2026-11-21 (working tree after `0d43c82`)
+
+**The cookie lost its extension when CSRF refused.** `AuthGuard` authenticated, the
+statement extended the sliding deadline, and only then did the CSRF check run — but
+`setSessionCookie` was called after it, so a `403` discarded the new deadline the
+database had already committed. The browser would keep a cookie expiring up to 30 days
+earlier than the row, then appear signed out on a session that was still alive. The
+cookie is now written once, immediately after authentication and before the CSRF check.
+A `403` refuses the request, not the session, so the two are independent; the deadline is
+still the one the statement returned, never a locally computed one, and the attributes
+are unchanged.
+
+**The CSRF statements read the clock more than once.** `clock_timestamp()` appeared twice
+per `WHERE`, so the two deadlines could be compared against different instants and a
+session expiring between them was half-live. Each statement now reads the clock once into
+a `MATERIALIZED` CTE and compares both deadlines against `ev.at`. The claim additionally
+takes the instant *after* its row lock: `candidate AS (SELECT id … FOR UPDATE)` followed
+by `evaluation AS MATERIALIZED (SELECT clock_timestamp() FROM candidate)`, the same
+dependency that fixes `resolveSession`. A concurrent claim also queues at that lock
+instead of racing, so the single-winner rule still holds.
+
+Proven on real PostgreSQL: a test holds the row, asserts through `pg_locks` that the claim
+is blocked, lets the deadline pass, releases the lock, and gets `null` with `csrf_token`
+still `NULL`. The same test fails against the previous shape — it minted a token for a
+session that had already expired. Boundary tests cover issuing just inside the deadline and
+refusing just after it. API tests assert the cookie deadlines: extended on success,
+extended and still sent on a `403`, unchanged when the throttle holds, absent for an
+unusable session, and the clearing behaviour unchanged.
+
 ### S7 corrections applied with S8
 
 | Defect | Correction |

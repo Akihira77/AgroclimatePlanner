@@ -65,6 +65,27 @@ async function readRow(sessionId) {
   return result.rows[0];
 }
 
+/**
+ * Waits until some backend is blocked on a lock. `pg_locks` is readable by every
+ * role here; `migration_owner` is not a superuser and cannot read another session's
+ * `pg_stat_activity.wait_event_type`.
+ */
+async function waitForLockWaiter(timeoutMs = 5_000) {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    const { rows } = await owner.query(
+      `SELECT count(*)::int AS n
+         FROM pg_locks l
+         JOIN pg_stat_activity a USING (pid)
+        WHERE NOT l.granted
+          AND a.datname = current_database()`,
+    );
+    if (rows[0].n > 0) return true;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return false;
+}
+
 /** The SQLSTATE, wherever Prisma or `pg` nested it. */
 function sqlState(error, depth = 0) {
   if (depth > 6 || typeof error !== "object" || error === null) return undefined;
@@ -311,5 +332,83 @@ describe("privilege boundaries", () => {
         statement,
       );
     }
+  });
+});
+
+describe("one instant per statement", () => {
+  it("issues while the deadline is ahead and refuses once it is behind", async () => {
+    // Both deadlines are compared against the same `ev.at`, so the boundary is where
+    // both statements must agree: before the deadline a session is live, after it is
+    // not — never half-live because two `clock_timestamp()` calls straddled it.
+    const { session } = await issue();
+    await owner.query(
+      `UPDATE app.sessions
+          SET created_at          = clock_timestamp() - interval '1 day',
+              expires_at          = clock_timestamp() + interval '400 milliseconds',
+              absolute_expires_at = clock_timestamp() + interval '1 day'
+        WHERE id = $1`,
+      [session.id],
+    );
+
+    assert.equal(typeof (await resolveSessionCsrfToken(auth, session.id, mint)), "string");
+    const issued = (await readRow(session.id)).csrf_token;
+    assert.match(issued, /^[A-Za-z0-9_-]{43}$/);
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    assert.equal(await readSessionCsrfToken(auth, session.id), null, "past the deadline");
+    assert.equal(await resolveSessionCsrfToken(auth, session.id, mint), null);
+    assert.equal((await readRow(session.id)).csrf_token, issued, "nothing was rotated");
+  });
+
+  it("does not mint for a session that dies while the claim waits on the lock", async () => {
+    // The claim reads `clock_timestamp()` in a `MATERIALIZED` CTE that selects
+    // `FROM candidate`, so the instant is taken after the row lock is granted. A
+    // clock read at transaction start, or before the lock, would report the session
+    // live and write a token to a session that had already expired.
+    const { session } = await issue();
+    await owner.query(
+      `UPDATE app.sessions
+          SET created_at          = clock_timestamp() - interval '1 day',
+              expires_at          = clock_timestamp() + interval '700 milliseconds',
+              absolute_expires_at = clock_timestamp() + interval '1 day'
+        WHERE id = $1`,
+      [session.id],
+    );
+
+    const before = await readRow(session.id);
+    assert.equal(before.csrf_token, null);
+
+    const { rows: deadline } = await owner.query(
+      "SELECT expires_at FROM app.sessions WHERE id = $1",
+      [session.id],
+    );
+    const expiresAt = deadline[0].expires_at.getTime();
+    assert.equal(expiresAt > Date.now(), true, "live when the lock is taken");
+
+    await owner.query("BEGIN");
+    try {
+      await owner.query("SELECT 1 FROM app.sessions WHERE id = $1 FOR UPDATE", [session.id]);
+
+      let settled = false;
+      const pending = resolveSessionCsrfToken(auth, session.id, mint).finally(() => {
+        settled = true;
+      });
+
+      assert.equal(await waitForLockWaiter(), true, "the claim is blocked on the lock");
+      assert.equal(settled, false, "and has therefore not read its instant yet");
+
+      const remaining = expiresAt - Date.now();
+      await new Promise((resolve) => setTimeout(resolve, Math.max(0, remaining) + 60));
+
+      await owner.query("COMMIT");
+
+      assert.equal(await pending, null, "the session died while the claim waited");
+      assert.equal(settled, true);
+    } finally {
+      await owner.query("ROLLBACK").catch(() => {});
+    }
+
+    assert.equal((await readRow(session.id)).csrf_token, null, "no token was written");
   });
 });

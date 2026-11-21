@@ -67,6 +67,20 @@ export class AuthGuard implements CanActivate {
 
     request.auth = { user: session.user, sessionId: session.sessionId };
 
+    // The deadline comes from the row, already clamped to the absolute deadline by
+    // the extension statement. It is never computed here, so the cookie cannot
+    // outlive the session it names.
+    //
+    // Written **before** the CSRF check, and exactly once. Authentication may have
+    // extended the sliding deadline, and that write is already committed by the time
+    // this line runs: if the CSRF check then answers `403`, the browser must still
+    // learn the new expiry, otherwise its cookie dies up to 30 days before the
+    // session does and the next request looks signed out for no reason. A `403` is a
+    // refusal of this request, not a revocation of the session, so the two are
+    // independent. There is one call site, so no duplicate or conflicting
+    // `Set-Cookie` can be produced.
+    setSessionCookie(response, token, session.expiresAt);
+
     // After authentication, before the handler. A `403` here means the session is
     // valid and the request is not authorised — re-authenticating would not help,
     // which is why it is not a `401`.
@@ -74,10 +88,6 @@ export class AuthGuard implements CanActivate {
       await this.csrf.assertValid(request, session.sessionId);
     }
 
-    // The deadline comes from the row, already clamped to the absolute deadline by
-    // the extension statement. It is never computed here, so the cookie cannot
-    // outlive the session it names.
-    setSessionCookie(response, token, session.expiresAt);
     return true;
   }
 }

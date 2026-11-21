@@ -12,9 +12,16 @@ import type { PrismaClient } from "./generated/prisma/client.js";
  * Every statement here repeats the session's own validity predicates. The guard has
  * just checked them, but a token read that trusted that timing would keep answering
  * for a session revoked or expired in between, and the whole point of binding the
- * token to a session is that an unusable session has no usable token. `now()`
- * would be wrong for the same reason it was wrong in `resolveSession`: it is
- * `transaction_timestamp()`, frozen before the row is reached.
+ * token to a session is that an unusable session has no usable token.
+ *
+ * **One instant per statement.** `now()` would be wrong for the reason it was wrong
+ * in `resolveSession` — it is `transaction_timestamp()`, frozen before the row is
+ * reached — but so is a bare `clock_timestamp()`, because two references in the same
+ * `WHERE` can straddle the millisecond at which the session expires, and the two
+ * deadlines would then be compared against different instants. Each statement reads
+ * the clock exactly once into a `MATERIALIZED` CTE and compares both deadlines with
+ * `ev.at`. `MATERIALIZED` is what makes "once" true: an inlined CTE is re-evaluated
+ * per reference.
  *
  * The token is plaintext by decision, not by oversight: it must be re-served
  * unchanged on every retrieval, which a hash cannot do. It is not a bearer
@@ -28,18 +35,25 @@ import type { PrismaClient } from "./generated/prisma/client.js";
  * `null` is not distinguished between those two cases on purpose: validation answers
  * the same `403` either way, and a caller that could tell them apart could probe for
  * a session's existence.
+ *
+ * A plain `SELECT` takes no row lock, so there is no blocking operation for the
+ * timestamp to be captured behind; the CTE is evaluated as the statement starts.
  */
 export async function readSessionCsrfToken(
   client: PrismaClient,
   sessionId: string,
 ): Promise<string | null> {
   const rows = await client.$queryRaw<{ csrf_token: string | null }[]>`
-    SELECT csrf_token
-      FROM app.sessions
-     WHERE id = ${sessionId}
-       AND revoked_at IS NULL
-       AND expires_at > clock_timestamp()
-       AND absolute_expires_at > clock_timestamp()
+    WITH evaluation AS MATERIALIZED (
+      SELECT clock_timestamp() AS at
+    )
+    SELECT s.csrf_token
+      FROM app.sessions s
+      CROSS JOIN evaluation ev
+     WHERE s.id = ${sessionId}
+       AND s.revoked_at IS NULL
+       AND s.expires_at > ev.at
+       AND s.absolute_expires_at > ev.at
   `;
 
   return rows[0]?.csrf_token ?? null;
@@ -55,10 +69,18 @@ export async function readSessionCsrfToken(
  * the same value back.
  *
  * Two simultaneous first retrievals must not leave two live values. Both mint a
- * candidate; the conditional UPDATE lets exactly one persist it, the loser's
- * UPDATE matches no row, and the loser re-reads and adopts the winner's token. The
- * loser's candidate is discarded and never stored — which is why the mint happens
- * before the claim rather than inside it.
+ * candidate; `candidate` takes the row lock, so the second claim queues at the lock
+ * rather than racing the first, and when it proceeds it sees the committed token and
+ * matches no row. The loser then re-reads and adopts the winner's token. Its own
+ * candidate is discarded and never stored — which is why the mint happens before the
+ * claim rather than inside it.
+ *
+ * **The clock is read after the lock.** `evaluation` selects `FROM candidate`, so it
+ * cannot run before the candidate scan has produced its row, and that scan cannot
+ * produce it before the row lock is granted. A session that expires during the wait
+ * is therefore compared against the instant the statement actually proceeded at, not
+ * the instant it started queueing. Without `clock_timestamp()` here the claim could
+ * write a token to a session whose deadline had already passed.
  *
  * `mint` is a parameter instead of an import so the database layer keeps no
  * opinion about token entropy: `crypto` belongs to the caller that already owns
@@ -76,14 +98,25 @@ export async function resolveSessionCsrfToken(
   if (existing !== null) return existing;
 
   const claimed = await client.$queryRaw<{ csrf_token: string }[]>`
-    UPDATE app.sessions
+    WITH candidate AS (
+      SELECT id
+        FROM app.sessions
+       WHERE id = ${sessionId}
+       FOR UPDATE
+    ),
+    evaluation AS MATERIALIZED (
+      SELECT clock_timestamp() AS at
+        FROM candidate
+    )
+    UPDATE app.sessions s
        SET csrf_token = ${mint()}
-     WHERE id = ${sessionId}
-       AND csrf_token IS NULL
-       AND revoked_at IS NULL
-       AND expires_at > clock_timestamp()
-       AND absolute_expires_at > clock_timestamp()
-    RETURNING csrf_token
+      FROM evaluation ev
+     WHERE s.id = ${sessionId}
+       AND s.csrf_token IS NULL
+       AND s.revoked_at IS NULL
+       AND s.expires_at > ev.at
+       AND s.absolute_expires_at > ev.at
+    RETURNING s.csrf_token
   `;
 
   if (claimed[0] !== undefined) return claimed[0].csrf_token;
