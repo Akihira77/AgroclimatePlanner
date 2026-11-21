@@ -1148,7 +1148,7 @@ Phases 4.5 and 4.6 remain **not started**.
 
 ---
 
-## Phase 5 — Climate Data Foundation — **5.0 contracts implemented; 5.1 adapter foundation started; 5.2–5.8 not started**
+## Phase 5 — Climate Data Foundation — **5.0 contracts implemented; 5.1 adapter foundation started; 5.2 design approved, no code; 5.3–5.8 not started**
 
 Status: **5.0 partially implemented.** Phase 5.0 added contract and resolver code
 to `packages/contracts`, with tests. It added no migration, Prisma model, route,
@@ -1159,7 +1159,8 @@ design is `docs/architecture/climate-data-foundation.md`.
 and the job-lifecycle interface remain. 5.1 has begun: `@agroclimate/weather-core`
 exists with a transport, a failure union, one real provider adapter (SEAS5 monthly),
 and a monthly normalizer. Nothing here claims an ingestion job, a persisted record,
-an aggregation, or a climate endpoint — 5.2 through 5.8 are **not started**.
+an aggregation, or a climate endpoint — 5.2 has an approved design (§5.2.9) and no
+code; 5.3 through 5.8 are **not started**.
 
 | Item | State |
 |---|---|
@@ -1225,14 +1226,15 @@ of it is documentation; no sub-phase moved.
 What remains true: no migration is proposed by the phase; lead months 8–12 stay
 climatology; BMKG stays disabled by default; `bias_corrected` stays `false`.
 `open-decisions.md` §6 has since grown to `Q-P5-1`..`Q-P5-7`. Sub-phase 5.1 has
-started (adapter foundation only); 5.2–5.8 have no work started.
+started (adapter foundation only); 5.2 has an approved design and no code; 5.3–5.8
+have no work started.
 
 ### Phase 5.0 — contracts and grid resolver — 2026-11-21
 
 | Item | State |
 |---|---|
 | `packages/contracts/src/climate.ts` | **Implemented.** `ForecastRun` identity + row, `IngestionRun` identity + row, `ingestionVersionOf`, `AdapterResult` (five classes; complete/partial decided by counts, not the rounded percentage), `MonthlyOutlook` + `monthlyOutlookHorizonSchema` (lead month **1–12**, exactly twelve entries, calendar-month binding), monthly bands limited to products that actually return a monthly quantity — `seasonal_forecast` at lead months 1–7, `climatology` at 8–12 |
-| `packages/contracts/src/grid.ts` | **Implemented.** `GridSpec`, `defineGridSpec`, `resolveGridCell`, `createGridRegistry`, `gridSpecHash`; integer micro-degree arithmetic; `south-west` orientation only |
+| `packages/contracts/src/grid.ts` | **Implemented.** `GridSpec`, `defineGridSpec`, `resolveGridCell`, `createGridRegistry`, `gridSpecHash`; integer micro-degree arithmetic; `south-west` orientation only. **Two known gaps, both 5.2 work:** the registry is keyed by `model` alone, and no literal `gridSpecHash` fixture exists (the suite proves the hash is a function of its fields, not that it matches a pinned value) |
 | `packages/contracts/src/provenance.ts` | **Implemented.** `Reproducibility` and `DerivationProvenance`; empty `inputRefs` fails on `inputRefs`, not as "not reproducible" |
 | `packages/contracts/src/weather.ts` | **Fixed.** `valueBase` uses `singleValueEvaluationBasisSchema`; `mixed` is container-only |
 | Tests | `grid.test.ts` (vectors 1–18 of §5.2.7, orientation, lattice, hash, registry, F-06 immutability) and `climate.test.ts` (bases, identities, adapter coverage invariants, reproducibility, month cross-field rules, twelve-month horizon) |
@@ -1260,3 +1262,20 @@ started (adapter foundation only); 5.2–5.8 have no work started.
 | Executed | `pnpm --filter @agroclimate/weather-core test` — 36 passed; `typecheck`, `lint`, `build` clean. `pnpm typecheck` 8/8, `pnpm lint` 6/6 |
 | Not implemented | No persistence, no Prisma change, no migration, no worker, no queue, no route, no config loader, no raw-payload store, no cell resolution |
 | Open | `Q-P5-7` / `F-09` (`precipitation_mean` vs `valueMm`); `Q-P5-5`, `Q-P5-6` unchanged |
+
+---
+
+### Phase 5.2 — spatial resolution foundation — **design approved 2026-11-21, no code**
+
+| Item | State |
+|---|---|
+| Status | **Design only.** No contract change, no registry instance, no centroid read, no route, no persistence, no migration. The six owner decisions are in `climate-data-foundation.md` §5.2.9 and `ADR-007` |
+| Registry identity | `(provider, model)`, not `model` alone (§5.2.9.1). A deliberate breaking change to `createGridRegistry`: it has no production consumer, so `grid.test.ts` is the blast radius and `CONTRACTS_VERSION` moves when it lands |
+| `gridId` | a label on one definition, not unique and never a lookup key. `gridSpecHash` keeps `gridId` in its preimage because the hash pins a named definition |
+| Result | `SpatialResolution` — `provider`, `model`, `gridId`, `gridSpecHash`, `resolutionAlgorithmVersion`, `evidence`, `requested` ≠ `anchor`, `i`, `j`, `cellKey`. No served coordinate, no `distanceKm`, no `extractionPolicy` (§5.2.9.2) |
+| Longitude | four separate concepts — normalization, domain validation, wrapping, indexing — with a boundary table for `-180`, `180`, `0`, `360`, `-0.5`, `359.5`, and three questions left to the owner (§5.2.9.3, `OPEN-18`) |
+| Synthetic vs validated | `GridEvidence` lives on the registry entry; `requireValidated` refuses a synthetic entry on an ingest path. No fallback grid, no cross-provider selection |
+| `field_outlook_cells` | **not written in 5.2.** `distance_km` is `NOT NULL` and is a distance to a served coordinate that does not exist yet; `0` is never a placeholder (§5.2.8) |
+| Provider grids | all five still pending. Evidence is graded A (documented), B (measured), C (inferred), with a protocol; grade C never configures a row. Nothing is configured today |
+| Known gap carried forward | no literal `gridSpecHash` fixture exists, so an edit to the resolver's preimage passes the suite. §8.2 step 5.2.1 closes it before any real spec is registered |
+| Next | `climate-data-foundation.md` §8.2, steps 5.2.1–5.2.8 |

@@ -483,10 +483,15 @@ Rules:
    and `(latMax - originLat)` must be whole multiples of `stepLat`, and the same
    for a bounded lon range. A grid anchored at 0° may therefore cover −90° with
    negative row indices; an offset lattice is rejected as `invalid_range`.
-6. **`gridId` binds one-to-one to `model`.** The registry refuses to bind two
-   specs to one model, and `gridSpecHash` is asserted per model in a test. Editing
-   a spec in place therefore fails the suite; a real re-grid creates a new `model`
-   string (5.2.5).
+6. **The registry is keyed by `provider` + `model`; `gridId` is a label.** Two
+   providers may expose the same model string with different grids, so neither name
+   alone addresses a configuration (§5.2.9). `GridSpec` carries no provider or model
+   field — that identity lives in the registry entry — and `gridId` names one
+   definition without being globally unique: two different configurations may share
+   it. `gridSpecHash` is computed from the configuration and includes `gridId`
+   (§5.2.9), so an in-place edit changes the hash. Pinning that hash with a literal
+   fixture is a 5.2 requirement; the current suite proves only that the hash is a
+   function of its fields (§5.2.7).
 7. **The spec is immutable at runtime, nested arrays included.** `defineGridSpec`
    copies `latRange` and `lonRange` into frozen arrays before storing them and
    freezes the resulting object, so a caller that mutates the array it passed in
@@ -552,16 +557,22 @@ point still has cells at anchors; the interpolation is recorded on the record, a
 
 #### 5.2.5 Re-gridding and versioning
 
-- A grid change that alters identity **requires a new `model` string** (for example
-  `ecmwf_seas5_v2`). The registry binds one `GridSpec` per model, and the
-  `gridSpecHash` golden test fails on an in-place edit. Operator discipline is not
-  the guarantee; a failing test is.
+- A grid change that alters identity **requires a new `model` string inside the same
+  `provider`** (for example `ecmwf_seas5_v2`). The registry binds one `GridSpec` per
+  `(provider, model)` pair and refuses a second one; the revision is the pair, and
+  the label (`gridId`) is free to repeat.
+- The hash is the guarantee, and it is **not yet pinned**: `assertGridSpecIntegrity`
+  recomputes it, and the suite proves it changes when a field changes, but no literal
+  `gridSpecHash` is asserted anywhere. An edit to the resolver's preimage would pass
+  every test. Until the literal fixture exists (§8.2 step 5.2.1), this bullet is
+  prose.
 - Old `outlook_cells` rows and old `field_outlook_cells` rows keep their model and
   keep their meaning. They are not rewritten. A field re-resolves under the new
   model on its next write, and `field_outlook_cells_live_key` supersedes the old
   resolution rather than updating it.
 - `UNIQUE (provider, model, cell_key)` therefore keeps meaning "one identity per
-  model per cell" across revisions, because the revision is part of the model.
+  provider and model per cell" across revisions, because the revision is part of the
+  model string.
 - **Rejected alternative:** embedding `gridId` in the key. It enforces the same
   invariant without relying on the model string, but duplicates the version in two
   places, lengthens every key, and diverges from the documented key format for no
@@ -570,16 +581,43 @@ point still has cells at anchors; the interpolation is recorded on the record, a
 #### 5.2.6 Provider grid configurations — pending, not invented
 
 No real grid is asserted in this document. An origin, a spacing, and an axis
-orientation cannot be derived from a resolution figure; they need provider
-documentation or a measured response with a known request and its served coordinate.
+orientation cannot be derived from a resolution figure, and **one** measured
+request→served pair is not enough to derive them either: a pair from an endpoint
+that interpolates says nothing about the lattice, and a pair that happens to land on
+a plausible lattice is consistent with every origin in the same congruence class.
+Evidence is therefore graded, and only the first two grades can ever promote a row.
 
-| `model` | Grid definition | Evidence needed before 5.2 |
+| Grade | What it is | Sufficient for |
 |---|---|---|
-| `ecmwf_ifs025` | **pending** | documented origin/axis, or one measured request→served pair |
-| `ecmwf_ec46` | **pending** | as above; the exposed point grid must be documented explicitly, because the upstream model is reduced Gaussian |
-| `ecmwf_seas5` | **pending** | as above |
-| ERA5 archive | **pending** | as above |
-| CHIRPS v3.0 | **pending** | as above |
+| **A — documented** | the provider's or model's own statement of grid spacing, origin/reference convention, axis order, and reduced/regular construction | spacing, axis, longitude convention; still needs one measured pair to confirm the served point is a node |
+| **B — measured** | request→served pairs produced under the protocol below | node-vs-interpolation behaviour and the lattice step; the origin only up to its congruence class |
+| **C — inferred** | a resolution figure, an approximate coordinate, or a neighbouring model's grid | **nothing**. Recorded as a hypothesis, never configured |
+
+Validation protocol for grade B (run once per endpoint, record request, served,
+elevation, timestamp, and whether the value equals the anchor):
+
+1. At least three requests at distinct fractional offsets inside one cell — for
+   example `+0.05`, `+0.37`, and `+0.83` of a step — with identical parameters
+   otherwise.
+2. One request just inside each side of a suspected boundary.
+3. **Identical served coordinates for different requests prove snapping.** Distinct
+   served coordinates prove interpolation; that endpoint cannot supply a grid and the
+   row stays unavailable.
+4. For a snapping endpoint, take differences of the served values: the greatest
+   common step is the spacing, and the served value modulo the step is the origin's
+   congruence class. Two different pairs that imply different steps stop the
+   validation.
+5. Confirm the provider's own interpolation flag, if the response carries one. A
+   measured pair that the provider reports as interpolated is grade C for grid
+   purposes no matter how round it looks.
+
+| `provider` / `model` | Grid definition | Evidence needed before 5.2 |
+|---|---|---|
+| Open-Meteo / `ecmwf_ifs025` | **pending** | one measured pair exists and is ambiguous (the served point is on a plausible 0.25° lattice, but the same research calls it an interpolated point), so the row is grade C until protocol steps 1–3 separate the two readings |
+| Open-Meteo / `ecmwf_ec46` | **pending** | the exposed point grid must be documented explicitly, because the upstream model is reduced Gaussian; a rectangle is not a substitute |
+| Open-Meteo / `ecmwf_seas5` | **pending** | one served point at one request, not on a lattice under any assumed step; needs protocol steps 1–4 |
+| ERA5 archive | **pending** | measured pairs; the single observed ERA5 served point is not on a 0.25° lattice, which must be explained before any regular grid is configured |
+| CHIRPS v3.0 | **pending** | the reachable route and licensing posture first (`weather-source-matrix.md`), then the grid protocol |
 
 Until a row is validated, the resolver exists but that model cannot ingest. That is
 `BLOCKED_EXTERNAL_INPUT` in the decision register, not a design gap, and it is why
@@ -616,17 +654,20 @@ exist because of review finding **F-01** (serialization precision), 17 because o
 | 17 | any grid with `orientation: "north-west"` | `(0.5, 0.5)` | — | typed `unsupported_grid_orientation` | — | **F-02**: an unsupported axis is rejected, never flipped by a negative step |
 | 18 | origin `0` / `0.25,0.25` / bounded `(0.1,10)` | `(0.5, 0.5)` | — | typed `invalid_range` | — | a range bound that is not a lattice point is a configuration error |
 
-Every synthetic grid is node-serving, so `served` equals the anchor. A live provider
-that interpolates returns a different served coordinate with
-`served_value_is_interpolated = true`, and the key still comes from the cell — that is
-the case the synthetic vectors cannot cover, so 5.1 records the provider's answer
-verbatim and the flag.
+Every synthetic grid is node-serving, so a synthetic fixture may record that its
+`served` coordinate equals its anchor. That is a property of the fixture, not a
+resolver output: the resolver returns no served coordinate, and no production path
+may copy the anchor into one. A live provider that interpolates returns a different
+served coordinate with `served_value_is_interpolated = true`, and the key still comes
+from the cell — that is the case the synthetic vectors cannot cover, so 5.1 records
+the provider's answer verbatim and the flag.
 
 Vector 8 is exact only for the synthetic grid; it is there to prove that resolution
-changes identity, not to predict a provider's answer. For each vector a resolver
-test also asserts: `key` round-trips to the node it was built from, `gridSpecHash`
-matches the committed fixture, and `served` is recorded as the node (synthetic) or
-as the provider's answer (live), never derived.
+changes identity, not to predict a provider's answer. What the suite asserts per
+vector is the key round-trip to the node it was built from (`grid.test.ts:224`). It
+does **not** assert a committed `gridSpecHash` — no literal fixture exists — so the
+pinned-hash requirement of §5.2.5 remains open and is 5.2's first implementation
+step.
 
 #### 5.2.8 Two-phase cell write
 
@@ -636,6 +677,172 @@ insert only `(provider, model, cell_key)` into `outlook_cells`; `app_system` fil
 performs the second write. A cell created by a user's field therefore exists before
 its coordinates do — the documented lifecycle ("`NULL` until first ingest"), not an
 error state.
+
+**Field → cell mapping waits for the served coordinate (owner decision 2026-11-21).**
+`field_outlook_cells.distance_km` is `NOT NULL` and is defined as the geodesic
+distance from the anchor to the **served** coordinate, which does not exist until the
+first ingest. Resolution therefore stops at the cell identity: it may mint the
+`outlook_cells` row, and it must not write a `field_outlook_cells` row. `0` is never
+a placeholder for an unknown distance, and the anchor is never substituted for the
+served coordinate to manufacture one. The mapping row is created by the ingest that
+first learns the served coordinate, or by a later migration that makes the column
+nullable — not by a fabricated value.
+
+#### 5.2.9 Phase 5.2 design addendum — registry identity, result, longitude
+
+Approved 2026-11-21. **Design only: none of this is implemented.** It constrains the
+5.2 steps in §8.2; it changes no runtime file in this pass.
+
+##### 5.2.9.1 Registry identity is `(provider, model)`
+
+`ADR-001` D8 says the rounding rule is per model, and the pipeline already speaks
+`(provider, model, product)` everywhere (`ForecastRun`, `outlook_cells_grid_key`,
+`weather_records`). A model string is a provider's own name for its model and is not
+unique across providers: Open-Meteo re-exports ECMWF models under strings it chooses,
+and a second provider may use the same string for a different lattice. Keying the
+registry by `model` alone therefore lets the wrong grid serve a request.
+
+```ts
+// design — packages/contracts/src/grid.ts, not implemented
+interface GridKey { readonly provider: string; readonly model: string }
+type GridEvidence = "synthetic" | "validated";
+
+interface GridRegistryEntry {
+  readonly provider: string;
+  readonly model: string;
+  readonly spec: GridSpec;          // carries gridId, gridSpecHash, no identity
+  readonly evidence: GridEvidence;  // "validated" only with §5.2.6 grade A + B
+}
+
+interface GridRegistry {
+  specFor(key: GridKey): GridSpec;                    // unknown → typed failure
+  resolve(key: GridKey, r: GridResolutionRequest): ResolvedGridCell;
+  evidenceFor(key: GridKey): GridEvidence;
+  keys(): readonly GridKey[];                         // frozen copy
+  requireValidated(key: GridKey): GridSpec;           // ingest paths only
+}
+```
+
+| Property | Rule |
+|---|---|
+| duplicate registration | same `(provider, model)` twice → `duplicate_grid_spec`, at construction |
+| unknown key | `unknown_model` naming both components; no fallback, no nearest match, no other provider's grid |
+| revision | a re-grid is a new `model` string within the **same** provider; no in-place edit, enforced by the pinned hash (§5.2.5) |
+| immutability | the registry stores a re-defined frozen spec and returns it, as today (`grid.ts:501-517`) |
+| synthetic vs validated | `evidence` is on the entry, not inferred from `gridId`. A synthetic entry resolves (tests, dev) and `requireValidated` refuses it, so an unvalidated grid cannot reach ingestion |
+| `gridId` | a label on the definition, may repeat across providers and models; never a lookup key |
+| lookup by model alone | **not provided.** A model-only convenience would reintroduce the ambiguity this change removes |
+
+`gridSpecHash` **keeps** `gridId` in its preimage (`grid.ts:185-217`). The hash's job
+is to pin one named definition, and the label is part of what is reviewed and
+committed; dropping it would change every hash that will ever exist, for no gain,
+before any hash is persisted. Consequence to state plainly: two byte-identical
+lattices under different `gridId`s hash differently. That is intended — they are two
+reviewed definitions — and it does not affect `cellKey`, which carries only the node.
+
+Compatibility: this is a **deliberate breaking change** to `createGridRegistry`, not
+an extension. There is no production consumer today (`grep` finds `resolveGridCell`,
+`createGridRegistry`, `specFor` only in the test file), so the blast radius is
+`grid.test.ts` and the 354-test suite. A model-only overload was rejected because
+Decision 6 forbids selecting a grid by model name alone; a second parallel registry
+was rejected because it would duplicate the resolver and force two lookups for one
+identity. `CONTRACTS_VERSION` (`packages/contracts/src/version.ts`, currently
+`0.1.0`) must move when this lands, since the exported signature breaks. The decision
+is recorded in `docs/adr/ADR-007-spatial-registry-identity.md`.
+
+##### 5.2.9.2 The resolution result names three coordinates
+
+Three coordinates exist and must never merge: **requested** (what entered the
+resolver), **anchor** (the cell's own node, derived from `i`/`j`), **served** (what
+the provider answered). The resolver knows the first two. It cannot know the third,
+so it does not return it.
+
+```ts
+// design — pure resolution result; no persistence, no served coordinate
+interface SpatialResolution {
+  readonly provider: string;
+  readonly model: string;
+  readonly gridId: string;
+  readonly gridSpecHash: string;
+  readonly resolutionAlgorithmVersion: string; // "grid-resolve/1"
+  readonly evidence: GridEvidence;
+  readonly requested: { readonly lat: string; readonly lon: string };
+  readonly anchor: { readonly lat: string; readonly lon: string };  // nodeLat/nodeLon
+  readonly i: number;
+  readonly j: number;
+  readonly cellKey: string;
+}
+```
+
+| Field | Why it is there | Why nothing else is |
+|---|---|---|
+| `provider`, `model` | the registry key that selected the grid; without them the hash is unattributable | — |
+| `gridId`, `gridSpecHash` | the exact definition and its pin; required to audit an old key | — |
+| `requested` | the input, as supplied, decimal-string | a float would re-introduce binary rounding |
+| `anchor`, `i`, `j` | proof the key came from the lattice, not from rounding the request | `i`/`j` are internal but cheap and make a support report readable |
+| `cellKey` | the `nodeLat,nodeLon` form the DB stores | **unchanged format**: `UNIQUE (provider, model, cell_key)` already supplies the other two components, so embedding them would duplicate the key |
+| `resolutionAlgorithmVersion` | a constant in `grid.ts`, bumped when the algorithm or the key format changes — **not** derived from the package version | one row, `gridSpecHash`, and this string reproduce the cell; two of the three would not |
+| `evidence` | says whether this result may feed ingestion | — |
+| `served` | **absent** | the resolver has no provider response; an HTTP layer may write `servedCoordinate: null` so a client cannot read the anchor as served |
+| `distanceKm` | **absent** | unknowable before the served coordinate exists (§5.2.8) |
+| `extractionPolicy` | **absent from the resolver** | a field concept, not a grid concept; it belongs to the mapping that 5.2 defers |
+
+Reuse check: `Reproducibility` is about retained raw payload bytes and
+`DerivationProvenance` is about derived artifacts with `inputRefs`. A cell identity
+is neither — it is a pure function of a pinned configuration — so a focused
+`SpatialResolution` is smaller and more truthful than wrapping the grid in a
+provenance envelope with an empty `inputRefs`, which `provenance.ts:204-205` rejects
+anyway.
+
+##### 5.2.9.3 Longitude: four separate questions
+
+| Concept | Question it answers | Scope |
+|---|---|---|
+| coordinate normalization | is `-180` the same position as `180`? | generic, representation only |
+| grid-domain validation | is this position inside the grid's declared lon domain? | per grid |
+| longitude wrapping | which 360° window does the grid number its columns in? | per grid, `global` only, around **its own** origin |
+| cell index calculation | which column owns the position? | per grid, `floorDiv` |
+
+Approved behaviour — current implementation, no change proposed in this pass. The
+worked examples use `stepLon = 1` and a `global` domain.
+
+| Input | `originLon = 0` | `originLon = -180` | bounded `[0, 360)` | Reading |
+|---|---|---|---|---|
+| `-180` | wraps to `180`; `j = 180`, key `0.00,180.00` | `j = 0` | `out_of_grid` (below the domain) | valid geographic coordinate; the grid's origin decides the column |
+| `180` | `j = 180` — **same cell as `-180`** | wraps to `-180`, `j = 0` — **same cell as `-180`** | `j = 180` | accepted as a coordinate. It is the antimeridian, so a global grid must fold it onto one cell; which one is the origin's business |
+| `0` | `j = 0` | `j = 180` | `j = 0` | the same position, a different column; no normalization changes it |
+| `360` | wraps to `0`, `j = 0` | wraps to `0`, `j = 180` | `out_of_grid` (index window: `j = colCount`) | accepted only by wrapping on a `global` domain; never clamped |
+| `-0.5` | wraps to `359.5`, `j = 359` | `j = 179` | `out_of_grid` (below the domain) | west-of-Greenwich position in a `[0, 360)` numbering |
+| `359.5` | `j = 359` — **same cell as `-0.5`** | `j = 179` | `j = 359` | east-of-Greenwich position, same cell under a 0-origin global grid |
+
+A grid whose declared upper bound *is* the position (`bounded [-180, 180]`, upper
+edge `180`) excludes it, because a cell owns `[node, node + step)`: there, `180` is
+`out_of_grid` and the antimeridian must be requested as `-180`. That asymmetry is a
+consequence of the half-open rule, not a second wrapping rule.
+
+What is deliberately **not** decided here (owner approval required, recorded in
+`OPEN-18`):
+
+1. Whether generic coordinate validation rejects `|lon| > 180` before wrapping. Today
+   it does not: `400` resolves to a cell. Tightening it is a contract change and
+   would invalidate golden vector 10's `359.5` input.
+2. Whether `180` should map to the lower edge on a `[-180, 180)`-origined grid
+   (antimeridian folding) instead of failing as the exclusive upper edge. Both are
+   defensible; they must not both be implemented.
+3. How a provider whose convention is `[0, 360)` is expressed: a `global` domain with
+   `originLon = 0` (today's only route) or a bounded `[0, 360)` grid, which
+   `defineGridSpec` accepts but does not bound (`grid.ts:295-309`).
+4. Whether `spatialResolutionKm` belongs in the hash preimage. It is a descriptive
+   figure (`tables-climate.md`: "36 for EC46/SEAS5, ≈28 for ERA5"), not part of the
+   lattice, yet it is hashed. Correcting a published resolution figure therefore
+   changes `gridSpecHash` and, under the one-spec-per-pair rule, forces a new model
+   string although no cell identity changed. Today's answer — it stays, because the
+   hash pins the whole reviewed definition — should be stated as a choice, not left
+   implicit.
+
+Approved, and not re-opened: wrapping stays around the grid's own origin; latitude is
+never wrapped; a regional grid stays `bounded`, because wrapping it would merge two
+cells the provider distinguishes.
 
 ### 5.3 Run lifecycle and idempotency
 
@@ -1079,15 +1286,16 @@ Capability status after 5.0, stated so no reader infers more than exists:
 
 | | |
 |---|---|
-| Objective | the generic resolver is implemented and proven against synthetic grids; a field yields a deterministic `cellKey` for any model whose grid configuration has been validated |
-| Prerequisites | 5.0, 5.1 (grid metadata) |
-| Scope | `packages/weather-core/cells/` (`grid-spec.ts`, `resolve.ts`, synthetic fixtures); `packages/database/src/climate.ts` (`upsertCell`, `resolveFieldCells`); one integration point in the Field write path |
-| Contracts | `CellKey`, `ResolvedCell` (`provider`, `model`, `cellKey`, `distanceKm`, `extractionPolicy`) |
-| Database impact | none new; writes `outlook_cells` (identity only, `app_api`) and `field_outlook_cells` inside `withTenant` |
-| Tests | the twelve vectors of §5.2.7; the registry rejects two `GridSpec`s for one `model`; a changed `gridSpecHash` fails the committed fixture; the two-phase cell fill; supersession on geometry edit; `distance_km` bound rejection |
-| Acceptance | all twelve vectors pass, including negative-floor and longitude-wrap cases; the same polygon always resolves to the same key; a model with no validated `GridSpec` **fails** resolution instead of guessing; a geometry edit supersedes the old row and inserts a new one; no cross-tenant row is visible |
+| Objective | the resolver exists and is proven; 5.2 adds provider/model selection, a reproducible result, and the centroid read, so a field yields a deterministic cell identity. It does **not** create the field → cell mapping |
+| Prerequisites | 5.0 (resolver), 5.1 (grid metadata) |
+| Scope | the registry instance and its synthetic entry in `packages/weather-core/src/grids/` (the resolver stays in `@agroclimate/contracts` — no second implementation, no `weather-core/cells/`); `SpatialResolution` in `packages/contracts`; `upsertCell` in `packages/database/src/climate.ts` and `selectFieldAnchor` in `fields.ts`; `POST /v1/fields/:id/resolve-cell`. **No** `field_outlook_cells` write (§5.2.8) |
+| Contracts | `SpatialResolution`, `GridKey`, `GridRegistry`, `GridEvidence` (§5.2.9); `ResolvedGridCell` is reused unchanged. No `CellKey`, no `ResolvedCell`, no `distanceKm`: the audit's names for these were never implemented |
+| Database impact | none new. `outlook_cells` identity only — three columns, `GRANT INSERT (provider, model, cell_key)` (`migration.sql:737`). No table, column, grant, RLS or migration change. No `field_outlook_cells` row: `distance_km` is `NOT NULL` and needs a served coordinate that does not exist yet |
+| Tests | the eighteen vectors of §5.2.7 unchanged; a literal `gridSpecHash` per registered spec; registry keyed by `(provider, model)` — duplicate pair rejected, unknown pair rejected, one `gridId` on two pairs accepted, two providers sharing one model string independent; synthetic entries refused by `requireValidated`; the result keeps requested ≠ anchor and carries no served coordinate; `ST_Centroid` → six-decimal anchor |
+| Acceptance | all eighteen vectors still pass; editing the hash preimage or a spec field fails the fixture; the same field anchor always resolves to the same `cellKey`; an unknown pair **fails** with `unknown_model` and mints no cell; a synthetic entry cannot reach an ingest path; `field_outlook_cells` is untouched; no cross-tenant anchor is readable |
 | Dependencies | 5.0, 5.1 |
-| Risks | the centroid of a large plot falling near a grid boundary (two cells differ by one step), documented and not solved because `OPEN-15` is undecided; no real model resolves until its grid configuration is validated, so 5.2 can land while 5.4 waits on evidence |
+| Risks | the centroid of a large plot falling near a grid boundary (two cells differ by one step), documented and unsolved while `OPEN-15` is undecided; no real model resolves until its grid configuration reaches §5.2.6 grade A + B, so 5.2 lands while 5.4 waits on evidence |
+| Deferred to 5.4 | the `field_outlook_cells` row, `distance_km`, `elevation_delta_m`, supersession on geometry edit — every one of them needs the served coordinate |
 
 ### 8.3 Phase 5.3 — run lifecycle and worker runtime
 

@@ -73,7 +73,7 @@ part of it.
 | `OPEN-13` | P1 | authentication | after Phase 3 | **none** — resolved 2026-11-20 | nothing: PostgreSQL `app.sessions` was selected (`ADR-005`) and shipped in S5 | nothing on the storage question; the request path that uses the table arrived with `S8`, closing `OPEN-01` | everything — the table exists, is granted, and is verified on canonical |
 | `OPEN-17` | P1 | field snapshot | after Phase 3 | **hard**, for point-shaped fields only | what `areaHa` means for a `POINT`-shaped field | field snapshot creation for point-shaped fields, and every artifact derived from one | the DDL (a `POINT` row is still storable); `POLYGON`/`MULTIPOLYGON` fields end to end |
 | `OPEN-21` | P1 | field snapshot | after Phase 3 | **hard** | the `irrigationAvailable` boolean mapping and three field vocabularies | field → snapshot construction | the DDL — the columns stay unconstrained `text`; every non-snapshot path |
-| `OPEN-18` | P1 | cell resolution | after Phase 3 | **conditional** — generic resolver implemented and tested 2026-11-21; per-model grid configuration pending external evidence | the per-provider grid origin, spacing, orientation, and revision | cell identity, and field → cell resolution, for a model whose grid configuration is unvalidated | the DDL (`cell_key` is `text` for exactly this reason), the catalog, every query that reads an already-keyed cell, and the now-approved generic resolver contract |
+| `OPEN-18` | P1 | cell resolution | after Phase 3 | **conditional** — generic resolver implemented and tested 2026-11-21; registry identity and result contract designed 2026-11-21 (ADR-007); per-`(provider, model)` grid configuration pending graded evidence | the per-provider/model grid origin, spacing, orientation, longitude convention, and revision | cell identity, and field → cell resolution, for a model whose grid configuration is unvalidated | the DDL (`cell_key` is `text` for exactly this reason), the catalog, every query that reads an already-keyed cell, and the now-approved generic resolver contract |
 | `OPEN-26` | P1 | window write | after Phase 3 | **hard** | the six-check `EvidenceSegment` partition validator | persisting a `planting_windows` row | the table, its index, every read path, `suitability_runs`, `ai_briefings` |
 | `OPEN-27` | P1 | worker | after Phase 3 | **hard** | how the worker learns which fields a cell serves | `recompute.windows` — the job that delivers a new forecast to a dashboard | the DDL **and** the grants, which ship the documented default: no `app_system` grant on a tenant-owned table |
 | `OPEN-11` | P1 | AI slice | after Phase 3 | **hard** | the `ClimateBriefing` body shape | writing or validating an `ai_briefings` row | the `ai_briefings` DDL; the table is createable exactly as specified, it simply cannot yet hold a valid document |
@@ -252,24 +252,69 @@ spacing, orientation, and revision are explicit inputs. A universal
 `floor(lat / resolution)` is refused because it assumes a zero origin, square cells,
 and one axis orientation, none of which is established for any provider. Identity is
 never derived from a served coordinate and never reconstructed from the key. A grid
-change that alters identity requires a **new `model` string**, enforced by a
-one-spec-per-model registry plus a committed `gridSpecHash` test rather than by
-operator discipline. The full contract is `docs/architecture/climate-data-foundation.md`
-§5.2.
+change that alters identity requires a **new `model` string inside the same
+`provider`**, enforced by a one-spec-per-`(provider, model)` registry plus a
+**literal** `gridSpecHash` fixture rather than by operator discipline. The full
+contract is `docs/architecture/climate-data-foundation.md` §5.2; the registry
+identity and the resolution result are §5.2.9 and `docs/adr/ADR-007-spatial-registry-identity.md`.
 
-**Still open:** the five provider grid configurations — origin, spacing, and axis
-orientation — which need documentation or one measured request→served pair.
+**Corrected 2026-11-21 (5.2 design pass).** Two claims in the paragraph above were
+design, not fact. The registry is still keyed by `model` alone
+(`grid.ts:491-518`), and no literal `gridSpecHash` fixture exists — the suite proves
+the hash is a function of its fields, so an edit to the preimage passes every test.
+Both are 5.2 work (§8.2 steps 5.2.1–5.2.4), not closed items.
+
+**Owner decision 2026-11-21 — the field-mapping boundary is resolved.**
+`field_outlook_cells.distance_km` is `NOT NULL` and is a distance from the anchor to
+the provider's **served** coordinate, which does not exist before the first ingest.
+Resolution therefore stops at the cell identity: `outlook_cells` may be minted,
+`field_outlook_cells` is not written, `0` is never a placeholder, and the anchor is
+never substituted for the served coordinate. The mapping row belongs to the ingest
+that learns the served coordinate, or to a later migration that makes the column
+nullable — not to a fabricated value.
+
+**Still open:** the five provider grid configurations — origin, spacing, axis
+orientation, longitude convention, node-vs-interpolation behaviour. Evidence is
+graded: **A** documented grid definition, **B** measured request→served pairs under
+the §5.2.6 protocol, **C** inferred from a resolution figure or an approximate
+coordinate. **C never configures a row, and one measured pair is not enough** — an
+interpolating endpoint says nothing about the lattice, and a pair that lands on a
+plausible lattice is consistent with every origin in the same congruence class. The
+one Open-Meteo pair that lands exactly on a 0.25° lattice
+(`-6.25/106.75`, `weather-source-matrix.md:163`) is graded **C** because the same
+research calls it an interpolated point.
 **Built:** `packages/contracts/src/grid.ts` — `defineGridSpec`, `resolveGridCell`,
 `createGridRegistry`, `gridSpecHash`, integer micro-degree arithmetic, `south-west`
 orientation only. Eighteen synthetic golden vectors executed in
 `packages/contracts/src/grid.test.ts`, including the F-01 origin-precision cases and
 the F-02 orientation rejection.
 
+**Still open inside the resolver (owner approval required, 2026-11-21):**
+
+1. Does generic coordinate validation reject `|lon| > 180` before wrapping? Today it
+   does not — `400` resolves to a cell — and tightening it invalidates the `359.5`
+   input of golden vector 10.
+2. On a grid whose origin makes `180` the exclusive upper edge, should the
+   antimeridian fold to the lower edge instead of failing?
+3. Is a provider whose convention is `[0, 360)` expressed as a `global` domain with
+   `originLon = 0`, or as a bounded `[0, 360)` grid? `defineGridSpec` accepts the
+   latter, but `lonRange` has no absolute bound while `latRange` does
+   (`grid.ts:278` vs `grid.ts:295-309`), so `["0","400"]` is currently a legal
+   configuration.
+4. `cellKey` format and `gridId` in the hash stay as they are: the key is
+   `nodeLat,nodeLon` and `UNIQUE (provider, model, cell_key)` already carries the
+   other two components; the hash keeps `gridId` because it pins a named definition.
+5. `spatialResolutionKm` is in the hash preimage although it is descriptive, not part
+   of the lattice. Correcting a published resolution figure changes the hash and
+   therefore (under the one-spec-per-`(provider, model)` rule) forces a new model
+   string with no change in cell identity. Keeping it is defensible — the hash pins
+   the whole reviewed definition — but it should be a stated choice.
+
 **Still unbuilt:** every field→cell write, and every real provider grid. The
 resolver exists; a model cannot ingest until its configuration is validated.
 
-**Revised would-be-settled-by:** a validated `GridSpec` per model, not a resolution
-figure.
+**Revised would-be-settled-by:** a validated `GridSpec` per `(provider, model)` with
+grade A + B evidence, not a resolution figure and not one measured pair.
 
 ### `OPEN-02` — BMKG written permission — **P1**
 
@@ -427,7 +472,7 @@ and "deferred" were doing too much work:
 | `OPEN-01` | **RESOLVED** | — | both halves met: the owner confirmed the `app_auth` boundary as final (`docs/review/phase-3.2-owner-decisions.md` *Amendment 3*), and `POST /v1/auth/login` now reads `password_hash` through it, proven by `packages/database/test/integration/session.test.mjs` (`current_user = app_auth`, `app.user_id` unset, `app_api` still refused `42501`) |
 | `OPEN-13` | **RESOLVED** | — | not applicable now: `ADR-005` accepted, S5 applied canonically, and the S6 `auth-boundary` suite green (49 cases) |
 | `OPEN-17` | **BLOCKED_EXTERNAL_INPUT** | product decision, then the snapshot path | a `POINT` row is storable; only its snapshot is impossible |
-| `OPEN-18` | **BLOCKED_EXTERNAL_INPUT** | 5.0/5.2: provider grid validation, then the resolver | the generic resolver contract is approved (2026-11-21); `cell_key` is `text` and no constraint depends on its content |
+| `OPEN-18` | **BLOCKED_EXTERNAL_INPUT** | 5.0/5.2: pinned hash, provider/model registry, then provider grid validation | the generic resolver contract is approved (2026-11-21); `cell_key` is `text` and no constraint depends on its content; the field-mapping boundary is resolved (5.2 defers `field_outlook_cells`) |
 | `OPEN-21` | **BLOCKED_EXTERNAL_INPUT** | agronomic decision, then snapshot construction | the columns stay unconstrained `text` |
 | `OPEN-26` | **DEFERRED** | the window engine that produces segments | the table, plus a `jsonb_typeof` array check, is all the schema can honestly do |
 | `OPEN-27` | **BLOCKED_EXTERNAL_INPUT** | worker phase, with a security review of the narrowest read shape | grants ship the default: nothing to `app_system` |
