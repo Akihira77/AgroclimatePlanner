@@ -11,8 +11,9 @@
 | Implementation status | **Snapshot at 2026-11-18; live status is `docs/IMPLEMENTATION_STATUS.md`** — at that date `S1` and `S2` were implemented and `S3` onward was not started. Since then `S3`/`S4` (`b9a27c6`, `cf0d1c2`), `S5` (`8fb2270`), and `S6` (`e9d1621`) shipped; the canonical development database is at 5/5 and `OPEN-13` was resolved on 2026-11-20. Nothing in this file's decisions changed |
 | Verification status | **Green at `75607d8`, reviewed** — build, typecheck, test, lint, prettier, `git diff --check` all exit `0`; api 76, contracts 187, database 9, 0 failing |
 | Remaining blockers before `S3` | **None documentation-wise** — `ADR-004` was accepted on 2026-11-18 (see the ADR status row). `S3` may begin subject to its own implementation prerequisites (§16 of the plan: test-file authorization, a cluster-admin bootstrap path, an isolated compose project). `ADR-005` gates `S5`, not `S3`. The `IG` gates block **S7** (`IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10`) and **S8** (`IG-8`, `IG-9`), not the database boundary |
-| ADR status | `ADR-004` **Accepted** 2026-11-18 and `ADR-005` **Accepted** 2026-11-20 (approver: Akihira77) — they formalise `AG-1` and `AG-2`; `ADR-005` gates `S5`, and the three schema details it needed are decided as `D-1`–`D-3` in §2.11 (2026-11-20). Neither ADR invents a decision beyond its approval, and `AG-1`/`AG-2` are **not** re-opened or asked for again |
+| ADR status | `ADR-004` **Accepted** 2026-11-18 and `ADR-005` **Accepted** 2026-11-20 (approver: Akihira77) — they formalise `AG-1` and `AG-2`; `ADR-005` gates `S5`, and the three schema details it needed are decided as `D-1`–`D-3` in §2.11 (2026-11-20). Neither ADR invents a decision beyond its approval, and `AG-1`/`AG-2` are **not** re-opened or asked for again. `ADR-006` **Accepted** 2026-11-21 records Amendment 3 (`IG-8`, `IG-9`) |
 | `OPEN-nn` dispositions changed | **No, at the time of these decisions** — `OPEN-01` and `OPEN-13` were both unresolved then; `OPEN-13` was resolved on 2026-11-20 on `ADR-005`'s three-part Definition of Done (see `docs/data-model/open-decisions.md` §5). `OPEN-01` remains unresolved |
+| Amendment 3 — 2026-11-21 | Three owner approvals recorded after this document was written: `OPEN-01`'s boundary confirmed as final, `IG-8` (session cookie) and `IG-9` (CSRF) decided. They are recorded in **Amendment 3** at the end of this file, with `ADR-006` as their durable record. Nothing above this row is rewritten; the rows above describe 2026-11-18 and 2026-11-20 as they were |
 
 This record exists so the owner can decide without reading 1,100 lines of review. It
 restates the review's recommendations; it does not add to them. Where a detail is
@@ -74,6 +75,9 @@ engine is not part of the error contract, so it is not an `IG-5` footnote. See
 | `IG-5` | Authentication API error contract | implementation gate | before the exception filter | S1, S2, S7 |
 | `IG-11` | API test runner | implementation gate | before the first API test | S2, every API-level test |
 | `IG-12` | Request-validation engine | implementation gate | before the first validated parameter | S2, every endpoint that takes input |
+| `OPEN-01` | Credential lookup boundary — **confirmed** as the dedicated `app_auth` role | `OPEN-01` (P1) | — | S7, S8 (implementation only) |
+| `IG-8` | Session cookie name and attributes | implementation gate | before the first cookie set | S8 |
+| `IG-9` | CSRF mechanism | implementation gate | before the first non-GET endpoint | S8 |
 
 `AG-1`/`AG-2` are architecture decisions. `IG-5`/`IG-11` are convention decisions
 that would otherwise be made by whoever writes the first file. Both kinds are
@@ -1161,8 +1165,8 @@ to S7/S8, where endpoint behaviour is decided.
 | Password policy: length, byte cap, composition | `IG-4` | `registerRequestSchema` |
 | Argon2id parameters, measured on the deploy host | `IG-6` | hashing implementation |
 | Per-account brute-force control | `IG-7` | production, not implementation |
-| Cookie name and `__Host-` prefix | `IG-8` | first cookie set |
-| CSRF mechanics: header, token length, comparison, rotation | `IG-9` | first non-GET endpoint |
+| Cookie name and `__Host-` prefix | `IG-8` — **approved 2026-11-21**, see *Amendment 3* | first cookie set (S8) |
+| CSRF mechanics: header, token length, comparison, rotation | `IG-9` — **approved 2026-11-21** for the pattern, header, methods, and origin source; length, encoding, retrieval, and rotation remain S8 design, see *Amendment 3* | first non-GET endpoint (S8) |
 | Email verification | `IG-10` | public deployment |
 | `updated_at` trigger on `users` | `OPEN-19` | untouched by 3.2 |
 | Account deletion policy | `OPEN-04` | no endpoint, no column |
@@ -1182,9 +1186,17 @@ their own dates. They were unanswered when this record was written; all seven ar
 on 2026-11-20 in `docs/review/phase-3.2-s7-owner-decisions.md`, and
 `docs/IMPLEMENTATION_STATUS.md` carries their current state.
 
+**Update, 2026-11-21.** Two of those gates are no longer unanswered: `IG-8` and `IG-9`
+were approved on 2026-11-21 and are recorded in *Amendment 3* at the end of this file. The
+paragraph above is left as written because it describes the 2026-11-18 round; it is no
+longer a complete list of what is unapproved. `IG-1`–`IG-4` and `IG-6`, `IG-7`, `IG-10`
+remain as the S7 record states them.
+
 `OPEN-01` remains **unresolved** despite its decision being approved, because no
 authentication endpoint reads a credential through the boundary yet — the login endpoint
-and session issuance are S8. `OPEN-13` met the review's rule on
+and session issuance are S8. On 2026-11-21 the owner confirmed the boundary as the final
+mechanism (*Amendment 3*), which removes the last external input the register entry was
+waiting for and changes nothing about implementation. `OPEN-13` met the review's rule on
 2026-11-20: the ADR is accepted, the migration is applied, and the verification evidence
 is green — three facts about the repository, none of which an approval can supply.
 
@@ -1198,3 +1210,246 @@ is green — three facts about the repository, none of which an approval can sup
 
 No inconsistency was found serious enough to justify editing the design review, and
 it was not edited.
+
+---
+
+# Amendment 3 — 2026-11-21: S8 security gates
+
+**Approver:** Akihira77, 2026-11-21. **Status: approved, not implemented, not verified.**
+
+This amendment records three decisions taken after this document was written. It does
+not alter Decision 1–4, Amendment 1, or Amendment 2; those stand as written, with their
+own dates, and none of them is re-opened. The durable architectural record for the
+cookie and CSRF decisions is `docs/adr/ADR-006-session-transport-and-csrf.md`; the
+credential-lookup confirmation is a restatement of `ADR-004`'s decision, not a new
+boundary.
+
+The distinction this repository keeps, and that this amendment keeps:
+
+| Word | Means here |
+|---|---|
+| **approved** | the owner has decided; the wording below is final and may be implemented against |
+| **implemented** | code exists and does the thing |
+| **verified** | an executed check proves the code does the thing |
+
+All three items below are **approved only**. `S8` has not started. No cookie, CSRF
+token, guard, session issuance, or `Origin` check exists anywhere in `apps/`.
+
+---
+
+## A3.1 `OPEN-01` — Credential lookup database boundary (**confirmed**)
+
+| Field | Value |
+|---|---|
+| Decision ID | `OPEN-01` (register: `docs/data-model/open-decisions.md` §1.2) |
+| Approved | 2026-11-21 |
+| Related ADRs | `ADR-004` (the boundary itself, accepted 2026-11-18); `ADR-003` (why a role, not a GUC); `ADR-005` (the session table `app_auth` also reaches) |
+| Implementation status | **Boundary implemented and verified** (S3/S4/S6, `b9a27c6`, `cf0d1c2`, `e9d1621`); **request path not implemented** — no endpoint reads a credential |
+| Verified | `test/rls/auth-boundary.test.mjs` (49 real-role cases), schema-conformance suite, `db:verify` 499 assertions on the canonical development database |
+
+**Final approved wording.**
+
+> Credential lookup uses the dedicated `app_auth` database role. Authentication
+> database access stays separate from `app_api`, with least-privilege column grants.
+> Password hashes and credential fields are never exposed through the API database role.
+> `BYPASSRLS` is not granted to simplify authentication, and no new `SECURITY DEFINER`
+> function is introduced. Authentication queries neither establish nor modify tenant
+> context (`app.user_id`). The existing authentication/database boundary and its
+> security guarantees are preserved.
+
+**Rationale.** The mechanism was decided on 2026-11-18 as `AG-1` and built in S3/S4/S6;
+this approval confirms that the shipped shape — a fourth role with column-level grants
+and two narrowly scoped policies — is final, rather than a placeholder to be revisited
+when `S8` starts. Confirming it now prevents the most likely drift: an implementer
+reaching for `app_api`, `BYPASSRLS`, or a `SECURITY DEFINER` lookup because the login
+path is the first place where a query runs with no tenant context, and the convenient
+answer is also the wrong one.
+
+**Security implications.**
+
+- The credential table remains unreadable by the role that serves every tenant request.
+  A compromised or SQL-injected `app_api` path cannot read `password_hash`.
+- `app_auth` holds `SELECT` on six columns of `app.users` (`id`, `email`,
+  `password_hash`, `role`, `locale`, `timezone`) and `INSERT` on two
+  (`email`, `password_hash`). It has no `UPDATE`, no `DELETE`, and no grant on
+  `created_at` — so it cannot rewrite a credential, and a response built from its rows
+  cannot leak a creation timestamp.
+- `app_auth` is `NOBYPASSRLS`, asserted rather than assumed
+  (`bootstrap/roles.sql`; `db:verify` checks the attribute for every role). The two
+  policies it reaches are `USING (true)` only because the column grant is what bounds
+  the blast radius — the same reasoning recorded in Decision 1.
+- The auth path does not call `withTenant` and does not set `app.user_id`. A login
+  attempt therefore cannot inherit or poison a tenant scope, and failure leaves no
+  transaction-local state behind.
+- `app.purge_expired_sessions()` remains the repository's only `SECURITY DEFINER`
+  function. It is unrelated to credential lookup (it deletes expired sessions, never
+  reads a password) and is not touched by this decision; the approval's "no new
+  `SECURITY DEFINER` function" adds none.
+
+**Implementation scope.** `S7` (register + credential verification) and `S8` (login)
+must reach `app.users` only through `AUTH_DATABASE_CLIENT`. Nothing in this approval
+authorises a grant change: the grants already exist and any widening would contradict
+the decision.
+
+**Register effect.** The entry's `BLOCKED_EXTERNAL_INPUT` disposition is removed by this
+approval — the external input has arrived. The entry is **not** `RESOLVED`: per §1.2 and
+`ADR-004`, resolution requires a login endpoint that reads a credential through the
+boundary plus the verification that proves it. It is therefore recorded as
+`DEFERRED` to the authentication slice (`S7`/`S8`), with the decision half closed.
+
+---
+
+## A3.2 `IG-8` — Session cookie configuration
+
+| Field | Value |
+|---|---|
+| Decision ID | `IG-8` (gate: `docs/review/phase-3.2-design-review.md` §17) |
+| Approved | 2026-11-21 |
+| Related ADRs | `ADR-006` (durable record); `ADR-005` (token lifetime, hash-only storage); `ADR-002` D5 (server-side sessions) |
+| Implementation status | **Not implemented.** No cookie is set anywhere; `cookie-parser` is mounted with no secret and no cookie is issued |
+| Verified | nothing — there is nothing to verify |
+
+**Final approved wording.**
+
+> The session cookie is host-only, named `__Host-agroclimate_session`, with `HttpOnly`,
+> `Secure`, `SameSite=Lax`, `Path=/` and no `Domain` attribute. The session token is
+> never exposed in a response body, and only its cryptographic hash is persisted. Cookie
+> security is not weakened for development environments; local development documents
+> its own HTTPS and `Secure`-cookie considerations. `SameSite=None` is not used without a
+> separately approved requirement.
+
+**Rationale.** `ADR-005` fixed the token (32 CSPRNG bytes, base64url) and the storage
+(only `sha256(token)`), but left the transport open. Without a decision, the first
+`res.cookie(...)` call would pick a name and attributes by habit. The `__Host-` prefix
+makes the two most damaging mistakes impossible rather than reviewable: it is accepted by
+the browser only with `Secure`, `Path=/`, and no `Domain`, so the cookie can neither be
+sent over cleartext nor widened to sibling subdomains — the exact shape of a
+cookie-injection attack that would also defeat double-submit CSRF protection.
+
+The design review had recommended a plain name in development and `__Host-` in
+production. That recommendation is declined: a dev/prod cookie difference means the
+production-only path is never exercised locally, and the difference *is* the security
+property.
+
+**Security implications.**
+
+- With no `Domain`, a session issued at one host is not presented to any other host,
+  including tenant-controlled or static-content subdomains.
+- `HttpOnly` keeps the token out of reach of script; it does not prevent XSS from acting
+  as the user, and this decision does not claim it does.
+- `Secure` is mandatory, so a deployment that cannot serve HTTPS has no working session
+  — a failure that is visible, rather than a silent downgrade.
+- `Path=/` is required by the prefix and is not a security boundary; authorisation is
+  per-route and per-row, never per-path.
+- `SameSite=Lax` blocks the cookie on cross-site `POST` by default. D3 of `ADR-006`
+  freezes it at `Lax`; `None` needs a separate recorded decision.
+- Only the hash is stored, so a database disclosure does not yield a usable session. The
+  raw token exists in the cookie and in process memory for the request only.
+- Credentialed CORS becomes necessary (web and API are different origins). The current
+  factory mounts CORS with `credentials: false`; `S8` must change that while keeping the
+  exact origin allowlist. A wildcard with credentials is invalid and must not appear.
+
+**Implementation scope.** `S8` only: `Set-Cookie` on login, `Clear-Cookie` on logout,
+cookie parsing on the guard, and the CORS change. No database object changes; the
+`token_hash` column and its CHECK already match.
+
+**Deviation recorded.** The review's `IG-8` recommendation ("`__Host-` in production,
+plain name in dev") is superseded. Development must use a loopback origin, or local TLS,
+and must not drop `Secure` or the prefix.
+
+---
+
+## A3.3 `IG-9` — CSRF protection
+
+| Field | Value |
+|---|---|
+| Decision ID | `IG-9` (gate: `docs/review/phase-3.2-design-review.md` §17) |
+| Approved | 2026-11-21 |
+| Related ADRs | `ADR-006` (durable record); `ADR-005` (the session the token binds to); `ADR-004` (`app_auth`) |
+| Implementation status | **Not implemented.** No token, no `X-CSRF-Token` handling, no `Origin` check |
+| Verified | nothing — there is nothing to verify |
+
+**Final approved wording.**
+
+> CSRF protection uses the synchronizer token pattern together with `Origin`
+> validation. A CSRF token is associated with the authenticated session; the frontend
+> obtains it through a dedicated mechanism and sends it in the `X-CSRF-Token` header;
+> the backend validates it against the active session. State-changing requests
+> (`POST`, `PUT`, `PATCH`, `DELETE`) additionally have their `Origin` header validated
+> against explicitly configured trusted application origins. Authentication endpoints
+> that change state — registration, login, logout — are covered by `Origin` validation,
+> with the pre-session case handled explicitly. `SameSite=Lax` remains defence in depth
+> and is not the only control. A double-submit-cookie strategy is not used as a
+> replacement.
+
+**Rationale.** The review's `IG-9` line said "double-submit" and nothing else, which is
+not implementable without inventing the rest — and double-submit is the weakest of the
+available patterns: it compares two values the client supplies, so it is defeated by any
+cookie-injection primitive, including the subdomain case `IG-8` exists to prevent. A
+server-verified token bound to the session row costs one extra lookup and depends on the
+session store that already exists.
+
+Two controls rather than one because they fail differently: the token is defeated by a
+route that forgets to check it, `Origin` validation is defeated by a same-site attacker.
+Both are global, so a route added later is covered by default.
+
+**Security implications.**
+
+- A cross-site forged `POST` must both carry the victim's session cookie **and** present
+  a token bound to that session **and** come from a trusted origin.
+- `Origin` is compared exactly (scheme, host, port) against `CORS_ORIGINS`, the variable
+  that already exists and is already required in production. Reusing it is deliberate:
+  a second "trusted origins" list would drift from the CORS allowlist, and the drift
+  would be invisible until one of the two is wrong. *(Repository-derived requirement, see
+  `ADR-006` D2.2 item 3.)*
+- A missing `Origin` on a state-changing request is refused. v1 has no non-browser
+  client; when one appears, that is a decision, not a default.
+- Registration and login have no session to bind a token to. `Origin` validation is the
+  control there, applied before body parsing, lookup, or hashing. This is the "appropriate
+  handling before an authenticated session exists" the approval requires; it is not a
+  CSRF exemption for those routes.
+- `SameSite=Lax` stays. It is the only control that works with no application code, and
+  it is treated as defence in depth rather than as the mechanism.
+- A refusal uses the existing bounded `FORBIDDEN` code. No new error code, no diagnostic
+  detail about which control failed.
+
+**Implementation scope.** `S8` only: token generation and storage, a retrieval mechanism,
+middleware/guard for header comparison and `Origin` validation, and their tests.
+
+**Not decided here (recorded, not inferred).** The retrieval mechanism, token length,
+encoding, storage form, and rotation policy are `S8` design details. The approval fixes
+the pattern, the header name, the covered methods, and the `Origin` source; it does not
+fix those four, and neither does `ADR-006`. They must be proposed in the S8 design and
+recorded before the first non-GET endpoint ships.
+
+**Deviation recorded.** The review's `IG-9` recommendation (double-submit) is superseded,
+and `docs/architecture/api-conventions.md` §8 said the same thing; that line is amended
+to point at `ADR-006`.
+
+---
+
+## A3.4 Counts and dispositions after Amendment 3
+
+| Item | Before | After 2026-11-21 |
+|---|---|---|
+| Owner decisions in this record | 4, plus `IG-5-A1`, `IG-12` | unchanged; Amendment 3 is separate |
+| `OPEN-01` disposition | `BLOCKED_EXTERNAL_INPUT` | `DEFERRED` to `S7`/`S8` — decision made, request path outstanding |
+| `IG-8` | unanswered | **approved**, not implemented |
+| `IG-9` | unanswered | **approved**, not implemented |
+| S8 gates outstanding | `IG-8`, `IG-9` | none; S8 is blocked only on `S7` (implementation) |
+| ADRs | 5 | 6 (`ADR-006`) |
+| Migrations, roles, grants | — | unchanged |
+
+## A3.5 What Amendment 3 does not do
+
+- It does not start `S8`, or authorise any endpoint, cookie, CSRF middleware, guard, or
+  CORS change. The approvals exist so that `S8` can be written against them.
+- It does not resolve `OPEN-01`. The boundary was already built; the request path is
+  still absent, and the register entry closes on evidence, not on approval.
+- It does not change a role, grant, policy, RLS behaviour, or migration. The `app_auth`
+  grants the approval describes are the ones shipped in S4 and verified in S6.
+- It does not change password hashing parameters (`IG-6`), which remain provisional
+  pending a deployment-host measurement.
+- It does not edit the design review. The `IG-8`/`IG-9` rows there record what was
+  recommended; two of those recommendations were declined, and rewriting them would hide
+  that they were considered.

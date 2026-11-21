@@ -1388,7 +1388,7 @@ of them into "done" or "blocked".
 | `IG-11` | decided | `node:test` for `apps/api`; already in use |
 | `IG-12` | decided | Zod-only validation, bound per parameter; in use |
 | `IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10` | **answered 2026-11-20** — `docs/review/phase-3.2-s7-owner-decisions.md`; `ARGON2ID-LIB` and `LIMITER-MECHANISM` approved the same day, and the deployment-host benchmark remains before implementation | S7 only, not S3–S6 |
-| `IG-8`, `IG-9` | **3 — open** | block **S8**, not S3–S6 |
+| `IG-8`, `IG-9` | **3 — open** (as of the date of this plan; both **approved 2026-11-21**, `ADR-006`) | block **S8**, not S3–S6 |
 | S3 | **4 — implemented** | gate: accepted `ADR-004`; `db:verify` 387 assertions at the time |
 | S4 | **4 — implemented and pushed** | gate: S3 (the role must exist before a policy names it); `db:verify` 419 assertions after the corrective pass |
 | S5 | **4 — implemented, committed, pushed, and applied to canonical** | gate: accepted `ADR-005` **and** S4, both satisfied 2026-11-20; commit `8fb2270`; canonical `127.0.0.1:5442` at 5/5 with `db:verify` 493/0/0 |
@@ -1454,8 +1454,9 @@ blocker for public deployment rather than a detail for later.
 
 The login endpoint itself, session token generation and storage, the session cookie,
 CSRF, the authentication guard, `/me`, logout, and login-side rate limiting. On the
-decision side: `IG-8` (cookie name and `__Host-` prefix) and `IG-9` (CSRF mechanics).
-Plus the
+decision side: `IG-8` (cookie name and `__Host-` prefix) and `IG-9` (CSRF mechanics) —
+both **approved 2026-11-21** (`ADR-006`, *Amendment 3* of
+`docs/review/phase-3.2-owner-decisions.md`), so only implementation remains. Plus the
 `maintenance` queue that would schedule the purge job, which is Phase 4 work: S8 can
 *call* the function, and nothing can *schedule* it yet.
 

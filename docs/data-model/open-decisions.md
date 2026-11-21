@@ -132,10 +132,12 @@ is not buildable from the current schema.
 **The mechanism is no longer open.** `AG-1` selected the dedicated `app_auth` role on
 2026-11-18 (`ADR-004`), and S3/S4/S6 built and verified it: column grants on
 `app.users`, two policies, `db:verify` 499 assertions, the `auth-boundary` suite at 49
-real-role cases. What remains open is the **request path** — no endpoint reads a
-credential through that boundary yet. Registration and credential verification are S7;
-the login endpoint is S8. Both are recorded in
-`docs/review/phase-3.2-s7-owner-decisions.md` without being implemented.
+real-role cases. On 2026-11-21 the owner confirmed that boundary as final — no
+`BYPASSRLS` shortcut, no new `SECURITY DEFINER` lookup, no tenant context on the auth
+path (*Amendment 3* in `docs/review/phase-3.2-owner-decisions.md`). What remains open is
+the **request path** — no endpoint reads a credential through that boundary yet.
+Registration and credential verification are S7; the login endpoint is S8. Both are
+recorded in `docs/review/phase-3.2-s7-owner-decisions.md` without being implemented.
 
 **Blocks:** the authentication slice — login, session issuance, and therefore
 every authenticated request. It does **not** block table creation, the catalog,
@@ -381,7 +383,7 @@ and "deferred" were doing too much work:
 | ID | Disposition | Assigned to | Why Phase 3 does not depend on it |
 |---|---|---|---|
 | `OPEN-09` | **DEFERRED** | the first `plantings` writer | the DDL half is settled by omission (`D26`): no default, no partial index |
-| `OPEN-01` | **BLOCKED_EXTERNAL_INPUT** | authentication slice; owner approval of a fourth role or a `SECURITY DEFINER` function | the boundary exists and is verified; no endpoint reads a credential through it, so no authentication path exists |
+| `OPEN-01` | **DEFERRED** | authentication slice (`S7` registration, `S8` login) | decision half closed 2026-11-21: the owner confirmed the dedicated `app_auth` boundary as final (`docs/review/phase-3.2-owner-decisions.md` *Amendment 3*). What remains is the request path — `S7`/`S8` code — so the item is technical, not a judgement call. It stays unresolved until a login endpoint reads a credential through the boundary and the verification proves it |
 | `OPEN-13` | **RESOLVED** | — | not applicable now: `ADR-005` accepted, S5 applied canonically, and the S6 `auth-boundary` suite green (49 cases) |
 | `OPEN-17` | **BLOCKED_EXTERNAL_INPUT** | product decision, then the snapshot path | a `POINT` row is storable; only its snapshot is impossible |
 | `OPEN-18` | **DEFERRED** | ingestion; the rule is derivable from each grid's published resolution | `cell_key` is `text`; no constraint depends on its content |

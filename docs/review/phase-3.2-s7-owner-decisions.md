@@ -240,5 +240,7 @@ installation, or a repository change on its own.
   no code reads a credential through them.
 - It does not resolve `OPEN-04`, and it does not choose an account-deletion policy.
 - It does not authorise S8, a cookie, or a CSRF mechanism.
-- It does not approve `IG-8` or `IG-9`.
+- It does not approve `IG-8` or `IG-9`. (Both were approved later, on 2026-11-21 —
+  `ADR-006` and *Amendment 3* of `docs/review/phase-3.2-owner-decisions.md`. That
+  approval is not part of this S7 record and changes nothing here.)
 - It does not make the provisional Argon2id parameters final.

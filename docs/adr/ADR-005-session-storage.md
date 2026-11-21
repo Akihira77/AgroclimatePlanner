@@ -581,8 +581,9 @@ closed.
   development database (`127.0.0.1:5442`, 5/5), and `test/rls/auth-boundary.test.mjs` is
   green there (49 cases). `OPEN-01` and `OPEN-04` remain open and are unaffected: the
   store exists, the request path that uses it does not.
-- **`IG-8`** (cookie name and `__Host-` prefix) and **`IG-9`** (CSRF) — unanswered, and
-  they block S8 rather than this store. **`IG-6`** (password hashing) is answered
+- **`IG-8`** (cookie name and `__Host-` prefix) and **`IG-9`** (CSRF) — **approved
+  2026-11-21** (`ADR-006`); they block S8, not this store, and no implementation exists.
+  **`IG-6`** (password hashing) is answered
   conditionally as of 2026-11-20 (`docs/review/phase-3.2-s7-owner-decisions.md`): Argon2id
   with provisional parameters, final only after the deployment-host benchmark. It blocks
   S7, not this store.

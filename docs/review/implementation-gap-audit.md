@@ -415,15 +415,24 @@ geometry validation; contract envelopes for auth, farm, field; the `area_ha`/poi
 6. The pre-existing suites stay green, and the new integration tests are in a pipeline stage that actually
    runs.
 
-**Single prerequisite decision:** `OPEN-01` — the credential lookup key (username vs email, and its
-uniqueness index, tied to `OPEN-04`). It is marked `BLOCKED_EXTERNAL_INPUT`. Two further gates block the
-S8 half and are owner decisions, not engineering ones: `IG-8` (cookie name and `__Host-` prefix) and `IG-9`
-(CSRF mechanics — header, token length, comparison, rotation). All three are recorded in
-`docs/review/phase-3.2-design-review.md:1056-1057` with recommended defaults; the review says adopting them
-is an owner decision because "a cookie attribute chosen by the implementer becomes a de-facto decision".
+**Prerequisite decisions — resolved after this audit.** At audit time the three were open. On 2026-11-21
+the owner approved all three: `OPEN-01`'s boundary (dedicated `app_auth`, least privilege, no `BYPASSRLS`,
+no new `SECURITY DEFINER`, no tenant context on the auth path), `IG-8` (`__Host-agroclimate_session`,
+`HttpOnly`/`Secure`/`SameSite=Lax`/`Path=/`, no `Domain`), and `IG-9` (session-bound synchronizer token in
+`X-CSRF-Token` plus exact `Origin` validation against `CORS_ORIGINS`). They are recorded in *Amendment 3* of
+`docs/review/phase-3.2-owner-decisions.md` and formalised in `docs/adr/ADR-006-session-transport-and-csrf.md`.
 
-If the owner cannot decide them, the honest sequencing is to run **T13 (CI)** and **T4+T8** in parallel —
-they need no tenant context — rather than to start T2 against invented credential, cookie, and CSRF shapes.
+Correction to the paragraph this replaces: it called `OPEN-01` "the credential lookup key (username vs
+email)". That was wrong — the lookup key is already fixed as email with shared normalisation
+(`api-conventions.md` §8.1, `IG-1` answered). `OPEN-01` is the database *boundary*, which `ADR-004` built and
+the 2026-11-21 amendment confirms.
+
+What remains before T2 is therefore implementation, not decision: `S7` (register + credential verification)
+then `S8` (login, session, guard). No gate is outstanding.
+
+If the cookie, CSRF-token-retrieval, or session-detail shapes are later found underspecified, the honest
+sequencing is to run **T13 (CI)** and **T4+T8** in parallel — they need no tenant context — rather than to
+start T2 against invented shapes.
 
 ---
 
@@ -515,8 +524,8 @@ Only decisions that block or materially change the next milestone.
 | ID | Decision | Status | Effect on this plan |
 |---|---|---|---|
 | `OPEN-01` | Credential lookup key and its uniqueness index (interacts with `OPEN-04`) | `BLOCKED_EXTERNAL_INPUT` | Blocks T2 and therefore the recommended Milestone 1. Nothing in the app can read a credential until it is answered. |
-| `IG-8` | Cookie name and `__Host-` prefix | unanswered owner gate (`design-review.md:1056`) | Blocks the cookie half of S8. |
-| `IG-9` | CSRF mechanics: header name, token length, comparison, rotation | unanswered owner gate (`design-review.md:1057`) | Blocks the first non-GET authenticated endpoint. |
+| `IG-8` | Cookie name and `__Host-` prefix | **approved 2026-11-21** (after this audit's evidence snapshot; `ADR-006`) — was unanswered at audit time | No longer blocks the cookie half of S8; implementation outstanding. |
+| `IG-9` | CSRF mechanics: header name, token length, comparison, rotation | **approved 2026-11-21** for the pattern, header, methods, and origin source (`ADR-006`); token length, encoding, retrieval, and rotation remain S8 design | No longer blocks the first non-GET authenticated endpoint at the decision level. |
 | `OPEN-17` | `area_ha` for `POINT` fields vs a positive `areaHa` contract | `BLOCKED_EXTERNAL_INPUT` | Blocks the field half of T1/T3: the storage value is `0` for point geometry, which a `positive()` schema would refuse. |
 | `OPEN-18` | Per-model `cell_key` rounding rule | open | Blocks the first weather insert (T5). Without it, two providers produce incomparable cells. |
 | `OPEN-26` | `EvidenceSegment` partition validator | open — validator "does not exist" | Blocks writing planting windows (T9); a malformed window is currently storable. |

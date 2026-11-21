@@ -9,7 +9,12 @@
   `e9d1621`), and the `auth_boundary` migration is applied to the canonical development
   database, where `db:verify` is 499 PASS / 0 FAIL / 0 SKIP. `OPEN-01` stays unresolved
   for a different reason: the boundary exists, but no login path reads a credential
-  through it yet.
+  through it yet. On 2026-11-21 the owner confirmed this boundary as the final decision
+  for the credential lookup — dedicated `app_auth` role, no `BYPASSRLS` shortcut, no new
+  `SECURITY DEFINER` entry point, no tenant context on the auth path — recorded in
+  `docs/review/phase-3.2-owner-decisions.md` *Amendment 3*. Nothing in this ADR changes;
+  the confirmation removes the last open question about *which* mechanism, and leaves the
+  request path unimplemented.
 - Date: 2026-11-18 (decision date), recorded here 2026-11-18
 - Depends on: ADR-002 (D5, D7), ADR-003, `docs/data-model/ownership-and-rls.md`,
   `docs/review/phase-3.2-design-review.md` §3, §4, §5, §16
@@ -318,7 +323,10 @@ These are accepted, disclosed, and not mitigated by this ADR:
 - **ADR-005** — the session table `app_auth` also reaches, and its own boundary.
 - **`OPEN-01`** — still **unresolved**. Do not flip the register entry on the strength
   of this ADR: the Definition of Done requires an accepted ADR **and** an applied
-  migration **and** green verification.
+  migration **and** green verification. The 2026-11-21 confirmation (*Amendment 3* to
+  `docs/review/phase-3.2-owner-decisions.md`) closes the *mechanism* question only; the
+  register entry closes when a login endpoint reads a credential through this boundary
+  and the verification proves it.
 - **`OPEN-28`** — signed tenant context, untouched and unaffected.
 - **`IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10`** — email normalisation, duplicate
   registration, auto-login, password policy, hashing parameters, brute-force control,

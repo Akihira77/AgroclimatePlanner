@@ -246,6 +246,15 @@ canonical database with `db:verify` green, and S6's suite lands — not on the s
 of an isolated run. It is never worked around by loosening the `users` policy or by
 giving `app_api` a grant.
 
+**Clarification, 2026-11-21.** The migration, `db:verify`, and S6 landed; `OPEN-01` is
+still open, because the two authorities on the entry (`docs/data-model/open-decisions.md`
+§1.2 and `ADR-004`) define closure as *a login endpoint reading a credential through the
+boundary, plus the verification that proves it*. The paragraph above states the
+database-side condition only. On 2026-11-21 the owner also confirmed this boundary as
+final (least-privilege `app_auth`, no `BYPASSRLS`, no new `SECURITY DEFINER` lookup, no
+tenant context on the auth path) — see *Amendment 3* in
+`docs/review/phase-3.2-owner-decisions.md`. Nothing in this section changes.
+
 ## 6. The trust boundary on `app.user_id` — see ADR-003
 
 The policies assume `app.user_id` is set by `withTenant` from an authenticated
