@@ -830,7 +830,7 @@ What this does **not** mean:
 Status: **designed, not implemented.** No source file, migration, grant, policy, role, or
 dependency was added. The document is `docs/architecture/farm-field-domain-contracts.md`.
 
-Phases 4.2–4.6 remain **not started**. Nothing below claims their work.
+Phases 4.3–4.6 remain **not started**. Nothing below claims their work.
 
 | Item | State |
 |---|---|
@@ -841,7 +841,7 @@ Phases 4.2–4.6 remain **not started**. Nothing below claims their work.
 | Tenant isolation behaviour, including nested access | designed (§9.4) |
 | Implementation sequence 4.2–4.6 | proposed (§13) |
 | Migration | **none needed** — `farms`/`fields` were applied in Phase 2.2.3 |
-| Open owner decisions | `Q1`–`Q8` (§12) |
+| Owner decisions | `Q1`–`Q4` **approved 2026-11-21**; `Q5`–`Q8` remain open (§12) |
 
 What the design rests on, verified rather than assumed: `app.farms` and `app.fields` exist with
 `FORCE` RLS and `app_api` RW grants (`20261118020000_tenant_tables`); the composite FK
@@ -856,6 +856,65 @@ Scope decision recorded: the contract accepts `POLYGON` only and the database is
 open rather than resolved by this phase, and `Q1` asks the owner whether point fields are a v1
 requirement.
 
-Three `ST_GeomFromGeoJSON` behaviours were checked against the applied database while writing
-the design, and they justify contract-side checks rather than duplication: an unclosed ring is
-silently closed, a `crs` member is silently ignored, and 3D positions are accepted.
+Three `ST_GeomFromGeoJSON` behaviours were measured against the applied database. The first
+statement of this paragraph was wrong when written and is corrected here: an unclosed ring is
+stored unclosed (so `ST_IsValid` refuses it), a `crs` member is **honoured** (so the SRID CHECK
+refuses it, and `ST_SetSRID` must not be used to mask it), and 3D positions are accepted with no
+database objection. See Phase 4.2.
+
+### Phase 4.2 — database layer — **implemented and verified**
+
+Status: implemented in `packages/database`, verified against real PostgreSQL and the real
+roles. **No HTTP route, no contract schema, no migration, no grant, policy, role, or dependency
+was added.** `createTenantScope` remains the only entry point for tenant data.
+
+| File | Contents |
+|---|---|
+| `packages/database/src/farms.ts` | `createFarm`, `listFarms`, `findFarm`, `updateFarm`, `softDeleteFarm`; `Farm`, `FarmCreate`, `FarmUpdate`, `FarmSort`, `FarmPage`, `FarmDeleteOutcome` |
+| `packages/database/src/fields.ts` | `createField`, `listFields`, `findField`, `updateField`, `softDeleteField`; `Field`, `FieldCreate`, `FieldUpdate`, `FieldSort`, `FieldPage`, `PolygonGeometry`, `FieldGeometryError` |
+| `packages/database/src/index.ts` | barrel exports for both modules |
+| `packages/database/test/integration/farm-field.test.mjs` | 26 assertions, `app_api` + real RLS |
+
+Every function takes the transaction `withTenant` opened; none opens its own scope, so nesting
+stays rejected. The tenant is never an argument: the predicate is
+`user_id = NULLIF(current_setting('app.user_id', true), '')::uuid`, the same expression the
+policy reads, and an unscoped insert fails closed on `NOT NULL`. `deleted_at IS NULL` is written
+on every statement because RLS does not filter it.
+
+**Delete/create concurrency.** `softDeleteFarm` locks the farm row with `FOR UPDATE`, then checks
+for live fields in a *separate statement* — a separate snapshot under READ COMMITTED, so a field
+committed while the lock was queued is seen — and only then updates. `createField` takes
+`FOR SHARE` on the parent, which conflicts with that `FOR UPDATE` in both directions. Two
+integration tests hold each transaction open across the other lane's call and assert both the
+lock queue (`pg_locks`) and the outcome. Both were shown to fail against a real regression:
+removing `FOR SHARE` lets a field land under a deleted farm, and folding the check into the
+locking statement (one snapshot) returns `deleted`.
+
+**Geometry.** GeoJSON `Polygon` in, `ST_GeomFromGeoJSON($::text)` (the cast is required: three
+overloads), `ST_AsGeoJSON(geom)::jsonb` out, `area_ha` read from the generated column and never
+written. No `ST_SetSRID` wrapper: the parser **honours** a `crs` member (measured: SRID 3857), so
+wrapping it would store coordinates mislabelled 4326 with a wrong but positive area. The layer
+refuses a non-`Polygon` type and any `crs`/`bbox` member before SQL (`FieldGeometryError`),
+because the column still accepts `POINT` (`OPEN-17`); a raw `POINT` row read back is refused
+rather than typed as a polygon.
+
+| Check | Command | Result |
+|---|---|---|
+| Database unit tests | `pnpm --filter @agroclimate/database test` | **34 pass, 0 fail** |
+| Farm/Field integration | `NODE_ENV=development node --test test/integration/farm-field.test.mjs` | **26 pass, 0 fail** |
+| All integration suites | `NODE_ENV=development pnpm --filter @agroclimate/database test:integration` | **66 pass, 0 fail** |
+| Tenant/RLS suites | `NODE_ENV=development pnpm --filter @agroclimate/database test:rls` | **90 pass, 0 fail** |
+| Schema conformance | `NODE_ENV=development pnpm --filter @agroclimate/database test:schema` | **22 pass, 0 fail** |
+| Privilege verification | `NODE_ENV=development pnpm --filter @agroclimate/database db:verify` | all checks pass, exit 0 |
+| Workspace typecheck / build / lint | `pnpm typecheck`, `pnpm build`, `pnpm lint` | exit 0 |
+| Format / whitespace | `pnpm format:check`, `git diff --check` | exit 0 |
+
+`db:verify` failed on one pre-existing assertion before this phase's tests ran: the `app.sessions`
+column inventory still said "eight approved columns" after `20261121000000_session_csrf_token`
+added `csrf_token`. That expectation was corrected in `scripts/lib/privilege-verification.mjs`;
+it is not a Phase 4.2 code change, but leaving a red verification suite would have hidden the
+result of the run above.
+
+Not done, and not claimed: HTTP endpoints, contract schemas in `packages/contracts`, `409`
+mapping (the primitive returns `has_live_fields`), rate limiting, `If-Match`, and every question
+in `Q5`–`Q8`.

@@ -1,6 +1,10 @@
-# Farm & Field — domain contracts (Phase 4.1)
+# Farm & Field — domain contracts (Phase 4.1) and database layer (Phase 4.2)
 
-**Status: design only. Nothing in this document is implemented.**
+**Status: the design is approved; the database layer in §10.2 and §5 is implemented in
+`packages/database/src/farms.ts` and `fields.ts`.** The API surface (§6), the contract
+schemas (§7), and Phases 4.3–4.6 are still design only — no HTTP route exists.
+**Owner decisions:** `Q1`–`Q4` were answered on 2026-11-21 and are recorded as approved in
+§12; they are not reinterpreted here.
 **Authoritative for:** the Farm and Field API surface, contracts, invariants, and the
 tenant-isolation rules those layers must obey.
 **Not authoritative for:** the physical schema. `prisma/migrations/20261118020000_tenant_tables/`
@@ -219,8 +223,8 @@ users 1 ──── * farms 1 ──── * fields
 | Reading a soft-deleted row | `404` | The API filters `deleted_at IS NULL`; RLS alone does **not**, because the policy has no such predicate |
 
 The farm-with-fields rule is the only deletion rule the brief could not settle from existing
-decisions, and it is recorded as `Q2` in §12 rather than treated as closed. The default
-implemented by 4.3 will be `409` unless the owner says otherwise.
+decisions; it was `Q2` in §12 and is **approved**: refuse, `409 CONFLICT`. `softDeleteFarm`
+(Phase 4.2) returns `has_live_fields` for that case and performs no write.
 
 ### 4.2 The farm-delete race
 
@@ -315,7 +319,7 @@ Path parameter names are `:farmId` and `:fieldId` rather than the `:id` the conv
 uses. The wire is identical; the difference is only the name a `400` reports in
 `details[].path`, and `farmId` is the honest one. Registered as `D2` in §11.
 
-**Deviation from the brief, recorded as `Q3`.** The brief proposes nested field detail paths
+**Deviation from the brief, approved as `Q3`.** The brief proposes nested field detail paths
 (`/v1/farms/:farmId/fields/:fieldId`). This design uses the flat `/v1/fields/:fieldId`, because
 `api-conventions.md` §6 already publishes that surface, and because two other endpoint families
 address a field the same flat way (`/v1/fields/:id/resolve-cell`, `?fieldId=` on weather and
@@ -511,9 +515,9 @@ query parameters arrive as strings (`api-conventions.md` §12).
 | Field name non-blank | yes, trimmed, 1–100 | `btrim` length > 0 | — |
 | Geometry type `Polygon` | yes | accepts `POINT`/`POLYGON`/`MULTIPOLYGON` | — |
 | Positions are 2D | yes, two-element tuple | accepts 3D (`POLYGON Z`) | — |
-| Ring closed, ≥4 positions | yes | **not asserted** — the parser closes a ring silently | — |
+| Ring closed, ≥4 positions | yes, cheaper than a `23514` round trip | `ST_IsValid` refuses an unclosed ring (`23514`) — the parser does not close it | — |
 | Lon/lat bounds | yes | no | — |
-| SRID 4326 | implied (no `crs` member accepted; the parser ignores one) | `ST_SRID(geom) = 4326` | — |
+| SRID 4326 | implied: `strictObject` refuses a `crs` member | `ST_SRID(geom) = 4326`, and it is load-bearing — the parser **honours** a declared `crs` (§10.2) | — |
 | Self-intersection | no | `ST_IsValid` | — |
 | Empty geometry | no (array `min(1)` covers "no rings") | `NOT ST_IsEmpty` | — |
 | Area | never accepted | generated column | positive for a valid polygon |
@@ -604,29 +608,36 @@ requires its own approval.
 
 Write:
 
+Implemented in `packages/database/src/fields.ts` (`createField`, `updateField`):
+
 ```sql
 INSERT INTO app.fields (user_id, farm_id, name, geom)
-VALUES ($1, $2, $3, public.ST_SetSRID(public.ST_GeomFromGeoJSON($4), 4326))
-RETURNING id::text, farm_id::text, name,
+VALUES ($1, $2, $3, public.ST_GeomFromGeoJSON($4::text))
+RETURNING id::text AS id, farm_id::text AS farm_id, name,
           public.ST_AsGeoJSON(geom)::jsonb AS geometry, area_ha, created_at, updated_at
 ```
 
 Read uses `ST_AsGeoJSON(geom)::jsonb`; update replaces `geom` the same way and `area_ha`
 follows automatically because the column is generated.
 
-Three behaviours of `ST_GeomFromGeoJSON` were checked against the applied database
-(2026-11-21) and they are why the contract checks what it checks:
+**There is no `ST_SetSRID(…, 4326)` around the parse, deliberately.** The `::text` cast is
+required — PostGIS 3.6 overloads `ST_GeomFromGeoJSON` for `text`, `json`, and `jsonb`, so an
+untyped parameter is ambiguous (`42725`). Three behaviours were measured against this database
+on 2026-11-21, and the first version of this section got two of them wrong:
 
 | Input | `ST_GeomFromGeoJSON` | Consequence |
 |---|---|---|
-| Unclosed ring | **accepted**, silently closed (`POLYGON((…,106.8 -6.1,106.8 -6.2))`) | The stored geometry is not the one the client sent. The contract must enforce closure, or `geometryHash` would describe a shape the request did not contain |
-| `"crs"` member | **ignored** | A client declaring another CRS would be silently treated as 4326. `strictObject` rejecting the member is the only guard |
-| 3D position | **accepted** (`POLYGON Z (…)`) | The column is `geometry(Geometry,4326)` and does not refuse Z. The contract's two-element position tuple is the only thing that keeps the API 2D |
+| Unclosed ring | **stored unclosed**; `ST_IsValid` false | `fields_geom_valid_check` refuses it (`23514`). The parser does *not* repair the ring |
+| `"crs"` member | **honoured**: `ST_SRID` becomes the declared value (measured `3857`) | `fields_geom_srid_check` refuses it (`23514`). Wrapping the call in `ST_SetSRID(…, 4326)` would overwrite the mismatch and store coordinates labelled 4326 with a wrong, still-positive area — which is why the layer does not |
+| 3D position | **accepted** as `POLYGON Z` | Nothing in the database refuses it. The contract's two-number position tuple is the only guard |
+
+The database layer additionally refuses, before SQL, a non-`Polygon` `type` and any `crs`/`bbox`
+member (`FieldGeometryError`), because the column accepts `POINT` and `MULTIPOLYGON` and would
+otherwise return a shape the API cannot represent.
 
 Topology is **not** validated by the parser; that is `ST_IsValid`'s job as a CHECK. Because the
-contract rejects everything structural before the query, a database geometry error is a backstop
-for a contract bug rather than a normal path, and 4.3 maps it to `500 INTERNAL_ERROR` unless a
-specific SQLSTATE proves otherwise.
+contract and the layer reject everything structural before the query, a database geometry error
+is a backstop for a caller that bypassed both, not a normal path.
 
 No `SELECT *`: `geom` and `area_ha` are `Unsupported` in Prisma and both are read as explicit
 raw columns, consistent with `auth-sessions.ts`'s column discipline.
@@ -670,77 +681,85 @@ milestone and uses the provider's rounding rule, not the GiST index
 
 ---
 
-## 12. Open questions requiring an owner decision
+## 12. Owner decisions and remaining questions
 
-| # | Question | Default this design applies | Consequence if changed |
+`Q1`–`Q4` were answered by the owner on 2026-11-21 and are final for Phase 4.x. They are
+recorded verbatim in intent, not reinterpreted.
+
+| # | Question | Decision applied | Consequence if changed |
 |---|---|---|---|
-| Q1 | `OPEN-17`: are point-shaped fields a v1 requirement? | No. The contract accepts polygons only; the DB check is untouched | Making points required escalates `OPEN-17` to P0 and needs either a dropped `POINT`, a nullable `areaHa` (contract change + ADR), or a declared-radius area |
-| Q2 | Deleting a farm that still has live fields: refuse, or cascade the soft delete? | Refuse with `409 CONFLICT` (D5) | Cascading is one statement but deletes rows the user did not name; it also needs a decision on whether the response reports how many were deleted |
-| Q3 | Field detail path: flat `/v1/fields/:fieldId` or nested `/v1/farms/:farmId/fields/:fieldId`? | Flat, per `api-conventions.md` §6 (D2/§6.1) | Nested would be a documented-surface break for `/v1/fields/:id/resolve-cell` and for every `?fieldId=` read |
-| Q4 | Are the eight agronomic columns (`soil_type`, `drainage_class`, `irrigation_availability`, `water_source`, …) in the 4.x API surface? | No — `OPEN-21` has no vocabularies, and `irrigationAvailable` (boolean, snapshot) does not map to `irrigation_availability` (text) | Exposing them earlier means inventing vocabulary the owner has not approved, and a later rename would be a breaking change |
+| Q1 | `OPEN-17`: are point-shaped fields a v1 requirement? | **Approved: no.** v1 accepts `POLYGON` only; no `POINT` or `MULTIPOLYGON` API support. The database CHECK is untouched, so `OPEN-17` stays open | Reopening escalates `OPEN-17` to P0 and needs either a dropped `POINT`, a nullable `areaHa` (contract change + ADR), or a declared-radius area |
+| Q2 | Deleting a farm that still has live fields: refuse, or cascade the soft delete? | **Approved: refuse.** The future API answers `409 CONFLICT`; `softDeleteFarm` returns `has_live_fields` and writes nothing | Cascading is one statement but deletes rows the user did not name; it also needs a decision on whether the response reports how many were deleted |
+| Q3 | Field detail path: flat `/v1/fields/:fieldId` or nested `/v1/farms/:farmId/fields/:fieldId`? | **Approved: flat.** A field belongs to a farm in the data model; the route does not need to say so | Nested would be a documented-surface break for `/v1/fields/:id/resolve-cell` and for every `?fieldId=` read |
+| Q4 | Are the eight agronomic columns (`soil_type`, `drainage_class`, `irrigation_availability`, `water_source`, …) in the 4.x API surface? | **Approved: no.** They are not exposed through Phase 4.x. `OPEN-21` keeps their vocabularies unowned | Exposing them earlier means inventing vocabulary the owner has not approved, and a later rename would be a breaking change |
 | Q5 | Is there a minimum polygon area product rule (e.g. reject plots under 0.01 ha)? | None. Validity and positivity are enforced; a tiny valid polygon is accepted | A threshold is a product policy with no source in the repo; it would be a contract rule, not a database one |
 | Q6 | Are name/metadata length bounds (100 / 120 / 2000) acceptable? | Applied as proposed; the DB has no bound to inherit | Smaller bounds are cheap to tighten before data exists; larger ones after 4.x data exist would be a breaking change only if lowered |
 | Q7 | Should tenant routes be rate limited, and with which quota? | Not in 4.1; only auth routes are limited today | An unauthenticated-scraping risk does not exist here (authentication is required), but a write-flood does; adding it later is middleware, not contract |
 | Q8 | Is `If-Match` optimistic concurrency required for PATCH? | No. Last write wins; `updatedAt` is observable but not conditional | Adding it later is additive (a header and a `409`), but a client that already relies on last-write-wins would see new conflicts |
 
-`Q1` is blocked on a product answer, not on engineering. `Q2` and `Q3` should be answered before
-4.4, because both change a route or a status that tests will pin.
+`Q5`–`Q8` are still the design's defaults, not decisions. `Q5` (minimum area) and `Q6` (length
+bounds) only shape validation; `Q7` (rate limiting) and `Q8` (`If-Match`) are additive later and
+should be answered before the API layer pins a status or a header.
 
 ---
 
-## 13. Proposed sequence for Phase 4.2–4.6
+## 13. Phase sequence
 
 Each phase ends with a checkable exit condition. No phase claims a later phase's work.
 
-### 4.2 — Contracts
-
-`packages/contracts/src/geometry.ts`, `page.ts`, `farm.ts`, `field.ts`; export from the barrel;
-colocated Vitest suites. Add `FARM_NOT_FOUND` / `FIELD_NOT_FOUND` literals only where a test
-needs to parse them — no enum change.
-
-Exit: `pnpm --filter @agroclimate/contracts test` green, `typecheck` green, and a round-trip
-test proving a rejected geometry never reaches the database shape (unclosed ring, 43-character
-ring, `crs` member, lat/lon swapped bounds).
-
-### 4.3 — Database modules
+### 4.2 — Database layer — **implemented**
 
 `packages/database/src/farms.ts` and `fields.ts`, following `auth-sessions.ts`: explicit column
-lists, RLS + explicit predicates, `deleted_at IS NULL`, `updated_at = now()`, and the
-`FOR UPDATE` delete in §4.2. `createTenantScope` stays the only entry point.
+lists, the tenant predicate read from `app.user_id`, `deleted_at IS NULL` on every statement,
+`updated_at = now()`, geometry through PostGIS, and the lock pair that makes farm deletion safe
+against a concurrent field insert (§4.2). `createTenantScope` stays the only entry point; the
+functions take its transaction.
 
-Exit: real-role integration tests — cross-tenant read/update/delete return zero rows; a field
-insert under a foreign farm is `23503`; a soft-deleted row is excluded by the module's query;
-the farm-delete race yields exactly one of "409" or "field exists"; area is positive and equals
-`ST_Area(geography)/10000`.
+Exit, met: real-role integration tests in `test/integration/farm-field.test.mjs` — 26 assertions
+covering tenant isolation, soft deletion, geometry and generated area, the composite FK,
+transaction rollback, and both directions of the delete/create race. The two race tests were
+shown to fail against a lock-free create and against a single-snapshot delete before being
+accepted.
 
-### 4.4 — API layer
+### 4.3 — Contracts and Farm CRUD
 
-`apps/api/src/farm/**` and `field/**`: modules, controllers, services, path/query/body schemas
-through `ZodValidationPipe`, `AuthGuard`, explicit `@HttpCode`, `Location` on `201`, `404`
-mapping for zero-row reads, `409` for the farm delete rule.
+`packages/contracts/src/geometry.ts`, `page.ts`, `farm.ts` (exported from the barrel, colocated
+Vitest suites), then `apps/api/src/farm/**`: controller, service, path/query/body schemas through
+`ZodValidationPipe`, `AuthGuard`, `Location` on `201`, `404` for a zero-row read, and `409` for
+the farm delete rule.
 
-Exit: endpoint tests — 201/200/204 shapes against the envelope; `401` without a session; `403`
-without `X-CSRF-Token`; `404` for every cross-tenant attempt in §9.4; `409` on the farm rule;
-`400` for unknown keys, unknown query parameters, and malformed geometry; no `userId` accepted
-anywhere; no token or geometry in any log line.
+Exit: `FARM_NOT_FOUND` reachable only through the branded family; a round-trip test proving a
+rejected geometry never reaches SQL (unclosed ring, `crs` member, 43-character ring, lat/lon
+swapped bounds); endpoint tests for 201/200/204, `401` without a session, `403` without
+`X-CSRF-Token`, `404` on every cross-tenant attempt in §9.4, `409` on the farm rule, and `400`
+for unknown keys and query parameters.
+
+### 4.4 — Field CRUD
+
+`apps/api/src/field/**` over the same primitives, flat at `/v1/fields/:fieldId` (`Q3`), plus
+`POST/GET /v1/farms/:farmId/fields`.
+
+Exit: `FIELD_NOT_FOUND` on every cross-tenant field attempt; `400` for a non-polygon or a
+`crs` member, mapped from `FieldGeometryError` rather than from `23514`; pagination metadata
+asserted on both collections.
 
 ### 4.5 — Hardening
 
-Pagination boundary tests (page 0, pageSize 101, unknown `sort`), stable ordering across pages,
-`count(*) OVER ()` under RLS, `updated_at` movement, soft-delete invisibility for reads and
-writes, and a documented statement set (no `SELECT *`). Reconcile `IMPLEMENTATION_STATUS.md`
-and `api-conventions.md` §6 with what shipped.
+Pagination boundaries (page 0, pageSize 101, unknown `sort`) and stable ordering across pages;
+`updated_at` movement; soft-delete invisibility for reads *and* writes; statement inventory with
+no `SELECT *`; reconcile `IMPLEMENTATION_STATUS.md` and `api-conventions.md` §6 with what
+shipped.
 
-Exit: the full workspace suite plus the real-role suites green; the endpoint matrix in §6.1 is
-implemented one-to-one, with no extra route.
+Exit: the full workspace suite plus the real-role suites green, and the endpoint matrix in §6.1
+implemented one-to-one with no extra route.
 
 ### 4.6 — Decision closure
 
-Answer `Q1`–`Q8`; if `OPEN-17` or `OPEN-21` is resolved, extend the contract and, only then,
-the database. Optional later work that this design deliberately leaves out: viewport query
-(`OPEN-22`), field metadata, farm geometry. Each would be additive.
+Answer `Q5`–`Q8`. If `OPEN-17` or `OPEN-21` is reopened, extend the contract and, only then,
+the database. Optional later work this design leaves out: viewport query (`OPEN-22`), field
+metadata, farm geometry, `If-Match`. Each is additive.
 
-Exit: every `Q` has a recorded answer, and `IMPLEMENTATION_STATUS.md` distinguishes
+Exit: every remaining `Q` has a recorded answer, and `IMPLEMENTATION_STATUS.md` distinguishes
 `designed` / `implemented` / `verified` per phase.
 
 ---
@@ -751,7 +770,10 @@ Exit: every `Q` has a recorded answer, and `IMPLEMENTATION_STATUS.md` distinguis
   cannot be served by this API. That is `OPEN-17` made visible rather than hidden.
 - **Soft delete is an API rule, not a database rule.** Any future code path that forgets
   `deleted_at IS NULL` will return deleted rows; RLS will not stop it. This is the single most
-  likely place for a regression, and 4.3's tests are the guard.
+  likely place for a regression, and the 4.2 integration tests are the guard.
+- **The delete/create pair is serialised by a lock, not by a constraint.** `softDeleteFarm`
+  takes `FOR UPDATE` and `createField` takes `FOR SHARE` on the farm row; removing either
+  reintroduces the race, which both integration tests demonstrate.
 - **Farm deletion is refused, not cascaded.** Users must delete fields first. If that proves
   poor UX, `Q2` changes one service function, not the schema.
 - **No optimistic concurrency.** Two tabs editing one field means the last `PATCH` wins.

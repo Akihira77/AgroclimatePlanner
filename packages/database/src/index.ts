@@ -27,6 +27,33 @@ export type {
   SessionResolution,
 } from "./auth-sessions.js";
 export { readSessionCsrfToken, resolveSessionCsrfToken } from "./auth-csrf.js";
+export { createFarm, findFarm, listFarms, softDeleteFarm, updateFarm } from "./farms.js";
+export type {
+  Farm,
+  FarmCreate,
+  FarmDeleteOutcome,
+  FarmListOptions,
+  FarmPage,
+  FarmSort,
+  FarmUpdate,
+} from "./farms.js";
+export {
+  createField,
+  FieldGeometryError,
+  findField,
+  listFields,
+  softDeleteField,
+  updateField,
+} from "./fields.js";
+export type {
+  Field,
+  FieldCreate,
+  FieldListOptions,
+  FieldPage,
+  FieldSort,
+  FieldUpdate,
+  PolygonGeometry,
+} from "./fields.js";
 export { createTenantScope, normaliseTenantId, TenantContextError } from "./tenant.js";
 export type { TenantScope, TenantTransaction } from "./tenant.js";
 
