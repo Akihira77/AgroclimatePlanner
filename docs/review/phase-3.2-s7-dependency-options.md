@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **PROPOSED — no dependency approved, none installed.** One dependency approval (`ARGON2ID-LIB`) and one mechanism decision (`LIMITER-MECHANISM`) are outstanding in `docs/review/phase-3.2-s7-owner-decisions.md` |
+| Status | **DECISIONS TAKEN 2026-11-20; nothing installed.** `ARGON2ID-LIB` = `@node-rs/argon2@2.2.2` and `LIMITER-MECHANISM` = in-process fixed window are approved. The benchmark is prepared, not executed — see `docs/review/phase-3.2-s7-argon2-benchmark-plan.md` |
 | Prepared | 2026-11-20, from `0a2e6a2` |
 | Scope | `IG-6` library selection, `IG-7` limiter mechanism in S7 (registration). Parameters and limits were already decided; this document chooses only the implementations. Login-side enforcement lands in S8 |
 | Constraints inherited | no dependency without approval; no S8 work; no database change |
@@ -56,7 +56,7 @@ API surface used by S7, identical in both libraries:
 `verify(hash, password)`. `verify` reads the PHC string's own parameters, which is what
 `IG-6` requires and what makes the provisional numbers safe to change later.
 
-### Proposed approval wording — `ARGON2ID-LIB`
+### Approval wording — `ARGON2ID-LIB` (approved 2026-11-20)
 
 > Use `@node-rs/argon2` version 2.2.2 for password hashing. Argon2id only; no other
 > password-hashing library is added. Parameters come from configuration and are
@@ -68,69 +68,31 @@ entry), `pnpm-lock.yaml`, `apps/api/src/config/runtime-config.ts` (parameter fie
 and `docs/IMPLEMENTATION_STATUS.md`. No ADR amendment needed: `IG-6` is an owner-decision
 record, not an ADR.
 
-### Benchmark plan (run only after approval and on the deployment host)
+### Benchmark plan (prepared, not executed)
 
-Reproducible script, intended as `apps/api/scripts/benchmark-argon2.mjs` when approved:
+`ARGON2ID-LIB` was approved by the owner on 2026-11-20. The harness lives in
+[`apps/api/scripts/benchmark-argon2.mjs`](../../apps/api/scripts/benchmark-argon2.mjs);
+the method, the resource inventory, and the interpretation rules are in
+[`phase-3.2-s7-argon2-benchmark-plan.md`](./phase-3.2-s7-argon2-benchmark-plan.md).
 
-```js
-import { hash, verify } from "@node-rs/argon2";
-import { performance } from "node:perf_hooks";
-import { randomBytes } from "node:crypto";
+The earlier sketch in this section is superseded. It measured a single
+`process.memoryUsage().rss` snapshot after the run and called it peak, used 20 samples
+(so its "p95" was the 19th value), performed no warm-up, and had no memory guard. The
+harness replaces it with `VmHWM`/`resourceUsage().maxRSS`, at least 100 samples, a
+warm-up phase, per-operation error accounting, and a guard that refuses to run when the
+container limit is unknown.
 
-const PARAMS = { memoryCost: 19456, timeCost: 2, parallelism: 1 };
-const SAMPLES = 20;
-const CONCURRENCY = 4;
-
-const once = async (i) => {
-  const password = `bench-${i}-${randomBytes(4).toString("hex")}`;
-  let t = performance.now();
-  const digest = await hash(password, PARAMS);
-  const hashMs = performance.now() - t;
-  t = performance.now();
-  await verify(digest, password);
-  return { hashMs, verifyMs: performance.now() - t };
-};
-
-const pct = (xs, q) =>
-  xs.slice().sort((a, b) => a - b)[Math.max(0, Math.ceil(xs.length * q) - 1)];
-
-const serial = [];
-for (let i = 0; i < SAMPLES; i += 1) serial.push(await once(i));
-
-const batches = [];
-for (let b = 0; b < SAMPLES / CONCURRENCY; b += 1) {
-  batches.push(await Promise.all(Array.from({ length: CONCURRENCY }, (_, j) => once(b * CONCURRENCY + j))));
-}
-const concurrent = batches.flat();
-const peakRss = process.memoryUsage().rss;
-
-console.log(JSON.stringify({
-  params: PARAMS,
-  serial: {
-    hashP50: pct(serial.map((s) => s.hashMs), 0.5),
-    verifyP50: pct(serial.map((s) => s.verifyMs), 0.5),
-  },
-  concurrency: CONCURRENCY,
-  verifyP95: pct(concurrent.map((s) => s.verifyMs), 0.95),
-  hashP95: pct(concurrent.map((s) => s.hashMs), 0.95),
-  peakRssMiB: Math.round(peakRss / 1024 / 1024),
-}, null, 2));
-```
-
-Acceptance, per `IG-6`: verify p95 ≤ 250 ms at concurrency 4; peak RSS ≤ 25% of the
-container memory limit; a hash produced with different parameters still verifies
-(assert `verify` against a digest made with `memoryCost: 4096`). The RSS criterion cannot
-be evaluated until the container memory limit exists — that is a blocker, not a
-formality.
-
-The block above is formatted for reading. When it moves into `apps/api/scripts/`, run
-`pnpm exec prettier --write` on it; `node --check` already passes on the version above.
+Acceptance, per `IG-6` and unchanged: verify p95 ≤ 250 ms at concurrency 4; peak RSS
+≤ 25% of the container memory limit; a hash produced with different parameters still
+verifies. The RSS criterion cannot be evaluated until the container memory limit exists
+— that is a blocker, not a formality, and once the library is installed the harness exits
+`3` rather than guessing.
 
 ## 3. Rate limiter
 
 `IG-7` decided the behaviour: in-process, per-client-IP, 30 req/min, before any database
-lookup and any hashing, `429 RATE_LIMITED` with `Retry-After`. What is open is the
-mechanism.
+lookup and any hashing, `429 RATE_LIMITED` with `Retry-After`. The mechanism was selected
+on 2026-11-20: the in-process guard described below, with no dependency.
 
 | Candidate | Needs approval | Matches `api-conventions.md` §9 headers | Notes |
 |---|---|---|---|
@@ -155,7 +117,7 @@ Judgement:
   self-written limiter is a place where a clock-skew or eviction bug can hide. The sweep
   and the fixed window are the two things the tests must cover.
 
-### Proposed approval wording — `LIMITER-MECHANISM`
+### Approval wording — `LIMITER-MECHANISM` (approved 2026-11-20)
 
 > S7 rate-limits `POST /v1/auth/register` with an in-process, per-client-IP fixed-window
 > counter implemented in `apps/api`, using `req.ip` under the existing trust-proxy
@@ -170,6 +132,10 @@ If the owner prefers a maintained dependency instead, the alternative wording is
 > Use `@nestjs/throttler` 6.8.0 with its in-memory store, and amend
 > `api-conventions.md` §9 to the `X-RateLimit-*` header names the guard emits.
 
+**Decision, 2026-11-20.** The owner selected the first option: in-process guard, no
+dependency. The alternative above is kept only as the wording it replaced. Nothing is
+installed: implementation belongs to S7, which has not started.
+
 Files that change on approval: `apps/api/src/http/*` (guard + its tests),
 `apps/api/src/app.factory.ts` (registration), `apps/api/src/config/runtime-config.ts`
 (window and limit), `docs/IMPLEMENTATION_STATUS.md`. No ADR amendment; `IG-7` is a
@@ -180,6 +146,6 @@ decision record.
 - It does not install anything, and it does not add a `package.json` entry.
 - It does not make the Argon2id parameters final: they stay provisional until the
   benchmark output is recorded.
-- It does not change `api-conventions.md` §9. The hand-rolled option is recommended
+- It does not change `api-conventions.md` §9. The in-process guard was selected
   precisely because it does not need to.
 - It does not touch S8, Redis, or a scheduler.

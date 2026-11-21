@@ -402,7 +402,7 @@ see what remains undecided:
 | `sessions_auth_all FOR ALL TO app_auth USING (true) WITH CHECK (true)` + owner policy | `AG-2` §2.4/§2.7, accepted |
 | `app.purge_expired_sessions()` definer shape, `EXECUTE` to `app_system` | `AG-2` §2.9, accepted |
 | Column-grant list, function body, policy names, index names | engineering detail, constrained by the rows above |
-| Throttle enforcement mechanism under concurrency | **mechanism decided** by `IG-7` — in-process, per-client-IP fixed window (`LIMITER-MECHANISM` still needs the owner's word). Enforcement lands in S7 for registration and S8 for login |
+| Throttle enforcement mechanism under concurrency | **decided** by `IG-7` — in-process, per-client-IP fixed window, `LIMITER-MECHANISM` approved 2026-11-20. Enforcement lands in S7 for registration and S8 for login |
 | `sessions.user_id` FK action under account deletion | the proposed S5 FK names no action, so PostgreSQL's default `NO ACTION` would apply if that DDL is applied; it is not an owner decision, and the lifecycle policy remains **undecided**, blocked by `OPEN-04` |
 
 ## Security properties

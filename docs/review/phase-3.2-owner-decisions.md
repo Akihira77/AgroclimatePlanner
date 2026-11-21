@@ -1124,9 +1124,10 @@ sequence was written; the applied boundary is narrower and has two owners:
   SHA-256 storage, the session cookie, CSRF, the authentication guard, `/me`, logout, and
   login-side rate limiting.
 
-S7 and S8 are still unstarted. What remains before S7 is one dependency approval
-(`ARGON2ID-LIB`), one mechanism decision (`LIMITER-MECHANISM`), and the deployment-host
-benchmark. No decision in this file changed, and `OPEN-01` and `OPEN-04` are untouched.
+S7 and S8 are still unstarted. `ARGON2ID-LIB` and `LIMITER-MECHANISM` were approved on
+2026-11-20; what remains before S7 is the deployment-host benchmark, prepared in
+`docs/review/phase-3.2-s7-argon2-benchmark-plan.md`. No decision in this file changed, and
+`OPEN-01` and `OPEN-04` are untouched.
 
 So the honest statement of what these four decisions buy: **Track 1 can start**
 (contracts and plumbing), and **Track 2 can start** (the database boundary and

@@ -1387,7 +1387,7 @@ of them into "done" or "blocked".
 | `IG-5`, `IG-5-A1` | decided, implemented | S1/S2 shipped against them |
 | `IG-11` | decided | `node:test` for `apps/api`; already in use |
 | `IG-12` | decided | Zod-only validation, bound per parameter; in use |
-| `IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10` | **answered 2026-11-20** — `docs/review/phase-3.2-s7-owner-decisions.md`; one dependency approval (`ARGON2ID-LIB`), one mechanism decision (`LIMITER-MECHANISM`), and the benchmark remain before implementation | S7 only, not S3–S6 |
+| `IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10` | **answered 2026-11-20** — `docs/review/phase-3.2-s7-owner-decisions.md`; `ARGON2ID-LIB` and `LIMITER-MECHANISM` approved the same day, and the deployment-host benchmark remains before implementation | S7 only, not S3–S6 |
 | `IG-8`, `IG-9` | **3 — open** | block **S8**, not S3–S6 |
 | S3 | **4 — implemented** | gate: accepted `ADR-004`; `db:verify` 387 assertions at the time |
 | S4 | **4 — implemented and pushed** | gate: S3 (the role must exist before a policy names it); `db:verify` 419 assertions after the corrective pass |
@@ -1437,12 +1437,15 @@ parameters, measured on the host), `IG-7` (per-account brute-force control), and
 `docs/review/phase-3.2-s7-owner-decisions.md`: option A for each, with `IG-6` and
 `IG-7` conditional.
 
-Three things still gate the implementation, and none of them is a design question:
+One thing still gates the implementation, and it is not a design question: the
+deployment-host **benchmark**, without which the parameters stay provisional.
 
-1. Argon2id **library** selection and dependency approval (`ARGON2ID-LIB`).
-2. The `LIMITER-MECHANISM` decision — the recommendation is an in-process guard with no
-   dependency, so this is a mechanism choice rather than a dependency approval.
-3. The deployment-host **benchmark**, without which the parameters stay provisional.
+`ARGON2ID-LIB` (`@node-rs/argon2@2.2.2`) and `LIMITER-MECHANISM` (in-process fixed
+window, no dependency) were approved on 2026-11-20. Neither is installed or implemented.
+The harness and the resource inventory are in
+`apps/api/scripts/benchmark-argon2.mjs` and
+`docs/review/phase-3.2-s7-argon2-benchmark-plan.md`; it cannot run against a container
+memory limit that does not exist.
 
 `IG-10`'s answer is to defer, so email ownership remains unproven and is recorded as a
 blocker for public deployment rather than a detail for later.

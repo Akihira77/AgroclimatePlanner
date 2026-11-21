@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| Status | **OWNER DECISIONS RECORDED — 2026-11-20.** The seven `IG` gates that blocked S7 are answered. One dependency approval (`ARGON2ID-LIB`), one mechanism decision (`LIMITER-MECHANISM`), and one benchmark remain, listed under *Implementation gate* |
+| Status | **OWNER DECISIONS RECORDED — 2026-11-20.** The seven `IG` gates that blocked S7 are answered. `ARGON2ID-LIB` and `LIMITER-MECHANISM` were approved on 2026-11-20; the deployment-host benchmark remains, and is prepared but not executed — `docs/review/phase-3.2-s7-argon2-benchmark-plan.md` |
 | Approver | Akihira77 (repository owner) |
 | Scope | S7 — `POST /v1/auth/register`, email normalisation, password policy, Argon2id hashing, user persistence, duplicate handling, credential verification, rate limiting on registration. **Not** the login endpoint, session issuance, session token, cookie, CSRF, guard, `/me`, or logout — those are S8 |
 | Prepared from | `0a2e6a2` — the S7 readiness assessment returned `S7 READINESS REVIEW COMPLETE WITH BLOCKERS` |
@@ -139,8 +139,9 @@ Rules:
   so a parameter change does not invalidate existing hashes.
 - Final parameters come from the recorded benchmark below, on the deployment host; the
   provisional row is a starting point, not a claim.
-- Library selection requires explicit dependency approval and is **not** granted by this
-  record.
+- Library selection was approved by the owner on 2026-11-20:
+  `@node-rs/argon2@2.2.2`. The dependency is approved; it is **not installed** and no
+  manifest names it yet.
 
 Benchmark acceptance, reproducible and recorded in the repository:
 
@@ -161,8 +162,9 @@ In-process, per-client-IP rate limiting.
 - Per-account throttling is deferred.
 - Redis and shared distributed rate limiting are **out of scope** for S7 and S8.
 - The mechanism is a separate decision, `LIMITER-MECHANISM`, recorded in
-  `docs/review/phase-3.2-s7-dependency-options.md`. The recommendation is an in-process
-  guard with no dependency, so this gate is not a dependency approval.
+  `docs/review/phase-3.2-s7-dependency-options.md`. The owner selected the in-process
+  guard with no dependency on 2026-11-20, so this gate is a mechanism decision rather
+  than a dependency approval.
 
 Limitations, recorded rather than implied:
 
@@ -218,14 +220,16 @@ blocker for it, not a detail to be discovered later.
 S7 implementation may begin after **all** of:
 
 1. This record is approved. *(Recorded 2026-11-20; see Status.)*
-2. The Argon2id library is selected and approved as a dependency. **Outstanding** —
-   options and a recommendation are in `docs/review/phase-3.2-s7-dependency-options.md`
-   (`@node-rs/argon2` 2.2.2 proposed).
-3. The `LIMITER-MECHANISM` decision is recorded. **Outstanding** — the same document
-   recommends no dependency at all (an in-process guard), which is a mechanism choice
-   rather than a dependency approval, and needs the owner's word either way.
-4. The benchmark is run and its numbers recorded. **Outstanding** — parameters stay
-   provisional until then.
+2. The Argon2id library is selected and approved as a dependency. **Approved 2026-11-20**
+   — `@node-rs/argon2@2.2.2`, see `docs/review/phase-3.2-s7-dependency-options.md`. Not
+   installed; no manifest names it.
+3. The `LIMITER-MECHANISM` decision is recorded. **Approved 2026-11-20** — in-process
+   fixed-window guard, no dependency. Nothing implemented.
+4. The benchmark is run and its numbers recorded. **Outstanding** — the harness is
+   prepared in `apps/api/scripts/benchmark-argon2.mjs` and its plan is
+   `docs/review/phase-3.2-s7-argon2-benchmark-plan.md`. Parameters stay provisional until
+   a run inside the deployment envelope is recorded; no container memory limit exists
+   today.
 
 Nothing in this record authorises an implementation, a migration, a dependency
 installation, or a repository change on its own.
