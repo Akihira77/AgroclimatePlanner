@@ -472,7 +472,7 @@ is inside a hash.
 
 ## 6. Phase 5 architecture decisions
 
-Four decisions were made during the Phase 5 design review. They are **not** `OPEN-*`
+Five decisions were made during the Phase 5 design review. They are **not** `OPEN-*`
 items — they are recorded here so this file remains the single decision register, and
 they do not change the 29-item count in §1 or §3.
 
@@ -482,6 +482,7 @@ they do not change the 29-item count in §1 or §3.
 | `Q-P5-2` | Structured logs plus `ingestion_runs.error` before any operational-history migration | `sync_attempts`, a dead-letter table, and a sweep watermark are named in `background-processing.md` §10 and **do not exist**; the first question that a log cannot answer should commission the table, not a guess | Per-attempt latency/bytes, dead-letter entries, sweep state | **Deferred** | A question the stored state and logs cannot answer, or a dead-letter count that must be queried rather than grepped |
 | `Q-P5-3` | Temperature outlooks are out of Phase 5 | `monthly_outlooks_variable_check` admits only `precipitation`; temperature needs an assembly rule before a migration | `monthly_outlooks.variable` | **Deferred** | An assembly rule for temperature, and a sub-phase that needs it |
 | `Q-P5-4` | CHIRPS v3.0 is preferred as the climatology baseline once a lawful, reachable route exists; ERA5 is the labelled fallback | `data.chc.ucsb.edu` timed out on 2026-11-18, and GEE's commercial terms are unevaluated | The baseline dataset, not the schema | **External evidence** | A fetched CHIRPS month from a reachable route, with commercial terms confirmed, or a decision to ship ERA5 permanently |
+| `Q-P5-5` | A month is one source product, classified by the §5.5 rule 4 order; a month assembled from more than one product is not representable and is not permitted | `monthly_outlooks` has one `data_class` column and `MonthlyOutlook` one `dataClass` field; §5.5 rule 4 already says "never blended". Supporting a mixed month needs an aggregation rule, a provenance shape for the split, and a schema change | `MONTHLY_OUTLOOK_BANDS`, `outlookMonthSchema`, `monthly_outlooks.data_class`, the aggregator in 5.7 | **Deferred** — the single-source rule is implemented and tested; mixed-source is not | A month where the only honest value needs two products, plus an owner decision on how to label and prove it |
 
 Recording `Q-P5-1` is not implementing it. There is no `jobs` table, no worker runtime, and
 no queue dependency in any workspace package; `background-processing.md` §2.1 states the

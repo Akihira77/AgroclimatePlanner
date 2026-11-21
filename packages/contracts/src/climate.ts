@@ -245,14 +245,13 @@ export const adapterResultSchema = z.discriminatedUnion("kind", [
       coverage: adapterCoverageSchema,
     })
     .superRefine((result, ctx) => {
-      if (
-        result.coverage.answeredCells !== result.coverage.requestedCells ||
-        result.coverage.coveragePercent !== 100
-      ) {
+      // Counts decide, never the rounded percentage: 20 000 of 20 001 cells rounds
+      // to 100 but is still a partial answer (F-07).
+      if (result.coverage.answeredCells !== result.coverage.requestedCells) {
         ctx.addIssue({
           code: "custom",
           path: ["coverage", "answeredCells"],
-          message: "a complete result must answer every requested cell at 100%",
+          message: "a complete result must answer every requested cell",
         });
       }
     }),
@@ -264,10 +263,9 @@ export const adapterResultSchema = z.discriminatedUnion("kind", [
       coverage: adapterCoverageSchema,
     })
     .superRefine((result, ctx) => {
-      if (
-        result.coverage.answeredCells >= result.coverage.requestedCells ||
-        result.coverage.coveragePercent >= 100
-      ) {
+      // Same rule from the other side: a rounded 100 must not be read as complete,
+      // so only the counts can make this variant invalid.
+      if (result.coverage.answeredCells >= result.coverage.requestedCells) {
         ctx.addIssue({
           code: "custom",
           path: ["coverage", "answeredCells"],
@@ -311,13 +309,22 @@ export type AdapterResult = z.infer<typeof adapterResultSchema>;
  * Lead month is **1-based and inclusive: 1–12**. Exactly twelve entries describe
  * the rolling outlook; there is no month 0 and no month 13.
  *
- * The bands follow `temporal-and-weather-semantics.md` §3. Months 1–2 are composed
- * from the days 0–45 bands, so both `weather_forecast` and `subseasonal_forecast`
- * are permitted there: the architecture binds days 15–45 to subseasonal, and a
- * month aggregated from those days may not be relabelled as short-range.
+ * The bands follow `temporal-and-weather-semantics.md` §3. A calendar month is not
+ * a 30-day window: lead month 1 covers days 0–45 only in part, and lead month 2 runs
+ * past day 45. `weather_forecast`, `subseasonal_forecast`, and `seasonal_forecast`
+ * are therefore all permitted at lead months 1–2, each naming the **single** source
+ * product that supplied the month (`climate-data-foundation.md` §5.5 rule 4). The
+ * class is not blended and not inferred from the day bands.
  */
 export const MONTHLY_OUTLOOK_BANDS = [
-  { fromLeadMonth: 1, toLeadMonth: 2, permitted: ["weather_forecast", "subseasonal_forecast"] },
+  {
+    fromLeadMonth: 1,
+    toLeadMonth: 2,
+    // A calendar month is not a 30-day window: lead month 2 runs past day 45, so a
+    // month there may be sourced from the seasonal product as well as the two
+    // short-range products (`climate-data-foundation.md` §5.5 rule 4).
+    permitted: ["weather_forecast", "subseasonal_forecast", "seasonal_forecast"],
+  },
   { fromLeadMonth: 3, toLeadMonth: 7, permitted: ["seasonal_forecast"] },
   { fromLeadMonth: 8, toLeadMonth: 12, permitted: ["climatology"] },
 ] as const satisfies ReadonlyArray<{

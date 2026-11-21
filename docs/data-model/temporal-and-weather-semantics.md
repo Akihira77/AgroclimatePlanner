@@ -81,10 +81,24 @@ twelve entries describe the horizon.
 
 | Lead month | Covering day band | Permitted `dataClass` |
 |---|---|---|
-| 1–2 | days 0–45, both bands | `weather_forecast` **or** `subseasonal_forecast` — whichever band each day came from; a month aggregated from days 15–45 is not relabelled short-range |
+| 1–2 | starts inside days 0–45, but **crosses day 45** | `weather_forecast`, `subseasonal_forecast`, **or** `seasonal_forecast` — the class names the one product that supplied the month |
 | 3–7 | beyond subseasonal, within seasonal | `seasonal_forecast` |
 | 8–12 | beyond seasonal | `climatology` — the 1991–2020 normal, labelled as such |
 | — | beyond 12 | no entry; there is no month 13 |
+
+A calendar month is **not** a 30-day window. Lead month 1 starts at day 0 but a
+31-day month still ends at day 30; lead month 2 runs from roughly day 30 to day
+60, so it crosses the day 45 boundary and part of it can only be answered by the
+seasonal product. The monthly class is therefore *not* the day band of its first
+day, and it is not inferred from day counts at all.
+
+**One product per month.** The class on a month names the single source product
+that supplied that month's value, chosen by the documented order in
+`climate-data-foundation.md` §5.5 rule 4 (live seasonal within TTL → subseasonal
+→ climatology). Day bands may differ within the month; classes never blend,
+because `monthly_outlooks` has one `data_class` column and one value. A month
+assembled from more than one product is not representable and is not permitted
+(`Q-P5-5` in `open-decisions.md`).
 
 `leadMonth` is derived from the entry's `month` and the outlook's `firstMonth`
 (pure calendar arithmetic, year rollover included); the contract stores the
@@ -170,7 +184,7 @@ different mechanisms on purpose.
 | provider published `null` for an instant inside the run's horizon | row present, `value IS NULL` |
 | instant outside the run's horizon | **no row** |
 | run never ingested | **no run**, and `ingestion_runs.status` says why |
-| ingest partially failed | `ingestion_runs.status = 'partial'`, `coverage_percent < 100` |
+| ingest partially failed | `ingestion_runs.status = 'partial'`; the rounded `coverage_percent` may read 100, so the status is the authority |
 
 The row-with-null versus no-row distinction is load-bearing: an ensemble that
 returns nulls from day 15 tells you the horizon ended. That is `beyond_horizon`

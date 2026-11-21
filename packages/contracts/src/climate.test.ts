@@ -323,8 +323,16 @@ describe("reproducibility versus provenance", () => {
 
 describe("MonthlyOutlook", () => {
   it("maps lead months 1–12 to the binding bands", () => {
-    expect(permittedMonthlyDataClasses(1)).toEqual(["weather_forecast", "subseasonal_forecast"]);
-    expect(permittedMonthlyDataClasses(2)).toEqual(["weather_forecast", "subseasonal_forecast"]);
+    expect(permittedMonthlyDataClasses(1)).toEqual([
+      "weather_forecast",
+      "subseasonal_forecast",
+      "seasonal_forecast",
+    ]);
+    expect(permittedMonthlyDataClasses(2)).toEqual([
+      "weather_forecast",
+      "subseasonal_forecast",
+      "seasonal_forecast",
+    ]);
     expect(permittedMonthlyDataClasses(3)).toEqual(["seasonal_forecast"]);
     expect(permittedMonthlyDataClasses(7)).toEqual(["seasonal_forecast"]);
     expect(permittedMonthlyDataClasses(8)).toEqual(["climatology"]);
@@ -541,6 +549,42 @@ describe("AdapterResult coverage invariants — F-04", () => {
 
   it("rejects a percentage that no counts could produce", () => {
     expect(adapterResultSchema.safeParse(result("partial", 4, 2, 50.01)).success).toBe(false);
+  });
+
+  it("rounds one unanswered cell out of 20 001 to exactly 100", () => {
+    expect(coveragePercentOf(20_001, 20_000)).toBe(100);
+  });
+
+  it("accepts a partial result whose rounded coverage is 100", () => {
+    const partial = result("partial", 20_001, 20_000, 100);
+    expect(partial.coverage.answeredCells).toBeLessThan(partial.coverage.requestedCells);
+    expect(adapterResultSchema.safeParse(partial).success).toBe(true);
+  });
+
+  it("does not accept that same answer as complete", () => {
+    expect(adapterResultSchema.safeParse(result("complete", 20_001, 20_000, 100)).success).toBe(
+      false,
+    );
+  });
+
+  it("accepts a large partial answer with one cell missing", () => {
+    expect(adapterResultSchema.safeParse(result("partial", 1_000_000, 999_999, 100)).success).toBe(
+      true,
+    );
+  });
+
+  it("rejects a partial result whose percentage disagrees with its counts", () => {
+    expect(adapterResultSchema.safeParse(result("partial", 4, 2, 49.99)).success).toBe(false);
+  });
+
+  it("keeps a failure result from carrying coverage at all", () => {
+    const failed = {
+      kind: "transport",
+      receivedAt: "2026-11-18T00:10:00Z",
+      message: "connection reset",
+      coverage: { requestedCells: 4, answeredCells: 0, coveragePercent: 0 },
+    };
+    expect(adapterResultSchema.safeParse(failed).success).toBe(false);
   });
 });
 
@@ -781,5 +825,67 @@ describe("12-month horizon — F-03", () => {
     expect(result.success).toBe(true);
     expect(result.data?.months[2]?.dataClass).toBeNull();
     expect(result.data?.months[2]?.missingReason).toBe("ingest_failed");
+  });
+});
+
+describe("Monthly classification vs daily bands", () => {
+  const forecastMonth = (leadMonth: number, dataClass: string) => ({
+    leadMonth,
+    month: calendarMonthOf("2026-11-01", leadMonth),
+    dataClass,
+    evaluationBasis: "monthly",
+    valueMm: 150,
+    missingReason: null,
+    baselineVersion: null,
+    anomalyKind: null,
+    ensembleSpreadMm: 6,
+    spreadUnavailableReason: null,
+  });
+
+  it("accepts every product class that can cover lead month 1", () => {
+    for (const dataClass of ["weather_forecast", "subseasonal_forecast", "seasonal_forecast"]) {
+      expect(outlookMonthSchema.safeParse(forecastMonth(1, dataClass)).success).toBe(true);
+    }
+  });
+
+  it("accepts a seasonal product at lead month 2, which runs past day 45", () => {
+    expect(outlookMonthSchema.safeParse(forecastMonth(2, "seasonal_forecast")).success).toBe(true);
+  });
+
+  it("accepts a subseasonal product at lead month 2", () => {
+    expect(outlookMonthSchema.safeParse(forecastMonth(2, "subseasonal_forecast")).success).toBe(
+      true,
+    );
+  });
+
+  it("rejects short-range classes once the seasonal band starts", () => {
+    expect(outlookMonthSchema.safeParse(forecastMonth(3, "weather_forecast")).success).toBe(false);
+    expect(outlookMonthSchema.safeParse(forecastMonth(3, "subseasonal_forecast")).success).toBe(
+      false,
+    );
+    expect(outlookMonthSchema.safeParse(forecastMonth(3, "seasonal_forecast")).success).toBe(true);
+  });
+
+  it("represents one source product per month, not a blend", () => {
+    // The row has a single `dataClass`; a multi-class month is unrepresentable, which
+    // is the documented rule (`climate-data-foundation.md` §5.5 rule 4).
+    const blended = {
+      ...forecastMonth(2, "subseasonal_forecast"),
+      dataClasses: ["seasonal_forecast"],
+    };
+    expect(outlookMonthSchema.safeParse(blended).success).toBe(false);
+  });
+
+  it("keeps a partially covered month out of the forecast classes only by refusing a value", () => {
+    const partial = {
+      ...forecastMonth(2, "subseasonal_forecast"),
+      valueMm: null,
+      dataClass: null,
+      evaluationBasis: "monthly",
+      missingReason: "below_coverage_threshold",
+      ensembleSpreadMm: null,
+      spreadUnavailableReason: "below_coverage_threshold",
+    };
+    expect(outlookMonthSchema.safeParse(partial).success).toBe(true);
   });
 });

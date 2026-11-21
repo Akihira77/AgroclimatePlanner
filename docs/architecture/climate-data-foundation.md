@@ -291,11 +291,29 @@ Coverage invariants (F-04), all enforced by `adapterCoverageSchema`:
 - `coveragePercent = round(answeredCells × 10 000 / requestedCells) / 100` — basis
   points, rounded half away from zero, one implementation (`coveragePercentOf`) so
   producer and validator cannot disagree.
-- `kind: "complete"` requires `answeredCells === requestedCells` **and** 100%.
-- `kind: "partial"` requires at least one unanswered cell and a percentage below
-  100; a partial result at 100% is a contradiction, not a success.
+- **The counts are authoritative; the percentage is a representation.** `kind`
+  is decided by `answeredCells` vs `requestedCells` alone. Rounding can produce
+  `100` from an incomplete answer — 20 000 of 20 001 cells rounds to 100 — and
+  that result is still `partial` (F-07). A validator that rejected a `partial`
+  whose rounded percentage reached 100 would reject a legitimate answer, and a
+  producer that promoted it to `complete` would claim coverage it does not have.
+- `kind: "complete"` requires `answeredCells === requestedCells`.
+- `kind: "partial"` requires `answeredCells < requestedCells`; its percentage may
+  read 100 and the display must not turn that into "complete".
 - The failure kinds are calendar-independent and carry no coverage at all, so a
   transport failure can never be mistaken for thin coverage.
+
+Persistence: `ingestion_runs` stores `record_count` and `coverage_percent`
+(`double precision`, `CHECK BETWEEN 0 AND 100`) and **no** requested/answered
+counts. The database therefore cannot express the complete/partial distinction by
+counts; `status` is the authority there, and a `status = 'partial'` row may carry
+`coverage_percent = 100`. Nothing in the DDL contradicts the contract, and no
+migration is required for F-07. A future migration that adds the counts would let
+the database enforce what the status already asserts.
+
+This rounding rule is scoped to the **run-level** coverage figure. An evidence
+segment's `coveragePercent` (`provenance-contract.md` §3) keeps its own rule: it is
+a share of days with a value, and a segment with missing days may not report 100.
 
 Responsibilities, each with a reason:
 
@@ -318,7 +336,7 @@ Responsibilities, each with a reason:
 | `rate_limited` | 429, quota exhausted | yes, honour `Retry-After`; defer, do not fail | `status = 'queued'`, bucket decremented |
 | `request_invalid` | 400, unknown model, bad parameter | **no** | `failed`, `error.code = 'request_invalid'`, payload ref logged |
 | `provider_changed` | missing field, renamed variable, unexpected schema | **no**, and surface loudly | `failed`, `error.code = 'provider_changed'` — this is the class that means an adapter edit is required |
-| `partial` | fewer rows/days than requested | **no** | `status = 'partial'`, `coverage_percent < 100` |
+| `partial` | fewer rows/days than requested | **no** | `status = 'partial'`; `coverage_percent` may round to 100 when the shortfall is a fraction of a large request |
 
 `provider_changed` is separated from `request_invalid` on purpose: the first is our
 bug or the provider's breaking change and needs a human; the second is a bad request
@@ -673,6 +691,21 @@ What Phase 5 must add is the **aggregation boundary**, stated as four rules:
    → `climatology` with `missing_reason = 'beyond_horizon'`; else the month is
    `pending` / `ingest_failed` / `provider_unavailable` with **no** value.
 
+   The class names the **source product** for that month, not a per-day band and
+   not the evaluation basis. A calendar month is not a 30-day window: lead month 2
+   crosses day 45, so a month there can only be fully answered by the seasonal
+   product, and a month assembled from short-range days may be labelled
+   `weather_forecast`. The permitted set per lead month is in
+   `temporal-and-weather-semantics.md` §3; `weather_forecast`,
+   `subseasonal_forecast`, and `seasonal_forecast` are all permitted at lead months
+   1–2 for exactly this reason.
+
+   A month whose days come from two products is **not** representable:
+   `monthly_outlooks` has one `data_class` and the contract has one field. Whether
+   to support that, and how, is `Q-P5-5` — not decided here. Partial coverage
+   stays honest the other way: below the coverage threshold the month has no value
+   at all (`below_coverage_threshold`), never a value with a misleading class.
+
 The month cell therefore reports two independent axes: forecast availability and
 climatology availability. `monthly_outlooks` has no `data_availability` column, so
 both are computed at read time (§5.7).
@@ -890,7 +923,7 @@ a pure abstraction layer. Dependency graph:
 | Scope | **Delivered:** `packages/contracts/src/climate.ts` (run identities, `AdapterResult`, `MonthlyOutlook`), `packages/contracts/src/grid.ts` (resolver, registry, `gridSpecHash`), `packages/contracts/src/provenance.ts` (reproducibility shape), `packages/contracts/src/weather.ts` (`valueBase` → `singleValueEvaluationBasisSchema`), plus `climate.test.ts` / `grid.test.ts`. **Not delivered:** `packages/weather-core/cells/` (weather-core is 5.1's package, not created here), `apps/worker/src/queue/contract.ts` (the job interface belongs to 5.3), `packages/database/src/climate.ts` (no row types needed yet), and the `OPEN-14` vocabulary freeze |
 | Contracts | `ForecastRun` (+ natural identity), `IngestionRun` (+ `ingestionVersionOf`), `AdapterResult` (five classes), `GridSpec`, `GridRegistry`, `ResolvedGridCell`, `MonthlyOutlook` (+ `OutlookMonth` band rules), `DerivationProvenance` / `Reproducibility`. `ResolvedCell` is reused from `provenance.ts` rather than duplicated |
 | Database impact | **none.** The `jobs` table belongs to 5.3, not 5.0 |
-| Tests | `grid.test.ts` executes vectors 1–18 of §5.2.7, orientation rejection, lattice rejection, hash-mismatch detection, a one-model-one-spec registry, coordinate rejection, and the F-06 immutability cases (input copy, frozen nested ranges, frozen registry value). `climate.test.ts` covers `mixed` rejection, run identity and version derivation, the five adapter classes, the `reproducible` / `inputRefs` distinction, the F-04 coverage invariants, the F-05 month cross-field rules, and the F-03 twelve-month horizon. `pnpm --filter @agroclimate/contracts test`: **341 passed**, including the pre-existing suite |
+| Tests | `grid.test.ts` executes vectors 1–18 of §5.2.7, orientation rejection, lattice rejection, hash-mismatch detection, a one-model-one-spec registry, coordinate rejection, and the F-06 immutability cases (input copy, frozen nested ranges, frozen registry value). `climate.test.ts` covers `mixed` rejection, run identity and version derivation, the five adapter classes, the `reproducible` / `inputRefs` distinction, the F-04 coverage invariants, the F-05 month cross-field rules, the F-03 twelve-month horizon, the F-07 count-authority cases, and month classification against the daily bands. `pnpm --filter @agroclimate/contracts test`: **353 passed**, including the pre-existing suite |
 | Acceptance | met: `mixed` is **rejected** on a single value; vectors 1–18 pass, including negative-floor, longitude-wrap, and origin-precision cases; `reproducible: false` needs a reason and empty `inputRefs` fails on `inputRefs`; a complete result at less than 100% is rejected; a duplicate, missing, or out-of-order lead month is rejected; a mutated `GridSpec` range is impossible; **not met yet:** the queue interface, which moved to 5.3 |
 | Dependencies | — |
 | Risks | freezing a vocabulary too early (`OPEN-14`) — still deferred, not guessed at; contract churn while 5.1 is written — mitigate by versioning adapter and normalizer constants in 5.1, not the row contracts |
@@ -917,10 +950,11 @@ new file, dependency, or sub-phase.
 
 | Finding | Correction |
 |---|---|
-| **F-03** | `leadMonth` is 1-based, `1–12` inclusive. `MONTHLY_OUTLOOK_BANDS` is `1–2` (`weather_forecast` or `subseasonal_forecast`), `3–7` (`seasonal_forecast`), `8–12` (`climatology`). `monthlyOutlookHorizonSchema` enforces exactly twelve entries, in order, one per lead month, each bound to `calendarMonthOf(firstMonth, leadMonth)` — a pure year-rollover-safe resolver. Zero-based numbering is gone from every public contract |
+| **F-03** | `leadMonth` is 1-based, `1–12` inclusive. `MONTHLY_OUTLOOK_BANDS` is `1–2` (`weather_forecast`, `subseasonal_forecast`, or `seasonal_forecast` — a month there crosses day 45), `3–7` (`seasonal_forecast`), `8–12` (`climatology`). `monthlyOutlookHorizonSchema` enforces exactly twelve entries, in order, one per lead month, each bound to `calendarMonthOf(firstMonth, leadMonth)` — a pure year-rollover-safe resolver. Zero-based numbering is gone from every public contract |
 | **F-04** | `coveragePercentOf` is the single rounding rule (basis points, half away from zero); `requestedCells ≥ 1` removes the zero-request case instead of defining it; `complete` requires 100%, `partial` requires an unanswered cell; counts and percentage must agree |
 | **F-05** | `outlookMonthSchema` cross-checks `dataClass` against `evaluationBasis`: climatology only with the climatology basis, forecast only with the monthly basis, pending with the monthly basis and no value. Every issue carries the offending path |
 | **F-06** | `defineGridSpec` copies and freezes `latRange`/`lonRange`, freezes the spec, and the registry stores a re-defined frozen spec rather than the caller's object |
+| **F-07** | Complete/partial is decided by `answeredCells` vs `requestedCells` only. A rounded 100 from an incomplete answer stays `partial`; the percentage is display, not status. `ingestion_runs` stores no counts, so `status` is the authority there and a `partial` row may read 100 — no migration needed |
 
 Capability status after 5.0, stated so no reader infers more than exists:
 
