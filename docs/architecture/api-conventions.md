@@ -321,6 +321,9 @@ Credential verification (S7, internal — no route):
 - Sliding expiry is extended at most once per five minutes, atomically, and clamped to
   `absolute_expires_at` by `LEAST(...)`. The cookie's `Expires` always mirrors the
   database's deadline, so it can never outlive the row.
+- Validation and extension are **one statement** holding a row lock. A revocation that
+  races an authentication either lands before the read or after the subject is
+  established; it cannot land in between and be mistaken for a throttled extension.
 
 Passwords are hashed with Argon2id (`IG-6`): a fresh 16-byte random salt per hash,
 32-byte output, PHC string encoding, and parameters held in one configuration constant.

@@ -460,7 +460,7 @@ approvals, one amendment `IG-5-A1`, one later gate `IG-12`).
 | S7 — registration and credential verification | **implemented, verified, committed, pushed** | `7eef8ce` | `POST /v1/auth/register` exists and creates a user; credential verification with a dummy hash is **not yet implemented** (it lands with S8's login). Decisions: `IG-1`/`IG-2`/`IG-3`/`IG-7`/`IG-10` approved, `IG-4` approved with its revised rule, `IG-6` **conditional** — `docs/review/phase-3.2-s7-owner-decisions.md` *Amendment 1*. Delivered: `registerRequestSchema` + `normalizeEmail` + code-point/byte password rule in `packages/contracts`; Argon2id via `@node-rs/argon2@2.2.2` with configuration-driven cost (`ARGON2_MEMORY_KIB`/`ARGON2_TIME_COST`/`ARGON2_PARALLELISM`, defaults `19456`/`2`/`1`); in-process fixed-window limiter, 30 req/min/IP, before hashing and lookup; `insertRegisteredUser` in `packages/database` writing through `app_auth` and returning five safe columns; unique violations mapped to `409 CONFLICT` without a prior existence check; explicit 16 KiB body limit. Tests: contracts 208, api 118, database unit 34, `test:schema` 22, `test:rls` 88, `test:integration` 6 (real `app_auth`, including concurrent duplicate and 42501 denials for `app_api`). Benchmark: local latency-only run 2026-11-21 (`m=19456,t=2,p=1`, concurrency 1, no memory limit) — hash p95 16.2 ms, verify p95 16.0 ms, peak RSS 76.1 MiB; it does **not** satisfy `IG-6`. No session, cookie, token, or CSRF exists |
 
 @106@
-| S8 — login, session flow, guard, `/me`, logout | **implemented and verified locally, except the CSRF synchronizer token** | — | `POST /v1/auth/login`, `GET /v1/auth/me`, `POST /v1/auth/logout`, `AuthGuard`, the `__Host-` session cookie, and login-side rate limiting are implemented and tested against a real database. Credential lookup reads `password_hash` through `app_auth` with no `withTenant` and no `app.user_id`, which is what `OPEN-01` required. **Not implemented: the `IG-9` synchronizer token** — `ADR-006` §D2.2 `Origin` validation is implemented, §D2.1 is specified only, in `docs/review/s8-csrf-token-design-proposal.md`, because token storage needs a migration and a grant change this phase was scoped without. `S8` is therefore **not complete** |
+| S8 — login, session flow, guard, `/me`, logout | **implemented, verified, committed and pushed (`7c7b61a`), then hardened — CSRF synchronizer token still absent** | `7c7b61a` + hardening in the working tree | `POST /v1/auth/login`, `GET /v1/auth/me`, `POST /v1/auth/logout`, `AuthGuard`, the `__Host-` session cookie, and login-side rate limiting are implemented and tested against a real database. Credential lookup reads `password_hash` through `app_auth` with no `withTenant` and no `app.user_id`, which is what `OPEN-01` required. **Not implemented: the `IG-9` synchronizer token** — `ADR-006` §D2.2 `Origin` validation is implemented, §D2.1 is specified only, in `docs/review/s8-csrf-token-design-proposal.md`, because token storage needs a migration and a grant change this phase was scoped without. The four remaining CSRF details (storage, lifecycle, validation behaviour, migration ownership) are **approved** in *Amendment 4* of `docs/review/phase-3.2-owner-decisions.md`; the implementation is a separate task. `S8` is therefore **not complete** |
 | S9 — docs reconciliation | partially done | — | `ADR-004`/`ADR-005` accepted, `ADR-006` accepted 2026-11-21 (`IG-8`/`IG-9`, *Amendment 3*); `entity-catalog` now carries `sessions` (23 tables) and `IMPLEMENTATION_STATUS` records S3–S6 — done in `e9d1621`. `api-conventions` now documents registration and the S7/S8 split (§8.1), and §8 carries the approved cookie and CSRF wording. Still absent: the `auth-deferred.md` pointer (`consistency-checklist.md` §6.1) |
 
 Gates this phase answered: `AG-1`, `AG-2`, `IG-5`, `IG-11`, plus `IG-5-A1` and
@@ -506,18 +506,19 @@ and are listed there.
 
 ### S8 verification, 2026-11-21
 
-Uncommitted work in the tree at the time of writing; the numbers below are from this
-working tree, not from a commit.
+The base implementation is committed and pushed as `7c7b61a` (`feat(auth): implement S8
+login and sessions`). The session-resolution and CORS `PUT` hardening described below is
+in the working tree after that commit and is not committed.
 
 | Check | Command | Result |
 |---|---|---|
 | Workspace build | `pnpm build` | exit 0 — 5/5 tasks |
 | Workspace typecheck | `pnpm typecheck` | exit 0 — 7/7 tasks |
 | Workspace lint | `pnpm lint` | exit 0 — 5/5 tasks |
-| Workspace tests | `pnpm test` | exit 0 — contracts **213**, api **166**, database **34** |
+| Workspace tests | `pnpm test` | exit 0 — contracts **213**, api **171**, database **34** |
 | Schema suite | `pnpm --filter @agroclimate/database test:schema` | **22 passed** |
 | RLS suite | `pnpm --filter @agroclimate/database test:rls` | **88 passed** |
-| Real-role integration | `NODE_ENV=development pnpm --filter @agroclimate/database test:integration` | **24 passed** |
+| Real-role integration | `NODE_ENV=development pnpm --filter @agroclimate/database test:integration` | **25 passed** |
 | Prettier | `pnpm format:check` | exit 0 |
 | Whitespace | `git diff --check` | exit 0 |
 
@@ -526,8 +527,8 @@ the granted columns and the database owns `created_at`; both deadlines are compu
 `now()` and land at exactly 30 and 90 days; `app_auth` is refused `42501` when it tries to
 rewrite `token_hash`, `user_id`, `absolute_expires_at`, or `created_at`, and when it tries
 to `DELETE`; `app_api` is refused `42501` on every session statement and on
-`SELECT password_hash`; and two concurrent extensions produce exactly one update, because
-the throttle is rechecked inside the `UPDATE` predicate.
+`SELECT password_hash`; and two concurrent requests produce exactly one extension,
+because the throttle is rechecked against the winner's committed row under a row lock.
 
 Session boundaries are also asserted at the SQL level: a row past its sliding deadline and
 a row past its absolute deadline are both rejected while the row remains present, and a
@@ -539,6 +540,54 @@ refuses a row whose deadlines precede its own creation.
 through `app_auth`, the lookup needs no `app.user_id`, and `findAuthUserByEmail` is
 covered by an integration test that asserts `current_user = app_auth` and
 `current_setting('app.user_id') = NULL`. `IG-10` and `IG-6` are unchanged.
+
+### S8 hardening, 2026-11-21 (working tree, not committed)
+
+**Session authentication could accept stale state.** `authenticate` ran
+`findActiveSession` and then `extendSession`. The second call returned `null` both when
+the five-minute throttle held and when the session had been revoked, had expired, or had
+been deleted in between — and the caller could not tell them apart, so it fell back to the
+deadline it had read *before* the revocation and answered `200`. A logout that committed
+inside that window was silently ignored.
+
+**Fix: one statement, with a row lock.** `resolveSession` replaces both calls:
+
+1. `candidate` — `SELECT … FROM app.sessions WHERE token_hash = $1 FOR UPDATE`, which
+   locks the row for the rest of the statement.
+2. `extended` — `UPDATE … FROM candidate` that re-checks `revoked_at IS NULL`, both
+   deadlines, and the five-minute window, and clamps with
+   `LEAST(now() + INTERVAL '30 days', absolute_expires_at)`.
+3. A final `SELECT` that classifies the row (`active` / `revoked` / `expired`) and returns
+   the post-statement deadlines plus the user it belongs to.
+
+Because the lock is held to the end of the statement, a concurrent revocation either
+commits before the read — the row is then seen revoked — or after the subject has been
+established. It can no longer land in between and be reported as "throttled". The
+classification is used for the operator's log only; every non-active outcome is the same
+`null` and the same `401`.
+
+`FOR UPDATE` needs `UPDATE` on at least one column, which `app_auth` already holds
+(`expires_at`, `last_seen_at`, `revoked_at`). No migration, grant, policy, role, or
+`SECURITY DEFINER` object was added, and `app_api` still cannot read a session row.
+
+**CORS methods.** `PUT` was added to the CORS method list. `originValidation` protects
+`PUT` (`ADR-006` §D2.1.5), but the preflight did not advertise it, so a browser would have
+refused to send the request the middleware was written for.
+
+New tests (real PostgreSQL, real roles): throttled extension still authenticates and keeps
+the old deadline; revoked / sliding-expired / absolutely-expired / unknown are classified;
+extension after the window moves the sliding deadline and preserves the absolute one;
+clamping holds; two concurrent requests produce exactly one extension and agree on the
+deadline; a revocation that commits while the authentication statement is blocked on the
+row lock is rejected; an extension that races a revoke cannot resurrect the session. API
+tests add the same distinction against the double, plus `503 DEPENDENCY_UNAVAILABLE` when
+the session store is unreachable.
+
+Remaining concurrency limitation, stated rather than implied: the guarantee is about the
+window *inside* the statement. A revocation that commits after the statement returns but
+before the response is written is not visible to that request — no design can close that,
+and it is the price of not holding a transaction open across response serialisation. What
+is closed is the window that the two-call shape created.
 
 ### S7 corrections applied with S8
 

@@ -92,7 +92,11 @@ export async function createApplication(
     // The web app is a separate origin from the API (`ADR-006`), so the browser
     // sends the session cookie only if the response allows credentials.
     credentials: true,
-    methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    // `PUT` is here because `ADR-006` D2.1.5 names it as a state-changing method
+    // and `originValidation` enforces it. Leaving it out of CORS made the preflight
+    // answer "method not allowed" for the one verb the middleware had already
+    // promised to protect.
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     // `X-CSRF-Token` is listed ahead of the synchronizer-token implementation so a
     // frontend does not need a CORS change on the day it lands; the header alone
     // grants nothing, because no endpoint reads it yet.

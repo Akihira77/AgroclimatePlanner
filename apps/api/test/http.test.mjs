@@ -76,6 +76,53 @@ describe("request id, headers, CORS, cookies, proxy trust", () => {
     }
   });
 
+  it("advertises PUT and answers its preflight for the configured origin", async () => {
+    // The Origin middleware protects PUT (`ADR-006` D2.1.5), so CORS must advertise
+    // it; otherwise the browser refuses to send the request the middleware was
+    // written for.
+    const preflight = (method, origin) =>
+      fetch(`${base}/health`, {
+        method: "OPTIONS",
+        headers: { Origin: origin, "Access-Control-Request-Method": method },
+      });
+
+    const put = await preflight("PUT", "http://localhost:5173");
+    assert.equal(put.status, 204);
+    assert.equal(put.headers.get("access-control-allow-origin"), "http://localhost:5173");
+    assert.equal(put.headers.get("access-control-allow-credentials"), "true");
+    assert.match(put.headers.get("access-control-allow-methods") ?? "", /\bPUT\b/i);
+
+    for (const method of ["GET", "POST", "PATCH", "DELETE"]) {
+      const response = await preflight(method, "http://localhost:5173");
+      assert.equal(response.status, 204, `${method} preflight`);
+      assert.equal(
+        response.headers.get("access-control-allow-origin"),
+        "http://localhost:5173",
+        `${method} origin`,
+      );
+    }
+
+    const refused = await preflight("PUT", "https://evil.example");
+    assert.equal(refused.headers.get("access-control-allow-origin"), null);
+  });
+
+  it("applies Origin validation to PUT, not only CORS", async () => {
+    // No PUT route exists, so an allowed caller gets a routing answer and a refused
+    // caller gets the Origin refusal. The status is the proof of which ran first.
+    const allowed = await fetch(`${base}/v1/does-not-exist`, {
+      method: "PUT",
+      headers: { Origin: "http://localhost:5173" },
+    });
+    assert.notEqual(allowed.status, 403);
+
+    const refused = await fetch(`${base}/v1/does-not-exist`, {
+      method: "PUT",
+      headers: { Origin: "https://evil.example" },
+    });
+    assert.equal(refused.status, 403);
+    assert.equal((await refused.json()).error.code, "FORBIDDEN");
+  });
+
   it("allows a configured origin and refuses an unlisted one", async () => {
     const allowed = await fetch(`${base}/health`, {
       method: "OPTIONS",

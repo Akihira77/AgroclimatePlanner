@@ -185,11 +185,12 @@ every route.
    (`Origin` validation); D2.1 (the synchronizer token) is **not** implemented, so no
    `X-CSRF-Token` is read and `IG-9` is partially satisfied. Acceptance of this ADR
    remains an approval, not a delivery claim.
-2. **The CSRF token retrieval mechanism is proposed, not approved.** D2.1 fixes the
-   constraints; the shape — a session-bound column, a `GET /v1/auth/csrf` endpoint, 32
-   bytes base64url, plaintext storage, no rotation — is in
-   `docs/review/s8-csrf-token-design-proposal.md` and needs an owner decision, because it
-   costs a migration and a column grant that this phase was scoped without.
+2. **The CSRF token mechanism is decided, not implemented (2026-11-21).** D2.1 fixes the
+   constraints; *Amendment 4* of `docs/review/phase-3.2-owner-decisions.md` decides the
+   remaining four — plaintext storage in a nullable `app.sessions` column, lazy
+   generation on first retrieval, `GET /v1/auth/csrf`, no rotation — and
+   `docs/review/s8-csrf-token-design-proposal.md` records the design and its migration
+   plan. No column, grant, endpoint, or middleware exists yet; a later task ships them.
 3. **`Origin` validation assumes correct proxy behaviour.** If a deployment terminates TLS
    at a proxy, the API must see the real client `Origin`; the existing `TRUST_PROXY`
    handling already refuses an unconditional `true` (`runtime-config.ts`), and this ADR
@@ -210,6 +211,9 @@ every route.
 - `apps/api` CORS configuration must become credential-capable while staying an exact
   allowlist. This is a change to behaviour, so it belongs to `S8`, not to this
   documentation task.
+- CORS must advertise `PUT` alongside `POST`/`PATCH`/`DELETE`, because D2.1.5 names it as
+  a state-changing method and a browser preflight would otherwise refuse the request that
+  `Origin` validation protects. Implemented in `S8` hardening.
 - `api-conventions.md` §8 previously stated "CSRF: double-submit token on non-GET"; that
   statement is superseded by D2 and is amended there with a pointer to this ADR.
 - No database object, grant, policy, or migration changes. The session table already

@@ -64,92 +64,116 @@ export async function insertSession(
   };
 }
 
+/** What a presented token resolved to. Only `active` carries a subject. */
+export type SessionOutcome = "active" | "revoked" | "expired" | "unknown";
+
+export type SessionResolution =
+  | {
+      readonly outcome: "active";
+      /** Whether this request also moved the sliding deadline. */
+      readonly extended: boolean;
+      readonly session: ActiveSession;
+    }
+  | { readonly outcome: "revoked" | "expired" | "unknown" };
+
 /**
- * Resolves one session by its hash, and only if it is usable right now.
+ * Validates a session and extends it, in **one statement**.
  *
- * All three validity conditions are in the predicate rather than in JavaScript:
- * a revoked, sliding-expired, or absolutely-expired row must never be returned as
- * a subject. Garbage collection is unrelated — it reclaims rows nobody can use,
- * and a row it has not reached is still rejected here.
+ * The previous shape was `findActiveSession()` followed by `extendSession()`. The
+ * second call returned `null` both when the throttle held and when the session had
+ * been revoked or had expired in between, and the caller could not tell the two
+ * apart — so a request that lost the race to a concurrent logout authenticated on
+ * the row it had read *before* the revocation. Two round trips cannot fix that:
+ * the window between them is exactly the window a logout needs.
+ *
+ * One statement closes it, because `SELECT ... FOR UPDATE` in `candidate` takes a
+ * row lock that is held until the statement ends. Two consequences, both required:
+ *
+ * - A concurrent revoke waits for this statement, so it either lands before the
+ *   read (the row is then seen revoked) or after the subject has been established.
+ *   It can never land in between and be ignored.
+ * - A concurrent extension waits too, then sees the committed `last_seen_at`, so
+ *   the throttle's predicate is evaluated against the winner's write rather than a
+ *   stale snapshot.
+ *
+ * The outcome is classified in SQL, but the classification is only used to *describe*
+ * a failure for the operator (`revoked`, `expired`, `unknown`); every non-active
+ * outcome collapses to the same `null` in the service and the same `401` on the
+ * wire. Distinguishing them for the client would tell an attacker whether a
+ * stolen, revoked token ever existed.
+ *
+ * `FOR UPDATE` needs `UPDATE` privilege on at least one column, which `app_auth`
+ * already holds on `expires_at`/`last_seen_at`/`revoked_at`; no privilege or
+ * migration was added for this statement.
  */
-export async function findActiveSession(
+export async function resolveSession(
   client: PrismaClient,
   tokenHash: string,
-): Promise<ActiveSession | null> {
-  const rows = await client.$queryRaw<RawActive[]>`
-    SELECT s.id::text       AS "sessionId",
-           s.user_id::text  AS "userId",
-           s.expires_at,
-           s.absolute_expires_at,
+): Promise<SessionResolution> {
+  const rows = await client.$queryRaw<RawResolution[]>`
+    WITH candidate AS (
+      SELECT id, user_id, expires_at, absolute_expires_at, last_seen_at, revoked_at
+        FROM app.sessions
+       WHERE token_hash = ${tokenHash}
+       FOR UPDATE
+    ),
+    extended AS (
+      UPDATE app.sessions s
+         SET last_seen_at = now(),
+             expires_at   = LEAST(now() + INTERVAL '30 days', s.absolute_expires_at)
+        FROM candidate c
+       WHERE s.id = c.id
+         AND c.revoked_at IS NULL
+         AND c.expires_at > now()
+         AND c.absolute_expires_at > now()
+         AND c.last_seen_at <= now() - INTERVAL '5 minutes'
+      RETURNING s.id, s.expires_at, s.absolute_expires_at
+    )
+    SELECT CASE
+             WHEN c.revoked_at IS NOT NULL THEN 'revoked'
+             WHEN c.expires_at <= now() OR c.absolute_expires_at <= now() THEN 'expired'
+             ELSE 'active'
+           END AS outcome,
+           (e.id IS NOT NULL) AS extended,
+           COALESCE(e.expires_at, c.expires_at) AS "expiresAt",
+           COALESCE(e.absolute_expires_at, c.absolute_expires_at) AS "absoluteExpiresAt",
+           c.id::text       AS "sessionId",
+           c.user_id::text  AS "userId",
            u.email,
            u.role,
            u.locale,
            u.timezone
-      FROM app.sessions s
-      JOIN app.users u ON u.id = s.user_id
-     WHERE s.token_hash = ${tokenHash}
-       AND s.revoked_at IS NULL
-       AND s.expires_at > now()
-       AND s.absolute_expires_at > now()
-     LIMIT 1
+      FROM candidate c
+      LEFT JOIN extended e ON e.id = c.id
+      LEFT JOIN app.users u ON u.id = c.user_id
   `;
 
   const row = rows[0];
-  if (row === undefined) return null;
+  // No candidate row at all: the token names no session. Reported as `unknown`
+  // rather than folded into `expired`, because a deleted row and an expired one
+  // are different operator facts even though they are the same client answer.
+  if (row === undefined) return { outcome: "unknown" };
+  if (row.outcome !== "active") return { outcome: row.outcome };
+
+  // A live session whose user row is missing cannot be authenticated. The foreign
+  // key makes this unreachable; failing is better than inventing a subject.
+  if (row.email === null || row.role === null || row.locale === null || row.timezone === null) {
+    throw new Error("session resolved without its user row");
+  }
 
   return {
-    sessionId: row.sessionId,
-    userId: row.userId,
-    expiresAt: toDate(row.expires_at),
-    absoluteExpiresAt: toDate(row.absolute_expires_at),
-    email: row.email,
-    role: row.role,
-    locale: row.locale,
-    timezone: row.timezone,
-  };
-}
-
-/**
- * Extends the sliding deadline at most once per five minutes, atomically.
- *
- * The window is rechecked in the same `UPDATE` predicate that writes the row,
- * which is the whole mechanism: a concurrent request blocks on the row lock, then
- * PostgreSQL re-evaluates the predicate against the row the winner committed. The
- * loser's `last_seen_at <= now() - interval '5 minutes'` is then false, so it
- * updates nothing. A read-then-write in application code could not make that
- * claim — both callers would have read the same stale `last_seen_at` before
- * either wrote.
- *
- * `LEAST(...)` clamps the result to the absolute deadline, and
- * `absolute_expires_at` itself is never assigned: the grant does not cover it and
- * the intent does not include it.
- *
- * Returns the new sliding deadline, or `null` when the session was invalid or the
- * throttle held. The caller has already validated the session, so `null` is
- * "nothing to publish", not "unauthenticated".
- */
-export async function extendSession(
-  client: PrismaClient,
-  tokenHash: string,
-): Promise<{ expiresAt: Date; absoluteExpiresAt: Date } | null> {
-  const rows = await client.$queryRaw<RawExtend[]>`
-    UPDATE app.sessions
-       SET last_seen_at = now(),
-           expires_at   = LEAST(now() + INTERVAL '30 days', absolute_expires_at)
-     WHERE token_hash = ${tokenHash}
-       AND revoked_at IS NULL
-       AND expires_at > now()
-       AND absolute_expires_at > now()
-       AND last_seen_at <= now() - INTERVAL '5 minutes'
-    RETURNING expires_at, absolute_expires_at
-  `;
-
-  const row = rows[0];
-  if (row === undefined) return null;
-
-  return {
-    expiresAt: toDate(row.expires_at),
-    absoluteExpiresAt: toDate(row.absolute_expires_at),
+    outcome: "active",
+    extended: row.extended,
+    session: {
+      sessionId: row.sessionId,
+      userId: row.userId,
+      expiresAt: toDate(row.expiresAt),
+      absoluteExpiresAt: toDate(row.absoluteExpiresAt),
+      email: row.email,
+      role: row.role,
+      locale: row.locale,
+      timezone: row.timezone,
+    },
   };
 }
 
@@ -184,18 +208,15 @@ interface RawIssued {
   readonly absolute_expires_at: Date | string;
 }
 
-interface RawExtend {
-  readonly expires_at: Date | string;
-  readonly absolute_expires_at: Date | string;
-}
-
-interface RawActive {
+interface RawResolution {
+  readonly outcome: SessionOutcome;
+  readonly extended: boolean;
+  readonly expiresAt: Date | string;
+  readonly absoluteExpiresAt: Date | string;
   readonly sessionId: string;
   readonly userId: string;
-  readonly expires_at: Date | string;
-  readonly absolute_expires_at: Date | string;
-  readonly email: string;
-  readonly role: string;
-  readonly locale: string;
-  readonly timezone: string;
+  readonly email: string | null;
+  readonly role: string | null;
+  readonly locale: string | null;
+  readonly timezone: string | null;
 }

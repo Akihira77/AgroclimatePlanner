@@ -19,8 +19,13 @@ export {
   isEmailUniqueViolation,
 } from "./auth-registration.js";
 export type { AuthUserRecord, RegisteredUser } from "./auth-registration.js";
-export { extendSession, findActiveSession, insertSession, revokeSession } from "./auth-sessions.js";
-export type { ActiveSession, IssuedSession } from "./auth-sessions.js";
+export { insertSession, resolveSession, revokeSession } from "./auth-sessions.js";
+export type {
+  ActiveSession,
+  IssuedSession,
+  SessionOutcome,
+  SessionResolution,
+} from "./auth-sessions.js";
 export { createTenantScope, normaliseTenantId, TenantContextError } from "./tenant.js";
 export type { TenantScope, TenantTransaction } from "./tenant.js";
 

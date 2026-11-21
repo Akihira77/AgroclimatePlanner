@@ -203,6 +203,21 @@ This ADR deliberately does not solve that, and says so rather than implying a so
   happens at most once per five minutes" at S5 would be asserting something no object
   in the database enforces.
 
+**Resolved in `S8` (2026-11-21) — row locking inside one statement.** The chosen form is
+a single statement: `SELECT … FOR UPDATE` over the candidate row, an `UPDATE … FROM`
+that re-checks the throttle and clamps with `LEAST(...)`, and a final join that returns
+either the extended or the unchanged deadlines. Two properties follow, and both are
+tested against the real roles:
+
+- the throttle is evaluated against the winner's committed `last_seen_at`, not a stale
+  snapshot, so concurrent requests produce one extension;
+- the row lock is held for the length of the statement, so a concurrent revocation either
+  lands before the read or after the subject is established — it can no longer land in
+  between and be reported as "throttled".
+
+The earlier two-call shape (`find`, then `extend`) could not distinguish a throttled
+extension from a revoked session, which is why it was replaced rather than patched.
+
 The clamp bounds the *result* of any number of racing extensions — `expires_at` can
 never pass `absolute_expires_at` — but bounding the result is not enforcing the
 throttle, and the two must not be conflated.

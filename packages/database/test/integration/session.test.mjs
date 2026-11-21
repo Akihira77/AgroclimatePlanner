@@ -17,10 +17,9 @@ import { Client } from "pg";
 
 import {
   createPrismaClient,
-  extendSession,
-  findActiveSession,
   findAuthUserByEmail,
   insertSession,
+  resolveSession,
   revokeSession,
 } from "../../dist/index.js";
 import { roleConnectionString } from "../../scripts/lib/connections.mjs";
@@ -190,52 +189,51 @@ describe("session issuance", () => {
   });
 });
 
-describe("session validation", () => {
-  it("resolves an active session to its user", async () => {
+describe("session resolution", () => {
+  it("resolves an active session and says the extension was throttled", async () => {
     const { raw } = await issue();
-    const active = await findActiveSession(auth, hashOf(raw));
+    const resolution = await resolveSession(auth, hashOf(raw));
 
-    assert.equal(active.userId, userId);
-    assert.equal(active.email.endsWith("@s8-integration.test"), true);
-    assert.equal(active.expiresAt.getTime() > Date.now(), true);
+    assert.equal(resolution.outcome, "active");
+    // A fresh row is inside the five-minute window: valid, not extended. The old
+    // shape reported `null` here, which is the value it also reported for a
+    // revoked session.
+    assert.equal(resolution.extended, false);
+    assert.equal(resolution.session.userId, userId);
+    assert.equal(resolution.session.email.endsWith("@s8-integration.test"), true);
+    assert.equal(resolution.session.expiresAt.getTime() > Date.now(), true);
   });
 
-  it("rejects a wrong token without scanning", async () => {
+  it("returns `unknown` for a token that names no row", async () => {
     await issue();
-    assert.equal(await findActiveSession(auth, hashOf(token())), null);
+    assert.equal((await resolveSession(auth, hashOf(token()))).outcome, "unknown");
   });
 
-  it("rejects a session past its sliding deadline, even though the row exists", async () => {
+  it("classifies a revoked session, and keeps the row", async () => {
+    const { raw, session } = await issue();
+    await revokeSession(auth, hashOf(raw));
+
+    assert.equal((await resolveSession(auth, hashOf(raw))).outcome, "revoked");
+    assert.notEqual(await readSession(session.id), undefined);
+  });
+
+  it("classifies a sliding-expired session while the row still exists", async () => {
     const { raw, session } = await issue();
     await ageSession(session.id, "-2 days", "-1 second", "30 days");
 
-    assert.equal(await findActiveSession(auth, hashOf(raw)), null);
+    assert.equal((await resolveSession(auth, hashOf(raw))).outcome, "expired");
     assert.notEqual(await readSession(session.id), undefined, "the row is still there");
   });
 
-  it("rejects a session past its absolute deadline", async () => {
+  it("classifies an absolutely-expired session", async () => {
     const { raw, session } = await issue();
     await ageSession(session.id, "-3 days", "-2 seconds", "-1 second");
 
-    assert.equal(await findActiveSession(auth, hashOf(raw)), null);
-  });
-
-  it("rejects a revoked session", async () => {
-    const { raw, session } = await issue();
-    assert.equal(await revokeSession(auth, hashOf(raw)), true);
-    assert.equal(await findActiveSession(auth, hashOf(raw)), null);
-
-    const row = await readSession(session.id);
-    assert.notEqual(row.revoked_at, null);
+    assert.equal((await resolveSession(auth, hashOf(raw))).outcome, "expired");
   });
 });
 
 describe("sliding extension", () => {
-  it("does not extend inside the five-minute throttle", async () => {
-    const { raw } = await issue();
-    assert.equal(await extendSession(auth, hashOf(raw)), null);
-  });
-
   it("extends after the window, preserving the absolute deadline", async () => {
     const { raw, session } = await issue();
     const before = await readSession(session.id);
@@ -245,12 +243,13 @@ describe("sliding extension", () => {
     );
     await backdateLastSeen(session.id, 6);
 
-    const extended = await extendSession(auth, hashOf(raw));
-    assert.notEqual(extended, null);
+    const resolution = await resolveSession(auth, hashOf(raw));
+    assert.equal(resolution.outcome, "active");
+    assert.equal(resolution.extended, true);
 
     const after = await readSession(session.id);
     assert.equal(after.absolute_expires_at.getTime(), before.absolute_expires_at.getTime());
-    assert.equal(after.expires_at.getTime() > before.created_at.getTime(), true);
+    assert.equal(resolution.session.expiresAt.getTime(), after.expires_at.getTime());
 
     const sliding = await owner.query(
       "SELECT extract(epoch FROM (expires_at - now())) AS seconds FROM app.sessions WHERE id = $1",
@@ -270,43 +269,112 @@ describe("sliding extension", () => {
     );
     await backdateLastSeen(session.id, 6);
 
-    const extended = await extendSession(auth, hashOf(raw));
+    const resolution = await resolveSession(auth, hashOf(raw));
     const after = await readSession(session.id);
 
-    assert.equal(extended.expiresAt.getTime(), after.absolute_expires_at.getTime());
+    assert.equal(resolution.extended, true);
+    assert.equal(resolution.session.expiresAt.getTime(), after.absolute_expires_at.getTime());
     assert.equal(after.expires_at.getTime(), after.absolute_expires_at.getTime());
-    assert.equal(after.expires_at.getTime() <= after.absolute_expires_at.getTime(), true);
   });
 
-  it("performs at most one extension when two requests race", async () => {
+  it("extends at most once when two requests race", async () => {
     const { raw, session } = await issue();
     await backdateLastSeen(session.id, 6);
 
-    const outcomes = await Promise.all([
-      extendSession(auth, hashOf(raw)),
-      extendSession(auth, hashOf(raw)),
+    const resolutions = await Promise.all([
+      resolveSession(auth, hashOf(raw)),
+      resolveSession(auth, hashOf(raw)),
     ]);
 
     assert.equal(
-      outcomes.filter((outcome) => outcome !== null).length,
-      1,
-      "the throttle is rechecked in the UPDATE predicate, so the loser updates nothing",
+      resolutions.every((resolution) => resolution.outcome === "active"),
+      true,
+      "both requests are valid; only one may write",
     );
+    assert.equal(
+      resolutions.filter((resolution) => resolution.extended).length,
+      1,
+      "the loser re-evaluates the throttle against the winner's committed last_seen_at",
+    );
+
+    // Both callers see the same deadline afterwards, whichever one extended it.
+    const after = await readSession(session.id);
+    for (const resolution of resolutions) {
+      assert.equal(resolution.session.expiresAt.getTime(), after.expires_at.getTime());
+    }
   });
 
   it("never extends a revoked or expired session", async () => {
     const revoked = await issue();
     await revokeSession(auth, hashOf(revoked.raw));
     await backdateLastSeen(revoked.session.id, 6);
-    assert.equal(await extendSession(auth, hashOf(revoked.raw)), null);
+
+    const afterRevoke = await resolveSession(auth, hashOf(revoked.raw));
+    assert.equal(afterRevoke.outcome, "revoked");
+    const revokedRow = await readSession(revoked.session.id);
+    assert.equal(revokedRow.last_seen_at.getTime() < Date.now(), true, "no write happened");
 
     const expired = await issue();
     await ageSession(expired.session.id, "-1 day", "-1 second", "30 days");
     await backdateLastSeen(expired.session.id, 6);
-    assert.equal(await extendSession(auth, hashOf(expired.raw)), null);
 
-    // Expiry is one-way: a longer extension cannot revive the row.
-    assert.equal(await findActiveSession(auth, hashOf(expired.raw)), null);
+    assert.equal((await resolveSession(auth, hashOf(expired.raw))).outcome, "expired");
+
+    const expiredRow = await readSession(expired.session.id);
+    assert.equal(expiredRow.last_seen_at.getTime() < Date.now(), true, "no write happened");
+  });
+});
+
+describe("revocation racing authentication", () => {
+  it("rejects a request whose revocation commits while it is waiting for the row", async () => {
+    const { raw } = await issue();
+    const tokenHash = hashOf(raw);
+
+    // The owner transaction holds the row lock and then revokes. The authentication
+    // statement has already started and is blocked on that lock, which is exactly
+    // the window the previous two-call shape fell through.
+    await owner.query("BEGIN");
+    try {
+      await owner.query("SELECT 1 FROM app.sessions WHERE token_hash = $1 FOR UPDATE", [tokenHash]);
+
+      let settled = false;
+      const pending = resolveSession(auth, tokenHash).finally(() => {
+        settled = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      // The proof that the statement is blocked on the row lock rather than having
+      // already read a stale row: the old two-call shape completed its read here.
+      assert.equal(settled, false, "authentication must wait for the lock");
+
+      await owner.query("UPDATE app.sessions SET revoked_at = now() WHERE token_hash = $1", [
+        tokenHash,
+      ]);
+      await owner.query("COMMIT");
+
+      const resolution = await pending;
+      assert.equal(resolution.outcome, "revoked");
+    } finally {
+      // A failure before COMMIT must not leave this connection inside a transaction:
+      // an open one would block the cleanup of every later test.
+      await owner.query("ROLLBACK").catch(() => {});
+    }
+  });
+
+  it("cannot be resurrected by an extension that races the revoke", async () => {
+    const { raw, session } = await issue();
+    const tokenHash = hashOf(raw);
+    await backdateLastSeen(session.id, 6);
+
+    const [, revoked] = await Promise.all([
+      resolveSession(auth, tokenHash),
+      revokeSession(auth, tokenHash),
+    ]);
+    assert.equal(revoked, true);
+
+    const row = await readSession(session.id);
+    assert.notEqual(row.revoked_at, null, "the revoke is not overwritten");
+    assert.equal((await resolveSession(auth, tokenHash)).outcome, "revoked");
   });
 });
 
@@ -326,7 +394,7 @@ describe("logout", () => {
       session.id,
     ]);
     assert.equal(count.rows[0].n, 1);
-    assert.equal(await findActiveSession(auth, hashOf(raw)), null);
+    assert.equal((await resolveSession(auth, hashOf(raw))).outcome, "revoked");
   });
 });
 

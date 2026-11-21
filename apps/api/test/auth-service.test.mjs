@@ -212,6 +212,61 @@ describe("session validation", () => {
     assert.equal(database.state.extensions.length, 0);
   });
 
+  it("still authenticates when the throttle holds, and keeps the old deadline", async () => {
+    // The distinction the previous two-call shape lost: `extendSession` returned
+    // `null` for "throttled" *and* for "revoked", so the caller could fall back to
+    // stale data. A throttled extension is a successful authentication.
+    const { database, service } = setup();
+    const user = seedUser(database, { email: "user@example.com", passwordHash: "hash" });
+    const seeded = seedSession(database, {
+      userId: user.id,
+      tokenHash: HASH,
+      expiresAt: Date.now() + 24 * 60 * 60 * 1000,
+    });
+
+    const check = await service.authenticate(TOKEN);
+    assert.notEqual(check, null);
+    assert.equal(database.state.extensions.length, 0, "inside the throttle");
+    assert.equal(check.expiresAt.getTime(), Math.floor(seeded.expiresAt));
+  });
+
+  it("returns null when the session was revoked between the read and the write", async () => {
+    // The double cannot hold a row lock, so this models the observable outcome of
+    // the race: the statement sees a revoked row and reports `revoked`, not
+    // "throttled". The lock that makes the real database behave this way is proven
+    // in the integration suite.
+    const { database, service } = setup();
+    const user = seedUser(database, { email: "user@example.com", passwordHash: "hash" });
+    seedSession(database, {
+      userId: user.id,
+      tokenHash: HASH,
+      revokedAt: Date.now(),
+      lastSeenAt: Date.now() - 6 * 60 * 1000,
+    });
+
+    assert.equal(await service.authenticate(TOKEN), null);
+    assert.equal(database.state.extensions.length, 0);
+  });
+
+  it("answers 503 when the session store is unreachable", async () => {
+    const client = {
+      async $queryRaw() {
+        throw Object.assign(new Error("connect ECONNREFUSED"), { code: "P1001" });
+      },
+    };
+    const { hasher } = stubHasher();
+    const service = new AuthService(client, hasher);
+
+    await assert.rejects(
+      () => service.authenticate("A".repeat(43)),
+      (error) => {
+        assert.equal(error.getStatus(), 503);
+        assert.equal(error.getResponse().code, "DEPENDENCY_UNAVAILABLE");
+        return true;
+      },
+    );
+  });
+
   it("extends once the throttle window has passed, and reports the new deadline", async () => {
     const { database, service } = setup();
     const user = seedUser(database, { email: "user@example.com", passwordHash: "hash" });

@@ -3,10 +3,9 @@ import { randomBytes } from "node:crypto";
 import { Inject, Injectable, ServiceUnavailableException } from "@nestjs/common";
 import type { PrismaClient } from "@agroclimate/database";
 import {
-  extendSession,
-  findActiveSession,
   findAuthUserByEmail,
   insertSession,
+  resolveSession,
   revokeSession,
 } from "@agroclimate/database";
 
@@ -100,24 +99,29 @@ export class AuthService {
   }
 
   /**
-   * Resolves a presented token to a subject, and extends the sliding deadline at
-   * most once per five minutes.
+   * Resolves a presented token to a subject, extending the sliding deadline when
+   * the five-minute throttle allows it.
    *
-   * `null` covers missing user, revocation, and both expired deadlines — the query
-   * already filtered on all of them. The extension returns `null` when the throttle
-   * held, in which case the row's existing deadline is what the cookie keeps.
+   * Validation and extension are **one statement** (`resolveSession`), so a logout
+   * or expiry that races this call cannot be mistaken for a throttled extension.
+   * The old two-call shape returned `null` from the extension in both cases, and
+   * the caller fell back to the deadline it had read before the revocation — a
+   * request could authenticate on a session that was already dead.
+   *
+   * Every non-active outcome is the same `null`: missing row, revoked, sliding
+   * expiry, absolute expiry. `expiresAt` is whichever deadline the database holds
+   * *after* the statement — extended or unchanged — so the cookie never publishes a
+   * deadline the row does not have.
    */
   async authenticate(token: string): Promise<SessionCheck | null> {
     return this.withDatabaseErrors(async () => {
-      const tokenHash = hashSessionToken(token);
-      const session = await findActiveSession(this.client, tokenHash);
-      if (session === null) return null;
+      const resolution = await resolveSession(this.client, hashSessionToken(token));
+      if (resolution.outcome !== "active") return null;
 
-      const extended = await extendSession(this.client, tokenHash);
-
+      const { session } = resolution;
       return {
         sessionId: session.sessionId,
-        expiresAt: extended?.expiresAt ?? session.expiresAt,
+        expiresAt: session.expiresAt,
         user: {
           id: session.userId,
           email: session.email,

@@ -1462,3 +1462,155 @@ to point at `ADR-006`.
 - It does not edit the design review. The `IG-8`/`IG-9` rows there record what was
   recommended; two of those recommendations were declined, and rewriting them would hide
   that they were considered.
+
+---
+
+# Amendment 4 — 2026-11-21: `IG-9` CSRF design decisions
+
+**Approver:** Akihira77, 2026-11-21. **Status: approved for implementation; not implemented.**
+
+*Amendment 3* approved the CSRF **pattern** and left token length, encoding, storage
+form, retrieval, and rotation open (`A3.3`, "Not decided here"). This amendment closes
+those four. It does not alter `A3.3`'s approved wording, Decision 1–4, Amendment 1, or
+Amendment 2, and it does not implement anything: no column, migration, grant, endpoint,
+middleware, or guard exists as a result of it.
+
+The four items are approved as a set. They are only useful together — a token that is
+stored but never retrievable, or retrieved but never compared, is not a control.
+
+## A4.1 `CSRF-1` — Token storage (**approved**)
+
+> The CSRF token is stored **in plaintext** in a dedicated nullable column on
+> `app.sessions`, readable only through `app_auth`'s column grant. It is not stored as a
+> hash.
+
+**Rationale.** The token is re-served on every retrieval so that a second tab, or a
+reload, keeps working; a hash-only column cannot be re-served, so the only way to keep
+that behaviour would be to mint a new token on every retrieval, which is rotation
+wearing a storage decision's clothes — and rotation breaks the multi-tab case the token
+must support.
+
+Writing the token in plaintext does not widen the disclosure surface by the amount it
+looks like:
+
+- It is not a bearer credential. Presenting it without the session cookie authenticates
+  nothing; the cookie is `HttpOnly`, so a cross-site page cannot obtain either.
+- An attacker who can read the session row already has database access, and the token is
+  the least valuable column there.
+- The one attacker who could read it through the application — XSS on the web origin —
+  can already call the retrieval endpoint and receive the same value. Hashing the column
+  would not take that capability away; it would only make the legitimate multi-tab case
+  worse.
+
+**Explicit non-precedent.** This is not a relaxation of `ADR-005` §8. The session token
+*is* the credential and stays hash-only; the CSRF token proves a request came from a
+page that could read the session's own response, which is a different claim.
+
+**Rejected alternative.** A hash-only column with reissue-on-retrieval was rejected
+because it converts retrieval into rotation, and the approved lifecycle (`CSRF-2`) has no
+rotation.
+
+## A4.2 `CSRF-2` — Token lifecycle (**approved**)
+
+> 32 bytes from `crypto.randomBytes`, base64url, 43 characters, alphabet
+> `[A-Za-z0-9_-]`, bound to one session row. Generated **lazily**, on the first
+> retrieval for a session whose token is `NULL`, and never rotated afterwards.
+
+| Event | Behaviour |
+|---|---|
+| New session (login) | Column may stay `NULL` until first retrieval; no login-path change is required |
+| First `GET /v1/auth/csrf` | Token generated and persisted for that session, then returned |
+| Later retrievals | The stored token is returned unchanged |
+| Logout / revocation / expiry | No cleanup step. Validation happens only after the session is validated, so a token attached to an unusable session authenticates nothing |
+| Rotation | **None** in this phase |
+
+**Retrieval.** `GET /v1/auth/csrf`, behind the existing `AuthGuard`:
+
+- `200` with `{ "data": { "token": "<43 characters>" } }`.
+- `401 UNAUTHENTICATED` for absent, malformed, revoked, or expired session — the guard
+  already answers this, so the handler has no branch of its own.
+- `Cache-Control: no-store`, because the value is session-scoped.
+- The session token is never in the body and the response never echoes the cookie.
+
+**Lazy generation is what keeps existing sessions valid.** A `NOT NULL` column would
+require a backfill of every live session, and any backfill that a runtime role performs
+is either a `SECURITY DEFINER` function the boundary does not allow or a migration that
+can fail halfway. `NULL` means "not issued yet", which is a state the session can
+legitimately be in, and it is resolved on first use.
+
+**Concurrency of the first retrieval.** Two simultaneous retrievals for a session with no
+token must not produce two live values. The write is conditional
+(`UPDATE … SET csrf_token = $2 WHERE id = $1 AND csrf_token IS NULL RETURNING csrf_token`)
+and the loser re-reads the row; both callers therefore leave with the token that won.
+This is implementation guidance, not a new decision.
+
+## A4.3 `CSRF-3` — Validation behaviour (**approved**)
+
+> The presented token is read from `X-CSRF-Token`, shape-checked, and compared to the
+> session row's token with `crypto.timingSafeEqual` over equal-length buffers. A missing,
+> malformed, or non-matching token is `403 FORBIDDEN`.
+
+- **Methods.** `POST`, `PUT`, `PATCH`, `DELETE` on routes that have an authenticated
+  subject. `GET` and `HEAD` are not state-changing and are not required to carry a token.
+- **Exempt routes.** `POST /v1/auth/register`, `POST /v1/auth/login`, and
+  `POST /v1/auth/logout`, for the reason `ADR-006` §D2.3 already gives: two of them have
+  no session to bind a token to, and logout must work while the session is being revoked.
+  They remain covered by `Origin` validation.
+- **`403`, not `401`.** The session is valid; the request is not authorised.
+  Re-authenticating does not fix it.
+- **Shape check before comparison.** `timingSafeEqual` throws on a length mismatch, so a
+  malformed value must be rejected by the shape rule first — otherwise "wrong token" and
+  "wrong length" become distinguishable behaviours.
+- **`Origin` validation remains independent.** Neither control replaces the other; both
+  run, in the order their prerequisites allow: `Origin` before body parsing (it needs
+  nothing), the token after the session is known (it needs the subject).
+- **No new error code.** The bounded set already carries `FORBIDDEN`.
+
+## A4.4 `CSRF-4` — Database and migration ownership (**approved**)
+
+> One nullable `text` column on `app.sessions`, one shape CHECK, one `SELECT` grant and
+> one `UPDATE` grant on that column to `app_auth`. No generated column, no
+> `SECURITY DEFINER` function, no backfill, no change to any other table, role, policy, or
+> existing session.
+
+| Object | Form | Reason |
+|---|---|---|
+| Column | `csrf_token text NULL` | `NULL` is "not issued yet" (A4.2) |
+| CHECK | `csrf_token IS NULL OR csrf_token ~ '^[A-Za-z0-9_-]{43}$'` | Same shape rule as the session token hash, nullable for lazy init |
+| Grant | `SELECT (csrf_token), UPDATE (csrf_token)` to `app_auth` only | Validation reads; the first retrieval writes |
+| `app_api` | nothing | Unchanged: no session column is reachable from the tenant role |
+| Generated column | **rejected** | `random()` is volatile; PostgreSQL does not allow a volatile expression in a generated column, and a hash-of-something generated value would be derivable |
+| `SECURITY DEFINER` backfill | **rejected** | No backfill is needed, so the function would exist to create a privilege the boundary does not need |
+| Existing sessions | **stay valid** | `NULL` until first retrieval; no session becomes unusable because a column was added |
+| RLS policies | unchanged | The table's policies already gate the row by session, not by column |
+
+**Sequencing.** The migration is a separate, later task. It must ship the column as
+nullable; adding `NOT NULL` later is only possible after a backfill decision, and no such
+decision is approved.
+
+**`db:verify` consequences.** The new grants and the new CHECK belong in `db:verify` and
+in the RLS suite as an explicit denial case for `app_api`, because "no tenant-role
+access" is currently proven by absence of a grant and would otherwise silently gain a
+carve-out.
+
+## A4.5 What Amendment 4 does not do
+
+- It does not add the column, the CHECK, the grants, or a migration. Those are a later
+  task, and this amendment is the approval that task may rely on.
+- It does not implement generation, retrieval, comparison, middleware, or a guard, and it
+  does not make any request require `X-CSRF-Token`.
+- It does not change `A3.3`'s approved pattern, the header name, the covered methods, or
+  the `Origin` source. It fills in the four details `A3.3` deferred.
+- It does not rotate tokens, and it does not change the session token's hash-only
+  storage.
+- It does not change any role, grant, policy, or RLS behaviour that exists today.
+
+## A4.6 Dispositions after Amendment 4
+
+| Item | Before | After 2026-11-21 |
+|---|---|---|
+| `IG-9` implementation gate | pattern approved, four details open | **fully specified**; implementation is a separate task |
+| `IG-9` implementation | not implemented | not implemented (unchanged) |
+| `IG-8` implementation | implemented in `S8` | unchanged |
+| Schema, migrations, grants | — | unchanged |
+| Sessions valid | — | unchanged; no backfill required by design |

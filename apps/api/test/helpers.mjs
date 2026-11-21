@@ -166,29 +166,46 @@ export function testDatabase() {
         ];
       }
 
-      if (/FROM app\.sessions s/.test(sql)) {
+      /**
+       * `resolveSession` is one statement: lock the candidate, optionally extend,
+       * and classify. The double reproduces the classification and the throttle
+       * deterministically; the row lock itself is a PostgreSQL property, so the
+       * race it prevents is proven in `test/integration/session.test.mjs`, not here.
+       */
+      if (/WITH candidate AS/.test(sql)) {
         const session = state.sessions.get(values[0]);
         if (session === undefined) return [];
+
         const now = Date.now();
-        if (
-          session.revokedAt !== null ||
-          session.expiresAt <= now ||
-          session.absoluteExpiresAt <= now
-        ) {
-          return [];
-        }
+        const outcome =
+          session.revokedAt !== null
+            ? "revoked"
+            : session.expiresAt <= now || session.absoluteExpiresAt <= now
+              ? "expired"
+              : "active";
+
         const user = [...state.users.values()].find((entry) => entry.id === session.userId);
-        if (user === undefined) return [];
+        let extended = false;
+
+        if (outcome === "active" && now - session.lastSeenAt > 5 * 60 * 1000) {
+          session.lastSeenAt = now;
+          session.expiresAt = Math.min(now + 30 * 24 * 60 * 60 * 1000, session.absoluteExpiresAt);
+          state.extensions.push(session.tokenHash);
+          extended = true;
+        }
+
         return [
           {
+            outcome,
+            extended,
+            expiresAt: new Date(session.expiresAt),
+            absoluteExpiresAt: new Date(session.absoluteExpiresAt),
             sessionId: session.id,
             userId: session.userId,
-            expires_at: new Date(session.expiresAt),
-            absolute_expires_at: new Date(session.absoluteExpiresAt),
-            email: user.email,
-            role: user.role,
-            locale: user.locale,
-            timezone: user.timezone,
+            email: user?.email ?? null,
+            role: user?.role ?? null,
+            locale: user?.locale ?? null,
+            timezone: user?.timezone ?? null,
           },
         ];
       }
@@ -198,26 +215,6 @@ export function testDatabase() {
         if (session === undefined || session.revokedAt !== null) return [];
         session.revokedAt = Date.now();
         return [{ id: session.id }];
-      }
-
-      if (/UPDATE app\.sessions/.test(sql) && /last_seen_at = now\(\)/.test(sql)) {
-        const session = state.sessions.get(values[0]);
-        if (session === undefined) return [];
-        const now = Date.now();
-        const active =
-          session.revokedAt === null && session.expiresAt > now && session.absoluteExpiresAt > now;
-        const throttlePassed = now - session.lastSeenAt > 5 * 60 * 1000;
-        if (!active || !throttlePassed) return [];
-
-        session.lastSeenAt = now;
-        session.expiresAt = Math.min(now + 30 * 24 * 60 * 60 * 1000, session.absoluteExpiresAt);
-        state.extensions.push(session.tokenHash);
-        return [
-          {
-            expires_at: new Date(session.expiresAt),
-            absolute_expires_at: new Date(session.absoluteExpiresAt),
-          },
-        ];
       }
 
       throw new Error(`unexpected auth statement: ${sql}`);
