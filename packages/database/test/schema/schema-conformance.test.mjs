@@ -725,6 +725,31 @@ describe("geometry columns", () => {
     assert.equal(column.geom_type, "Geometry");
   });
 
+  /**
+   * The typmod's dimensional part, read with PostGIS's own accessor rather than
+   * parsed out of `format_type`. Measured on this database (PostGIS 3.6):
+   * `2` for `geometry(Geometry,4326)`, `3` for `geometry(GeometryZ,4326)`, and
+   * `NULL` for an unconstrained `geometry`. A 3D typmod would accept `POLYGON Z`,
+   * which the API refuses and which `ST_AsGeoJSON` would then return as
+   * three-ordinate positions.
+   */
+  test("fields.geom is two-dimensional", async () => {
+    const { rows } = await owner.query(
+      `select public.postgis_typmod_dims(a.atttypmod) as dims
+         from pg_attribute a
+         join pg_class c on c.oid = a.attrelid
+         join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'app' and c.relname = 'fields' and a.attname = 'geom'
+          and a.attnum > 0 and not a.attisdropped`,
+    );
+    assert.equal(rows.length, 1, "fields.geom is missing");
+    assert.equal(
+      rows[0].dims,
+      2,
+      `fields.geom has typmod dimensions ${rows[0].dims}; null means unconstrained, 3 means Z is accepted`,
+    );
+  });
+
   test("fields.area_ha is a stored generated column", async () => {
     const { rows } = await owner.query(
       `select a.attgenerated as generated

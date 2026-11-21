@@ -98,10 +98,13 @@ export class FieldService {
     input: FieldUpdateRequest,
   ): Promise<FieldResource | null> {
     try {
-      const row = await this.scope.withTenant(userId, (tx) =>
-        updateField(tx, fieldId, updateInput(input)),
-      );
-      return row === null ? null : toResource(row);
+      // Mapped inside the transaction. `toResource` can refuse a stored geometry,
+      // and mapping after `withTenant` resolved would leave the UPDATE committed
+      // while the request answered `500` — a write the caller was told failed.
+      return await this.scope.withTenant(userId, async (tx) => {
+        const row = await updateField(tx, fieldId, updateInput(input));
+        return row === null ? null : toResource(row);
+      });
     } catch (error) {
       rethrowFieldWriteError(error);
     }

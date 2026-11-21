@@ -655,6 +655,37 @@ describe("stored geometry outside the public contract", () => {
     assert.equal(JSON.stringify(body).includes("206.8"), false, "no geometry is echoed");
   });
 
+  it("rolls back a PATCH whose stored geometry cannot be mapped", async () => {
+    const seeded = await seedStored(corrupt, "unmappable", OFF_GRID);
+    const readRow = () =>
+      harness.owner
+        .$queryRawUnsafe(
+          "SELECT name, updated_at, geom::text AS geom, area_ha, deleted_at FROM app.fields WHERE id = $1::uuid",
+          seeded.fieldId,
+        )
+        .then((rows) => rows[0]);
+
+    const before = await readRow();
+    const { response, body } = await call(corrupt, "PATCH", `/v1/fields/${seeded.fieldId}`, {
+      body: { name: "Renamed" },
+    });
+
+    assert.equal(response.status, 500);
+    assert.equal(body.error.code, "INTERNAL_ERROR");
+
+    // Mapping happens inside `withTenant`, so the UPDATE never commits.
+    const after = await readRow();
+    assert.equal(after.name, before.name, "the name was not changed");
+    assert.equal(
+      after.updated_at.getTime(),
+      before.updated_at.getTime(),
+      "updated_at did not move",
+    );
+    assert.equal(after.geom, before.geom, "the stored geometry is untouched");
+    assert.equal(after.area_ha, before.area_ha);
+    assert.equal(after.deleted_at, null);
+  });
+
   it("cannot store a 3D polygon, so no response can drop an ordinate", async () => {
     // The column is `geometry(Geometry, 4326)` — two dimensions — so PostGIS
     // refuses a Z write with `22023`. That is why the truncation this task fixes

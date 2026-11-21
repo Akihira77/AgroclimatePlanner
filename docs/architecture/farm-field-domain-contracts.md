@@ -521,7 +521,7 @@ query parameters arrive as strings (`api-conventions.md` §12).
 | Farm name non-blank | yes, trimmed, 1–100 | no CHECK — gap | — |
 | Field name non-blank | yes, trimmed, 1–100 | `btrim` length > 0 | — |
 | Geometry type `Polygon` | yes | accepts `POINT`/`POLYGON`/`MULTIPOLYGON` | — |
-| Positions are 2D | yes, two-element tuple | accepts 3D (`POLYGON Z`) | — |
+| Positions are 2D | yes, two-element tuple | refuses a 3D position: the column typmod is two-dimensional, so PostGIS answers `22023` | — |
 | Ring closed, ≥4 positions | yes, cheaper than a `23514` round trip | `ST_IsValid` refuses an unclosed ring (`23514`) — the parser does not close it | — |
 | Lon/lat bounds | yes | no | — |
 | SRID 4326 | implied: `strictObject` refuses a `crs` member | `ST_SRID(geom) = 4326`, and it is load-bearing — the parser **honours** a declared `crs` (§10.2) | — |
@@ -636,7 +636,7 @@ on 2026-11-21, and the first version of this section got two of them wrong:
 |---|---|---|
 | Unclosed ring | **stored unclosed**; `ST_IsValid` false | `fields_geom_valid_check` refuses it (`23514`). The parser does *not* repair the ring |
 | `"crs"` member | **honoured**: `ST_SRID` becomes the declared value (measured `3857`) | `fields_geom_srid_check` refuses it (`23514`). Wrapping the call in `ST_SetSRID(…, 4326)` would overwrite the mismatch and store coordinates labelled 4326 with a wrong, still-positive area — which is why the layer does not |
-| 3D position | **accepted** as `POLYGON Z` | Nothing in the database refuses it. The contract's two-number position tuple is the only guard |
+| 3D position | parsed as `POLYGON Z` | **`22023`** at assignment: the column typmod is two-dimensional, so PostGIS refuses it (`Geometry has Z dimension but column does not`). Measured 2026-11-21, after an earlier version of this row wrongly claimed the database accepted it |
 
 The database layer additionally refuses, before SQL, a non-`Polygon` `type` and any `crs`/`bbox`
 member (`FieldGeometryError`), because the column accepts `POINT` and `MULTIPOLYGON` and would

@@ -23,7 +23,7 @@
  * |---|---|---|
  * | Unclosed ring | stored unclosed, `ST_IsValid` false | `fields_geom_valid_check` (`23514`) |
  * | `"crs": "EPSG:3857"` | **honoured**: `ST_SRID` becomes 3857 | `fields_geom_srid_check` (`23514`) — but only because this layer does not overwrite the SRID |
- * | 3D position | stored as `POLYGON Z` | nothing in the database; the API contract's two-number position is the only guard |
+ * | 3D position | parsed as `POLYGON Z`, then **refused** by the column | the column typmod is two-dimensional, so PostGIS rejects the assignment with `22023` (`Geometry has Z dimension but column does not`); the contract's two-number position stays the first guard |
  *
  * The second row is why `ST_SetSRID` is absent. Setting the SRID after parsing turns a
  * client's declared projection into coordinates mislabelled 4326: the CHECK then passes
