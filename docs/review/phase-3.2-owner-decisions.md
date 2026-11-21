@@ -1117,7 +1117,9 @@ is 499 PASS / 0 FAIL / 0 SKIP, `test:rls` is 88/88, and `test:schema` is 22/22;
 
 **Update, 2026-11-20 (later) — S7 and S8 boundary restated.** The seven `IG` gates are now
 answered (`docs/review/phase-3.2-s7-owner-decisions.md`, option A each; `IG-6`/`IG-7`
-conditional). The row above still reads "Register + login" because that is how the
+conditional). *Update 2026-11-21: finalised — `IG-7` is approved, `IG-4` is approved with a
+revised rule, `IG-6` remains conditional on benchmark evidence (Amendment 1).* The row
+above still reads "Register + login" because that is how the
 sequence was written; the applied boundary is narrower and has two owners:
 
 - **S7** — registration and credential verification: `POST /v1/auth/register`, email
@@ -1139,6 +1141,11 @@ sessions). Track 3 cannot — `S7` and `S8` additionally require `IG-1` through 
 `IG-6` through `IG-10`. None of that is answered **in this document**; as of 2026-11-20 the
 seven gates are recorded in `docs/review/phase-3.2-s7-owner-decisions.md`, and none of them
 changes the boundary described here.
+
+*Update 2026-11-21.* Those gates are now decided (`IG-1`–`IG-4`, `IG-7`, `IG-10`
+approved; `IG-4` revised; `IG-6` conditional; `IG-8`/`IG-9` approved in *Amendment 3*), so
+Track 3's remaining precondition is the S7/S8 **implementation**, not another decision.
+`S7` is still unstarted, which is why this paragraph is not deleted.
 
 **As of 2026-11-18 the architecture gate for S3, S4, and S5 is satisfied by approval.**
 That is a statement about the owner's decision, not about the paperwork. As of
@@ -1189,8 +1196,10 @@ on 2026-11-20 in `docs/review/phase-3.2-s7-owner-decisions.md`, and
 **Update, 2026-11-21.** Two of those gates are no longer unanswered: `IG-8` and `IG-9`
 were approved on 2026-11-21 and are recorded in *Amendment 3* at the end of this file. The
 paragraph above is left as written because it describes the 2026-11-18 round; it is no
-longer a complete list of what is unapproved. `IG-1`–`IG-4` and `IG-6`, `IG-7`, `IG-10`
-remain as the S7 record states them.
+longer a complete list of what is unapproved. `IG-1`–`IG-4`, `IG-6`, `IG-7`, and `IG-10`
+were finalised the same day in *Amendment 1* of
+`docs/review/phase-3.2-s7-owner-decisions.md`: six approved, `IG-4` approved with a
+revised rule, `IG-6` conditionally approved pending the deployment-envelope benchmark.
 
 `OPEN-01` remains **unresolved** despite its decision being approved, because no
 authentication endpoint reads a credential through the boundary yet — the login endpoint

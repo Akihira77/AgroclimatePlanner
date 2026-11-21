@@ -259,17 +259,23 @@ Registration:
 - Body is `{ email, password }` and nothing else; unknown keys are a `400`.
 - Email is trimmed and lowercased by one shared function, also used by login in S8. The
   unique constraint stays case-sensitive, so normalisation is an application invariant.
-- Password: 12 to 1024 **characters**, printable ASCII only (U+0020–U+007E) — letters,
-  digits, spaces, punctuation, and standard symbols. Emoji and any character outside that
-  range are a `400`. No composition rules, no trimming, no Unicode normalisation. Because
-  the charset is ASCII, the character count and the UTF-8 byte count are the same number;
-  the boundary enforces `Buffer.byteLength(password, "utf8") <= 1024`.
+- Password: minimum **12 characters**, maximum **1024 UTF-8 bytes** — the maximum is
+  enforced as `Buffer.byteLength(password, "utf8") <= 1024`, never with `String.length`.
+  No composition requirements: letters, digits, spaces, punctuation, symbols, and
+  non-ASCII text are all permitted. The minimum is counted in Unicode code points, never
+  UTF-16 code units, so an astral character counts once rather than twice (approved
+  2026-11-21, `IG-4`; this replaces the earlier printable-ASCII-only wording). No
+  trimming, no Unicode normalisation, no truncation: the password is hashed exactly as
+  supplied. A password containing an unpaired surrogate is a `400`, because UTF-8
+  encoding would otherwise substitute `U+FFFD` and the bytes hashed would not be the
+  bytes supplied.
 - `201` with the safe user representation `{ id, email, role, locale, timezone }`.
   `createdAt` is **not** returned: the auth credential has no `SELECT` privilege on
   `created_at`.
-- A duplicate address is `409` with code `CONFLICT` and no `details`. That discloses
-  existence; the disclosure is accepted and recorded in
-  `docs/review/phase-3.2-s7-owner-decisions.md`.
+- A duplicate address is `409` with code `CONFLICT` and no `details`. The insert is
+  attempted unconditionally and the unique-constraint conflict is mapped to `409` — no
+  prior existence check. That discloses existence; the disclosure is accepted and
+  recorded in `docs/review/phase-3.2-s7-owner-decisions.md`.
 - No session, no token, no `Set-Cookie`. Registration never authenticates the caller.
 
 Credential verification (S7, internal — no route):
@@ -288,15 +294,26 @@ Until S8 ships, no account has a usable authenticated session. The login contrac
 it exists, is: rate limit before the lookup, the same normalisation, uniform `401`
 `UNAUTHENTICATED` on failure, and the token only in the cookie — never in the body.
 
-Passwords are hashed with Argon2id (`IG-6`); parameters are provisional until the
-deployment-host benchmark is recorded. Email verification is deferred (`IG-10`), so an
-address is not proven to belong to the registrant.
+Passwords are hashed with Argon2id (`IG-6`): a fresh 16-byte random salt per hash,
+32-byte output, PHC string encoding, and parameters held in one configuration constant.
+Verification reads its parameters from the stored hash, so a parameter change does not
+invalidate existing hashes. The numeric parameters are provisional
+(`m=19456 KiB`, `t=2`, `p=1`) until the deployment-envelope benchmark is recorded and the
+owner approves final values; the algorithm and encoding are not provisional. Email
+verification is deferred (`IG-10`), so an address is not proven to belong to the
+registrant — a blocker before public deployment.
 
 ## 9. Rate limiting
 
 - Public/auth endpoints: 30 req/min/IP — registration in S7, login in S8.
+- Enforced **before** password hashing and **before** the database lookup, so a refused
+  request costs neither an Argon2id run nor a query.
+- Refusal is `429` `RATE_LIMITED` with `Retry-After` (see §3), plus the
+  `RateLimit-*` headers below.
 - The v1 limiter is process-local: quotas do not aggregate across replicas, and
-  distributed credential stuffing is an accepted gap (`IG-7`).
+  distributed credential stuffing is an accepted gap (`IG-7`). State is lost on restart,
+  each replica enforces its own quota, per-account throttling is deferred, and a shared
+  store (Redis) is **not** approved.
 - Read endpoints: 300 req/min/user.
 - `POST /agronomy/evaluate` and `POST /ai/briefing`: 20/hour/user, because both are compute-costly and neither is needed at dashboard speed.
 - Responses include `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`.

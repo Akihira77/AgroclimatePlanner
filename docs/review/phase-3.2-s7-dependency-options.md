@@ -3,6 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | **DECISIONS TAKEN 2026-11-20; nothing installed.** `ARGON2ID-LIB` = `@node-rs/argon2@2.2.2` and `LIMITER-MECHANISM` = in-process fixed window are approved. The benchmark is prepared, not executed — see `docs/review/phase-3.2-s7-argon2-benchmark-plan.md` |
+| Status update, 2026-11-21 | The library is **installed** at `b48f22c` (`@node-rs/argon2@2.2.2`, exact, `apps/api/package.json`); nothing imported it at that commit except the benchmark script. The limiter remains unimplemented. A local latency-only benchmark was executed; it does not satisfy `IG-6`. This row is a dated update — the row above records the 2026-11-20 state as it was |
 | Prepared | 2026-11-20, from `0a2e6a2` |
 | Scope | `IG-6` library selection, `IG-7` limiter mechanism in S7 (registration). Parameters and limits were already decided; this document chooses only the implementations. Login-side enforcement lands in S8 |
 | Constraints inherited | no dependency without approval; no S8 work; no database change |

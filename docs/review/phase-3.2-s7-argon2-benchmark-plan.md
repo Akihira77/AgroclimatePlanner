@@ -229,6 +229,7 @@ Concurrency 4 has still never been measured, and no production run exists.
    the guard refuses concurrency 4 outright and permits nothing above a latency-only,
    concurrency-1 run.
 2. **Library not installed** — the harness exits `2` until the dependency is added.
+   *(Resolved 2026-11-21: installed at `b48f22c`. Kept as the plan-time record.)*
 3. **cgroup peak is scope-wide** — `memory.peak` is monotonic for the whole scope, so a
    benchmark in a shared scope inherits earlier peaks. The process-level `VmHWM` is the
    figure IG-6 should be judged on.

@@ -331,5 +331,7 @@ These are accepted, disclosed, and not mitigated by this ADR:
 - **`IG-1`–`IG-4`, `IG-6`, `IG-7`, `IG-10`** — email normalisation, duplicate
   registration, auto-login, password policy, hashing parameters, brute-force control,
   and email verification. None is answered **in this ADR** — all seven are recorded in
-  `docs/review/phase-3.2-s7-owner-decisions.md` as of 2026-11-20 — and none changes this
-  boundary.
+  `docs/review/phase-3.2-s7-owner-decisions.md` as of 2026-11-20, and finalised on
+  2026-11-21 (*Amendment 1*: `IG-1`, `IG-2`, `IG-3`, `IG-7`, `IG-10` approved, `IG-4`
+  approved with a revised rule, `IG-6` conditional on benchmark evidence) —
+  and none changes this boundary.

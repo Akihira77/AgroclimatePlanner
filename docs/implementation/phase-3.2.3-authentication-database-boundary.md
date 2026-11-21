@@ -1437,6 +1437,12 @@ parameters, measured on the host), `IG-7` (per-account brute-force control), and
 `docs/review/phase-3.2-s7-owner-decisions.md`: option A for each, with `IG-6` and
 `IG-7` conditional.
 
+*Finalised 2026-11-21* (*Amendment 1* of that record): `IG-7` is now **approved**, not
+conditional; `IG-4` is approved with a revised rule (code-point minimum, 1024 UTF-8
+bytes, no ASCII-only restriction); `IG-6` remains **conditionally approved** — the
+algorithm and encoding are final, the numeric parameters are not. The paragraph below
+describes the 2026-11-20 state.
+
 One thing still gates the implementation, and it is not a design question: the
 deployment-host **benchmark**, without which the parameters stay provisional.
 
