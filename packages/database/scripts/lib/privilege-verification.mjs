@@ -999,9 +999,12 @@ export async function runPrivilegeVerification({
         ["revoked_at", "timestamp with time zone", false, null],
         ["last_seen_at", "timestamp with time zone", true, "now()"],
         ["created_at", "timestamp with time zone", true, "now()"],
+        // Added by `20261121000000_session_csrf_token`; nullable and default-less
+        // because the token is issued lazily on first retrieval (`ADR-006` §D2.1).
+        ["csrf_token", "text", false, null],
       ];
       check(
-        "app.sessions carries exactly the eight approved columns, types, nullability and defaults",
+        "app.sessions carries exactly the nine approved columns, types, nullability and defaults",
         sessionColumns.length === expectedSessionColumns.length &&
           expectedSessionColumns.every(([name, type, notNull, defaultValue], index) => {
             const actual = sessionColumns[index];
