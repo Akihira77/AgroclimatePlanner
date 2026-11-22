@@ -7,6 +7,8 @@ import {
   createGridRegistry,
   defineGridSpec,
   resolveGridCell,
+  type GridEvidence,
+  type GridRegistryEntry,
   type GridSpecInput,
 } from "../src/grid.js";
 
@@ -95,9 +97,15 @@ describe("GridSpec", () => {
  * Phase 5.2.1 — literal hash fixtures.
  *
  * Each expected value was computed once, reviewed, and committed as a literal.
- * Nothing here calls `gridSpecHash` to build an expectation: if the preimage
- * fields, their order, or the canonical serialisation drift, these assertions
- * fail instead of silently agreeing with the implementation under test.
+ * Nothing here calls `gridSpecHash` to build an expectation: if a preimage field
+ * is added, removed, renamed, or changes value, or if `canonicalJson` changes how
+ * it serialises one, these assertions fail instead of silently agreeing with the
+ * implementation under test.
+ *
+ * Field *order* is not part of the guarantee: `canonicalJson` sorts object keys
+ * into an explicit sorted entry list, so rewriting the preimage object literal in
+ * a different order must not — and does not — change a hash. Treating that as a
+ * mutation would assert behaviour the canonicaliser deliberately removes.
  *
  * The preimage is flat (`preimageOf` in `grid.ts`) and covers `gridId`,
  * `originLat`, `originLon`, `stepLat`, `stepLon`, `latRange[0]`, `latRange[1]`,
@@ -173,17 +181,23 @@ describe("gridSpecHash — literal fixtures (5.2.1)", () => {
   });
 
   it("changing a bounded lonRange bound changes the hash", () => {
+    // The unmutated definition is the fixture above, so the baseline is the
+    // committed literal rather than a hash computed in this test.
     const original: GridSpecInput = {
       ...BASE,
+      gridId: "synthetic-0.05deg",
+      originLat: "-90",
+      originLon: "-180",
+      stepLat: "0.05",
+      stepLon: "0.05",
       lonDomain: "bounded",
       lonRange: ["-180", "180"],
+      spatialResolutionKm: 5.5,
     };
-    const moved: GridSpecInput = {
-      ...BASE,
-      lonDomain: "bounded",
-      lonRange: ["-170", "180"],
-    };
-    expect(defineGridSpec(moved).gridSpecHash).not.toBe(defineGridSpec(original).gridSpecHash);
+    const moved: GridSpecInput = { ...original, lonRange: ["-170", "180"] };
+
+    expect(defineGridSpec(original).gridSpecHash).toBe(HASH_FIXTURES.twentiethDegreeBounded);
+    expect(defineGridSpec(moved).gridSpecHash).not.toBe(HASH_FIXTURES.twentiethDegreeBounded);
   });
 });
 
@@ -382,52 +396,204 @@ describe("GridSpec runtime immutability — F-06", () => {
     const grid = spec({});
     expect(assertGridSpecIntegrity(grid)).toBeUndefined();
     expect(
-      assertGridSpecIntegrity(createGridRegistry([{ model: "m", spec: grid }]).specFor("m")),
+      assertGridSpecIntegrity(
+        createGridRegistry([
+          { provider: "test", model: "m", spec: grid, evidence: "synthetic" },
+        ]).specFor({ provider: "test", model: "m" }),
+      ),
     ).toBeUndefined();
   });
 
   it("registry lookup cannot mutate the registered specification", () => {
-    const registry = createGridRegistry([{ model: "synthetic-1", spec: spec({}) }]);
-    const looked = registry.specFor("synthetic-1");
+    const registry = createGridRegistry([
+      { provider: "test", model: "synthetic-1", spec: spec({}), evidence: "synthetic" },
+    ]);
+    const looked = registry.specFor({ provider: "test", model: "synthetic-1" });
     expect(Object.isFrozen(looked)).toBe(true);
     expect(() => {
       (looked.latRange as [string, string])[1] = "0";
     }).toThrow(TypeError);
-    expect(registry.resolve("synthetic-1", { lat: "0.5", lon: "0.5" }).cellKey).toBe(
-      resolveGridCell(spec({}), { lat: "0.5", lon: "0.5" }).cellKey,
-    );
+    expect(
+      registry.resolve({ provider: "test", model: "synthetic-1" }, { lat: "0.5", lon: "0.5" })
+        .cellKey,
+    ).toBe(resolveGridCell(spec({}), { lat: "0.5", lon: "0.5" }).cellKey);
   });
 
   it("registry lookup does not hand back the caller's mutable object", () => {
     const handed = spec({});
-    const registry = createGridRegistry([{ model: "synthetic-1", spec: handed }]);
-    expect(registry.specFor("synthetic-1")).not.toBe(handed);
-    expect(registry.specFor("synthetic-1").gridSpecHash).toBe(handed.gridSpecHash);
-    expect(registry.models()).not.toBe(registry.models());
+    const registry = createGridRegistry([
+      { provider: "test", model: "synthetic-1", spec: handed, evidence: "synthetic" },
+    ]);
+    const looked = registry.specFor({ provider: "test", model: "synthetic-1" });
+    expect(looked).not.toBe(handed);
+    expect(looked.gridSpecHash).toBe(handed.gridSpecHash);
   });
 });
 
-describe("grid registry", () => {
-  it("binds one spec per model", () => {
-    const registry = createGridRegistry([
-      { model: "synthetic-1", spec: spec({ gridId: "synthetic-1" }) },
-      { model: "synthetic-2", spec: spec({ gridId: "synthetic-2" }) },
-    ]);
-    expect(registry.models()).toEqual(["synthetic-1", "synthetic-2"]);
-    expect(registry.resolve("synthetic-1", { lat: "0.5", lon: "0.5" }).cellKey).toBe("0.00,0.00");
+const registryEntry = (
+  provider: string,
+  model: string,
+  overrides: Partial<GridSpecInput> = {},
+  evidence: GridEvidence = "synthetic",
+): GridRegistryEntry => ({ provider, model, spec: spec(overrides), evidence });
+
+describe("grid registry — composite identity", () => {
+  it("registers and resolves one (provider, model) pair", () => {
+    const registry = createGridRegistry([registryEntry("provider-a", "synthetic-1")]);
+    const key = { provider: "provider-a", model: "synthetic-1" };
+    expect(registry.specFor(key).gridId).toBe("synthetic-1deg");
+    expect(registry.resolve(key, { lat: "0.5", lon: "0.5" }).cellKey).toBe("0.00,0.00");
   });
 
-  it("refuses two specs for one model, because a re-grid is a new model string", () => {
+  it("rejects a duplicate (provider, model) pair and names both components", () => {
+    const attempt = () =>
+      createGridRegistry([
+        registryEntry("provider-a", "synthetic-1", { gridId: "a" }),
+        registryEntry("provider-a", "synthetic-1", { gridId: "b" }),
+      ]);
+    expect(attempt).toThrow(/duplicate_grid_spec/);
+    expect(attempt).toThrow(/provider-a/);
+    expect(attempt).toThrow(/synthetic-1/);
+  });
+
+  it("allows one model string under two providers", () => {
+    const registry = createGridRegistry([
+      registryEntry("provider-a", "shared-model"),
+      registryEntry("provider-b", "shared-model", {
+        gridId: "provider-b-grid",
+        stepLat: "0.5",
+        stepLon: "0.5",
+        spatialResolutionKm: 55,
+      }),
+    ]);
+    expect(registry.specFor({ provider: "provider-a", model: "shared-model" }).gridId).toBe(
+      "synthetic-1deg",
+    );
+    expect(registry.specFor({ provider: "provider-b", model: "shared-model" }).gridId).toBe(
+      "provider-b-grid",
+    );
+  });
+
+  it("resolves two providers that share a model string independently", () => {
+    const registry = createGridRegistry([
+      registryEntry("provider-a", "shared-model"),
+      registryEntry("provider-b", "shared-model", {
+        gridId: "provider-b-grid",
+        stepLat: "0.5",
+        stepLon: "0.5",
+        spatialResolutionKm: 55,
+      }),
+    ]);
+    const request = { lat: "0.6", lon: "0.6" };
+    expect(
+      registry.resolve({ provider: "provider-a", model: "shared-model" }, request).cellKey,
+    ).toBe("0.00,0.00");
+    expect(
+      registry.resolve({ provider: "provider-b", model: "shared-model" }, request).cellKey,
+    ).toBe("0.50,0.50");
+  });
+
+  it("allows one gridId on different pairs", () => {
+    const registry = createGridRegistry([
+      registryEntry("provider-a", "model-a", { gridId: "shared-label" }),
+      registryEntry("provider-b", "model-b", { gridId: "shared-label" }),
+    ]);
+    expect(registry.specFor({ provider: "provider-a", model: "model-a" }).gridId).toBe(
+      "shared-label",
+    );
+    expect(registry.specFor({ provider: "provider-b", model: "model-b" }).gridId).toBe(
+      "shared-label",
+    );
+  });
+
+  it("rejects an unknown pair instead of falling back", () => {
+    const registry = createGridRegistry([registryEntry("provider-a", "synthetic-1")]);
+    expect(() => registry.specFor({ provider: "provider-b", model: "synthetic-1" })).toThrow(
+      /unknown_model/,
+    );
+    expect(() =>
+      registry.resolve({ provider: "provider-a", model: "ecmwf_ifs025" }, { lat: "0", lon: "0" }),
+    ).toThrow(/unknown_model/);
+  });
+
+  it("names both provider and model in an unknown-pair failure", () => {
+    const registry = createGridRegistry([registryEntry("provider-a", "synthetic-1")]);
+    const attempt = () => registry.specFor({ provider: "provider-b", model: "no-such-model" });
+    expect(attempt).toThrow(/provider-b/);
+    expect(attempt).toThrow(/no-such-model/);
+  });
+
+  it("provides no model-only lookup", () => {
+    const registry = createGridRegistry([registryEntry("provider-a", "synthetic-1")]);
+    // @ts-expect-error — a bare model string is not a GridKey, and no overload accepts one
+    expect(() => registry.specFor("synthetic-1")).toThrow(/unknown_model/);
+  });
+});
+
+describe("grid registry — evidence", () => {
+  const validatedEntry = () => registryEntry("provider-a", "validated-1", {}, "validated");
+
+  it("reports the declared evidence per entry", () => {
+    const registry = createGridRegistry([
+      registryEntry("provider-a", "synthetic-1"),
+      registryEntry("provider-a", "validated-1", {}, "validated"),
+    ]);
+    expect(registry.evidenceFor({ provider: "provider-a", model: "synthetic-1" })).toBe(
+      "synthetic",
+    );
+    expect(registry.evidenceFor({ provider: "provider-a", model: "validated-1" })).toBe(
+      "validated",
+    );
+  });
+
+  it("returns the spec from requireValidated for a validated entry", () => {
+    const registry = createGridRegistry([validatedEntry()]);
+    expect(registry.requireValidated({ provider: "provider-a", model: "validated-1" }).gridId).toBe(
+      "synthetic-1deg",
+    );
+  });
+
+  it("refuses a synthetic entry on an ingest path with a typed error", () => {
+    const registry = createGridRegistry([registryEntry("provider-a", "synthetic-1")]);
+    const attempt = () =>
+      registry.requireValidated({ provider: "provider-a", model: "synthetic-1" });
+    expect(attempt).toThrow(GridConfigurationError);
+    expect(attempt).toThrow(/grid_not_validated/);
+  });
+
+  it("refuses an unknown pair on an ingest path", () => {
+    const registry = createGridRegistry([validatedEntry()]);
+    expect(() =>
+      registry.requireValidated({ provider: "provider-b", model: "validated-1" }),
+    ).toThrow(/unknown_model/);
+  });
+
+  it("does not let provider A's synthetic entry satisfy provider B", () => {
+    const registry = createGridRegistry([registryEntry("provider-a", "shared-model")]);
+    expect(() =>
+      registry.requireValidated({ provider: "provider-b", model: "shared-model" }),
+    ).toThrow(/unknown_model/);
+    expect(() =>
+      registry.requireValidated({ provider: "provider-a", model: "shared-model" }),
+    ).toThrow(/grid_not_validated/);
+  });
+});
+
+describe("grid registry — integrity", () => {
+  it("rejects a spec whose hash does not match at registration", () => {
+    const edited = { ...spec({ stepLat: "0.5" }), stepLat: "1" };
     expect(() =>
       createGridRegistry([
-        { model: "synthetic-1", spec: spec({ gridId: "a" }) },
-        { model: "synthetic-1", spec: spec({ gridId: "b" }) },
+        { provider: "provider-a", model: "synthetic-1", spec: edited, evidence: "synthetic" },
       ]),
-    ).toThrow(/duplicate_grid_spec/);
+    ).toThrow(/grid_spec_hash_mismatch/);
   });
 
-  it("refuses a model with no validated grid instead of guessing", () => {
-    const registry = createGridRegistry([{ model: "synthetic-1", spec: spec({}) }]);
-    expect(() => registry.resolve("ecmwf_ifs025", { lat: "0", lon: "0" })).toThrow(/unknown_model/);
+  it("stores a registry-owned copy, not the caller's spec", () => {
+    const handed = spec({});
+    const registry = createGridRegistry([
+      { provider: "provider-a", model: "synthetic-1", spec: handed, evidence: "synthetic" },
+    ]);
+    expect(registry.specFor({ provider: "provider-a", model: "synthetic-1" })).not.toBe(handed);
   });
 });

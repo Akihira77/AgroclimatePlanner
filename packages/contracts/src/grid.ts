@@ -76,7 +76,8 @@ export type GridConfigurationErrorCode =
   | "precision_exceeds_grid"
   | "grid_spec_hash_mismatch"
   | "duplicate_grid_spec"
-  | "unknown_model";
+  | "unknown_model"
+  | "grid_not_validated";
 
 export class GridConfigurationError extends Error {
   constructor(
@@ -472,37 +473,80 @@ function decimalsOf(value: string): number {
   return match?.[2]?.length ?? 0;
 }
 
-export interface GridRegistryEntry {
+/**
+ * Registry identity. A `model` string is a provider's own label, so neither name
+ * alone addresses a configuration: two providers may expose the same string with
+ * different grids (ADR-007 D1).
+ */
+export interface GridKey {
+  readonly provider: string;
   readonly model: string;
-  readonly spec: GridSpec;
-}
-
-export interface GridRegistry {
-  resolve(model: string, request: GridResolutionRequest): ResolvedGridCell;
-  specFor(model: string): GridSpec;
-  models(): readonly string[];
 }
 
 /**
- * One `GridSpec` per model, enforced at registration. A second spec for a model
- * that already has one is a re-grid, and a re-grid is a new `model` string — not
- * an in-place edit (5.2.5).
+ * How much is known about a configuration. `validated` requires grade A and B
+ * evidence (a documented grid definition plus a measured protocol that separates
+ * snapping from interpolation); anything less is `synthetic`. It is declared, never
+ * inferred from a name, a resolution figure, or a passing test.
+ */
+export type GridEvidence = "synthetic" | "validated";
+
+export interface GridRegistryEntry {
+  readonly provider: string;
+  readonly model: string;
+  readonly spec: GridSpec;
+  readonly evidence: GridEvidence;
+}
+
+export interface GridRegistry {
+  specFor(key: GridKey): GridSpec;
+  resolve(key: GridKey, request: GridResolutionRequest): ResolvedGridCell;
+  evidenceFor(key: GridKey): GridEvidence;
+  /** Ingest paths only. Returns the spec or throws for anything not `validated`. */
+  requireValidated(key: GridKey): GridSpec;
+}
+
+interface RegisteredGrid {
+  readonly spec: GridSpec;
+  readonly evidence: GridEvidence;
+}
+
+function unknownGrid(key: GridKey): GridConfigurationError {
+  return new GridConfigurationError(
+    "unknown_model",
+    `no grid spec for provider "${key.provider}" model "${key.model}"`,
+  );
+}
+
+/**
+ * One `GridSpec` per `(provider, model)`, enforced at registration. A second spec
+ * for a pair that already has one is a re-grid, and a re-grid is a new `model`
+ * string inside the same provider — not an in-place edit (5.2.5).
+ *
+ * Provider and model are stored as two nested maps rather than one joined string:
+ * any delimiter can appear inside a name, and a collision there would resolve a
+ * request against another configuration.
  */
 export function createGridRegistry(entries: readonly GridRegistryEntry[]): GridRegistry {
-  const byModel = new Map<string, GridSpec>();
+  const byProvider = new Map<string, Map<string, RegisteredGrid>>();
+
   for (const entry of entries) {
     assertGridSpecIntegrity(entry.spec);
+    let byModel = byProvider.get(entry.provider);
+    if (!byModel) {
+      byModel = new Map();
+      byProvider.set(entry.provider, byModel);
+    }
     if (byModel.has(entry.model)) {
       throw new GridConfigurationError(
         "duplicate_grid_spec",
-        `model "${entry.model}" already has a grid spec; a re-grid needs a new model string`,
+        `provider "${entry.provider}" model "${entry.model}" already has a grid spec; a re-grid needs a new model string`,
       );
     }
     // Store a re-defined spec, not the caller's object: a hand-built spec with a
     // matching hash is otherwise mutable state inside the registry.
-    byModel.set(
-      entry.model,
-      defineGridSpec({
+    byModel.set(entry.model, {
+      spec: defineGridSpec({
         gridId: entry.spec.gridId,
         originLat: entry.spec.originLat,
         originLon: entry.spec.originLon,
@@ -514,24 +558,36 @@ export function createGridRegistry(entries: readonly GridRegistryEntry[]): GridR
         orientation: entry.spec.orientation,
         spatialResolutionKm: entry.spec.spatialResolutionKm,
       }),
-    );
+      evidence: entry.evidence,
+    });
   }
+
+  const find = (key: GridKey): RegisteredGrid => {
+    const found = byProvider.get(key.provider)?.get(key.model);
+    if (!found) throw unknownGrid(key);
+    return found;
+  };
+
+  // Closures, not `this`: a detached `resolve` must behave like `registry.resolve`.
+  const specFor = (key: GridKey): GridSpec => find(key).spec;
+
   return Object.freeze({
-    specFor(model: string): GridSpec {
-      const spec = byModel.get(model);
-      if (!spec) {
+    specFor,
+    resolve(key: GridKey, request: GridResolutionRequest): ResolvedGridCell {
+      return resolveGridCell(specFor(key), request);
+    },
+    evidenceFor(key: GridKey): GridEvidence {
+      return find(key).evidence;
+    },
+    requireValidated(key: GridKey): GridSpec {
+      const found = find(key);
+      if (found.evidence !== "validated") {
         throw new GridConfigurationError(
-          "unknown_model",
-          `model "${model}" has no validated grid spec`,
+          "grid_not_validated",
+          `provider "${key.provider}" model "${key.model}" is ${found.evidence}; only a validated grid may reach an ingest path`,
         );
       }
-      return spec;
-    },
-    resolve(model: string, request: GridResolutionRequest): ResolvedGridCell {
-      return resolveGridCell(this.specFor(model), request);
-    },
-    models(): readonly string[] {
-      return Object.freeze([...byModel.keys()]);
+      return found.spec;
     },
   });
 }
