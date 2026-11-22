@@ -1,11 +1,15 @@
 import { Inject, Injectable } from "@nestjs/common";
 import type {
+  CellResolution,
+  CellResolutionRequest,
   Field as FieldResource,
   FieldCreateRequest,
   FieldListQuery,
   FieldUpdateRequest,
+  GridRegistry,
+  GridRegistryEntry,
 } from "@agroclimate/contracts";
-import { polygonGeometrySchema } from "@agroclimate/contracts";
+import { createSpatialResolution, polygonGeometrySchema } from "@agroclimate/contracts";
 import type {
   Field as FieldRow,
   FieldCreate,
@@ -20,11 +24,14 @@ import {
   findField,
   listAllFields,
   listFields,
+  selectFieldAnchor,
   softDeleteField,
   updateField,
+  upsertCell,
 } from "@agroclimate/database";
 
-import { DATABASE_CLIENT } from "../tokens.js";
+import { DATABASE_CLIENT, GRID_REGISTRY } from "../tokens.js";
+import { rethrowCellResolutionError } from "./cell-errors.js";
 import { rethrowFieldWriteError } from "./field-errors.js";
 
 /**
@@ -45,7 +52,10 @@ import { rethrowFieldWriteError } from "./field-errors.js";
 export class FieldService {
   private readonly scope: TenantScope;
 
-  constructor(@Inject(DATABASE_CLIENT) client: PrismaClient) {
+  constructor(
+    @Inject(DATABASE_CLIENT) client: PrismaClient,
+    @Inject(GRID_REGISTRY) private readonly grids: GridRegistry,
+  ) {
     this.scope = createTenantScope(client);
   }
 
@@ -113,6 +123,70 @@ export class FieldService {
   /** `false` from another tenant, an already-deleted field, and a missing one alike. */
   async remove(userId: string, fieldId: string): Promise<boolean> {
     return this.scope.withTenant(userId, (tx) => softDeleteField(tx, fieldId));
+  }
+
+  /**
+   * Resolves one field to one cell and persists that cell's identity
+   * (`climate-data-foundation.md` §8.2 step 5.2.7).
+   *
+   * Four steps, one `withTenant` transaction, in this order, and the order is the
+   * guarantee:
+   *
+   * 1. `selectFieldAnchor` reads the centroid. `null` — another tenant's field, a
+   *    deleted one, a missing one — returns before any grid is touched, so a
+   *    foreign `fieldId` cannot even become a registry lookup.
+   * 2. The registry supplies the spec and the declared evidence for the caller's
+   *    `(provider, model)`. An unknown pair throws `unknown_model` and mints
+   *    nothing; there is no model-only lookup and no fallback grid.
+   * 3. `createSpatialResolution` re-checks the spec's hash, then resolves. The
+   *    centroid becomes `requested` unchanged and `anchor` comes from the
+   *    resolver's own node — this layer never derives a coordinate.
+   * 4. `upsertCell` writes the three identity columns. Reaching it only after a
+   *    resolution succeeded is why an out-of-grid field leaves no row behind.
+   *
+   * `requireValidated` is deliberately **not** called: resolving a cell and
+   * admitting a grid to ingestion are different questions (`ADR-007`), and a
+   * `synthetic` entry must still be usable for development and tests.
+   *
+   * No served coordinate is written or invented, and no `field_outlook_cells`
+   * row is created.
+   */
+  async resolveCell(
+    userId: string,
+    fieldId: string,
+    request: CellResolutionRequest,
+  ): Promise<CellResolution | null> {
+    try {
+      return await this.scope.withTenant(userId, async (tx) => {
+        const anchor = await selectFieldAnchor(tx, fieldId);
+        if (anchor === null) return null;
+
+        const entry = this.registryEntry(request);
+        const resolution = createSpatialResolution(entry, { lat: anchor.lat, lon: anchor.lon });
+
+        const cellId = await upsertCell(tx, {
+          provider: request.provider,
+          model: request.model,
+          cellKey: resolution.cellKey,
+        });
+
+        return { cellId, servedCoordinate: null, resolution };
+      });
+    } catch (error) {
+      rethrowCellResolutionError(error);
+    }
+  }
+
+  /**
+   * The entry the registry already holds, rebuilt from its own accessors so this
+   * layer cannot construct a spec, change an evidence value, or invent a grid.
+   * `specFor` throws `unknown_model` first, so `evidenceFor` is only reached for a
+   * pair that exists.
+   */
+  private registryEntry(key: CellResolutionRequest): GridRegistryEntry {
+    const spec = this.grids.specFor({ provider: key.provider, model: key.model });
+    const evidence = this.grids.evidenceFor({ provider: key.provider, model: key.model });
+    return { provider: key.provider, model: key.model, spec, evidence };
   }
 }
 

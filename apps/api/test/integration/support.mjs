@@ -43,8 +43,15 @@ export const SQUARE = {
 /** The same coordinates as a SQL argument (the database layer takes GeoJSON text). */
 export const SQUARE_JSON = JSON.stringify(SQUARE);
 
-/** Boots the real application on an ephemeral port with the real role clients. */
-export async function startHarness() {
+/**
+ * Boots the real application on an ephemeral port with the real role clients.
+ *
+ * `gridRegistry` is the only substitution the resolution suite needs: production
+ * binds `syntheticGridRegistry`, which holds one `synthetic` entry the database
+ * CHECK refuses, so a happy path has to supply an isolated registry rather than
+ * edit the production one. Absent, the wiring is exactly production's.
+ */
+export async function startHarness({ gridRegistry } = {}) {
   const owner = createPrismaClient({ connectionString: roleConnectionString("migration_owner") });
 
   const app = await createApplication({
@@ -53,6 +60,7 @@ export async function startHarness() {
       authDatabaseUrl: roleConnectionString("app_auth"),
     }),
     createDatabaseClient: (connectionString) => createPrismaClient({ connectionString }),
+    ...(gridRegistry === undefined ? {} : { gridRegistry }),
   });
 
   await app.listen(0, "127.0.0.1");

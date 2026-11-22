@@ -30,6 +30,20 @@ export const ERROR_MESSAGES: Readonly<Record<string, string>> = {
   INTERNAL_ERROR: "Terjadi kesalahan pada server.",
 };
 
+/**
+ * The `404` family is open (`*_NOT_FOUND`), so it cannot have a table entry per
+ * member — but a `404` answering with the internal-error text is a contract lie:
+ * the resource is absent, the server is fine. One message covers the family, and
+ * a code with its own entry still wins.
+ */
+const NOT_FOUND_MESSAGE = "Sumber daya tidak ditemukan.";
+
+function messageFor(code: ErrorCode): string {
+  const own = ERROR_MESSAGES[code];
+  if (own !== undefined) return own;
+  return code.endsWith("_NOT_FOUND") ? NOT_FOUND_MESSAGE : ERROR_MESSAGES["INTERNAL_ERROR"]!;
+}
+
 /** Builds the envelope, then parses it, so a contract mismatch cannot be sent. */
 export function errorResponseBody(
   code: ErrorCode,
@@ -38,7 +52,7 @@ export function errorResponseBody(
 ): ErrorResponse {
   const error: Record<string, unknown> = {
     code,
-    message: ERROR_MESSAGES[code] ?? ERROR_MESSAGES["INTERNAL_ERROR"],
+    message: messageFor(code),
     requestId,
   };
   if (details !== undefined) error.details = details;

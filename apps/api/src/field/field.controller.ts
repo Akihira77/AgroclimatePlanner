@@ -1,4 +1,6 @@
 import type {
+  CellResolution,
+  CellResolutionRequest,
   Envelope,
   Field,
   FieldCreateRequest,
@@ -8,6 +10,7 @@ import type {
   PageMeta,
 } from "@agroclimate/contracts";
 import {
+  cellResolutionRequestSchema,
   fieldCreateSchema,
   fieldIdSchema,
   fieldListQuerySchema,
@@ -100,6 +103,29 @@ export class FieldController {
     const field = await this.fields.update(authenticatedUserId(request), fieldId, body);
     if (field === null) throw fieldNotFound();
     return { data: field };
+  }
+
+  /**
+   * `200`, not `201`: the route answers with a resolution, and the only row it may
+   * write is a global cell identity with no addressable URL — a `201` with no
+   * `Location`, or one pointing at `/v1/fields/:id`, would both be untrue. The
+   * second identical call returns the same body with the same status.
+   *
+   * A `fieldId` that is missing, foreign, or deleted answers `FIELD_NOT_FOUND`
+   * before the registry is consulted. An unknown `(provider, model)` and a
+   * position outside the grid answer `GRID_NOT_FOUND` and `CELL_NOT_FOUND`
+   * respectively, and neither writes a cell.
+   */
+  @Post(":fieldId/resolve-cell")
+  @HttpCode(200)
+  async resolveCell(
+    @Req() request: AuthenticatedRequest,
+    @Param("fieldId", new ZodValidationPipe(fieldIdSchema)) fieldId: FieldId,
+    @Body(new ZodValidationPipe(cellResolutionRequestSchema)) body: CellResolutionRequest,
+  ): Promise<Envelope<CellResolution>> {
+    const resolution = await this.fields.resolveCell(authenticatedUserId(request), fieldId, body);
+    if (resolution === null) throw fieldNotFound();
+    return { data: resolution };
   }
 
   /** `204`; the row is soft-deleted, never removed. Farm deletion still refuses while a field is live. */

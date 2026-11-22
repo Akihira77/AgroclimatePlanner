@@ -760,10 +760,13 @@ literal `gridSpecHash` fixtures pin the preimage (`grid.test.ts`). 5.2.3 added
 coordinate verbatim, and takes the anchor from the resolver's own node. 5.2.4 added
 `packages/weather-core/src/grids/`: `syntheticGridRegistry` built by
 `createGridRegistry` from one entry labelled `synthetic`. The result shape of §5.2.9.2
-now exists; the HTTP layer's `servedCoordinate: null` and `extractionPolicy` still do
-not, and 5.2.7 is unbuilt. 5.2.6 added the persistence half: `upsertCell` stores the
+now exists. 5.2.6 added the persistence half: `upsertCell` stores the
 `(provider, model, cell_key)` triple and nothing else, so an identity row is not
-evidence that a provider served that cell.
+evidence that a provider served that cell. 5.2.7 mounted the route that uses both:
+`POST /v1/fields/:fieldId/resolve-cell` reads the centroid, resolves it, stores the
+identity, and returns `servedCoordinate: null` beside the resolution —
+`extractionPolicy` stays unset, because it belongs to the field mapping that 5.2
+defers.
 
 Two limits worth stating, because the code cannot enforce them. `GridEvidence` is a
 **declared** value: `requireValidated` rejects an entry declared `synthetic`, but no
@@ -1312,7 +1315,7 @@ Capability status after 5.0, stated so no reader infers more than exists:
 | Field anchor | **Implemented** — `selectFieldAnchor` in `packages/database/src/fields.ts`: `ST_Centroid` inside the supplied `TenantTransaction`, six-decimal strings, `null` for another tenant's, a deleted, or a missing field (5.2.5) |
 | Golden grid resolver tests | **Implemented** — vectors 1–18 plus F-06 immutability |
 | Provider-specific grid configurations | **Pending external evidence** — all five |
-| Field-to-cell resolution service | **Not implemented** — no route |
+| Field-to-cell resolution service | **Implemented** — `POST /v1/fields/:fieldId/resolve-cell`: one tenant transaction, anchor → registry → resolution → `upsertCell`, `200` with `{ cellId, servedCoordinate: null, resolution }` (5.2.7). No `field_outlook_cells` row and no `distance_km` |
 | Cell identity persistence | **Implemented** — `upsertCell` in `packages/database/src/climate.ts`: three identity columns, `ON CONFLICT (provider, model, cell_key) DO NOTHING`, then a three-column lookup; served columns stay NULL (5.2.6) |
 | Persisting resolved cells | **Not implemented** — `field_outlook_cells` is never written, and no migration adds one |
 | Served-coordinate assignment | **Not implemented** |
@@ -1346,14 +1349,14 @@ Capability status after 5.0, stated so no reader infers more than exists:
 | Scope | the registry instance and its synthetic entry in `packages/weather-core/src/grids/` (the resolver stays in `@agroclimate/contracts` — no second implementation, no `weather-core/cells/`); `SpatialResolution` in `packages/contracts`; `upsertCell` in `packages/database/src/climate.ts` and `selectFieldAnchor` in `fields.ts`; `POST /v1/fields/:id/resolve-cell`. **No** `field_outlook_cells` write (§5.2.8) |
 | Contracts | `SpatialResolution`, `GridKey`, `GridRegistry`, `GridEvidence` (§5.2.9); `ResolvedGridCell` is reused unchanged. `GridKey`, `GridEvidence`, `GridRegistryEntry` and the `(provider, model)` registry landed in 5.2.2, and `SpatialResolution` with `GRID_RESOLUTION_ALGORITHM_VERSION` in 5.2.3. The existing `ResolvedCell` (`provenance.ts:104-112`) is left alone — it requires served coordinates and a `distanceKm`, so it cannot hold a pre-ingest result. No `CellKey` is added, no second `ResolvedCell`, and no `distanceKm` |
 | Database impact | none new. `outlook_cells` identity only — three columns, `GRANT INSERT (provider, model, cell_key)` (`migration.sql:737`). No table, column, grant, RLS or migration change. No `field_outlook_cells` row: `distance_km` is `NOT NULL` and needs a served coordinate that does not exist yet |
-| Tests | the eighteen vectors of §5.2.7 unchanged; a literal `gridSpecHash` per registered spec — the four contracts fixtures, plus the synthetic entry's own literal in `packages/weather-core/src/grids/registry.test.ts`; registry keyed by `(provider, model)` — duplicate pair rejected, unknown pair rejected, one `gridId` on two pairs accepted, two providers sharing one model string independent; synthetic entries refused by `requireValidated`; the result keeps requested ≠ anchor and carries no served coordinate; `ST_Centroid` → six-decimal anchor; `upsertCell` — repeat returns one id, the three components form independent rows, served columns NULL, a disallowed provider rejected, and two concurrent inserts of one triple converge on one id |
+| Tests | the eighteen vectors of §5.2.7 unchanged; a literal `gridSpecHash` per registered spec — the four contracts fixtures, plus the synthetic entry's own literal in `packages/weather-core/src/grids/registry.test.ts`; registry keyed by `(provider, model)` — duplicate pair rejected, unknown pair rejected, one `gridId` on two pairs accepted, two providers sharing one model string independent; synthetic entries refused by `requireValidated`; the result keeps requested ≠ anchor and carries no served coordinate; `ST_Centroid` → six-decimal anchor; `upsertCell` — repeat returns one id, the three components form independent rows, served columns NULL, a disallowed provider rejected, and two concurrent inserts of one triple converge on one id; the route — session, CSRF, `fieldId` and strict-body refusals, cross-tenant indistinguishability against a missing field, `requested` equal to the database centroid while `anchor` is the node, the three refusal codes minting nothing, and a repeat returning the same `cellId` with the served columns still NULL |
 | Acceptance | all eighteen vectors still pass; editing the hash preimage or a spec field fails the fixture; the same field anchor always resolves to the same `cellKey`; an unknown pair **fails** with `unknown_model` and mints no cell; a synthetic entry cannot reach an ingest path; `field_outlook_cells` is untouched; no cross-tenant anchor is readable |
 | Dependencies | 5.0, 5.1 |
 | Risks | the centroid of a large plot falling near a grid boundary (two cells differ by one step), documented and unsolved while `OPEN-15` is undecided; no real model resolves until its grid configuration reaches §5.2.6 grade A + B, so 5.2 lands while 5.4 waits on evidence |
 | Deferred to 5.4 | the `field_outlook_cells` row, `distance_km`, `elevation_delta_m`, supersession on geometry edit — every one of them needs the served coordinate |
 
-**Implementation sequence.** 5.2.1, 5.2.2, 5.2.3, 5.2.4, 5.2.5, 5.2.6 and 5.2.8 are
-implemented; 5.2.7 is not. The step numbers are the ones other sections cite.
+**Implementation sequence.** All eight steps, 5.2.1–5.2.8, are implemented. The step
+numbers are the ones other sections cite.
 
 | Step | Objective | Files | Acceptance | Depends on | Status |
 |---|---|---|---|---|---|
@@ -1363,7 +1366,7 @@ implemented; 5.2.7 is not. The step numbers are the ones other sections cite.
 | 5.2.4 | registry instance with one labelled synthetic entry | `packages/weather-core/src/grids/{registry,synthetic}.ts` | unknown pair fails; a synthetic entry is not ingestion-eligible | 5.2.2 | **Done** — in the 5.2.4 implementation change. `syntheticGridRegistry` built by `createGridRegistry` from one `synthetic` entry, whose `gridSpecHash` is pinned by a literal fixture; sixteen weather-core tests |
 | 5.2.5 | field anchor via `ST_Centroid(geom)` inside `withTenant` | `packages/database/src/fields.ts` | known square → known six-decimal anchor; a cross-tenant field is invisible | — | **Done** — in the 5.2.5 implementation change. `selectFieldAnchor` returns `{ lat, lon }` strings rounded in SQL; the four integration cases (square, cross-tenant, soft-deleted, nonexistent) pass |
 | 5.2.6 | `upsertCell` — three columns, `ON CONFLICT DO NOTHING` | `packages/database/src/climate.ts` (new) | a second resolve reuses the cell id; no fourth column attempted | 5.2.4 | **Done** — in the 5.2.6 implementation change. `upsertCell` returns the persisted id, falls back to a three-column `SELECT` when the insert returns no row, and throws rather than inventing one if the lookup fails; served columns stay NULL; seven integration cases including a concurrent insert |
-| 5.2.7 | `POST /v1/fields/:id/resolve-cell` | `apps/api/src/field/*` | 200 twice identical; unknown pair and out-of-grid are typed failures that mint nothing; no mapping row | 5.2.4–5.2.6 | Pending — no route is mounted |
+| 5.2.7 | `POST /v1/fields/:id/resolve-cell` | `apps/api/src/field/*` | 200 twice identical; unknown pair and out-of-grid are typed failures that mint nothing; no mapping row | 5.2.4–5.2.6 | **Done** — in the 5.2.7 implementation change. `200` (not `201`: the cell identity has no addressable URL); the body is `{ cellId, servedCoordinate: null, resolution }`; `FIELD_NOT_FOUND`, `GRID_NOT_FOUND`, `CELL_NOT_FOUND` are the three refusals, and only the first two can occur before a write. Thirteen API integration cases, including cross-tenant indistinguishability and the served columns staying NULL |
 | 5.2.8 | reconcile status and §8.1 after the code lands | `IMPLEMENTATION_STATUS.md`, this document | no section claims an unimplemented guarantee | all | **Done** — `1dff5fd`. Recorded 5.2.1–5.2.2 as implemented and 5.2.3–5.2.7 as pending. 5.2.3 then landed at `6963709`; §8.2 now reads 5.2.1–5.2.3 and 5.2.8 done, 5.2.4–5.2.7 pending |
 
 ### 8.3 Phase 5.3 — run lifecycle and worker runtime

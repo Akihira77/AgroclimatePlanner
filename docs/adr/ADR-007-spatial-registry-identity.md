@@ -16,9 +16,12 @@
   5.2.6 added `upsertCell`: the `(provider, model, cell_key)` triple persisted in
   `app.outlook_cells` with `ON CONFLICT DO NOTHING`, returning the same id on a repeat.
   It writes no served coordinate, so the identity column and the served column stay
-  different claims. `CONTRACTS_VERSION` and the package version are `0.2.0`. Still
-  absent: the route (5.2.7). Nothing is registered as `validated`, and no
-  `field_outlook_cells` row is written by any code.
+  different claims. 5.2.7 mounted `POST /v1/fields/:fieldId/resolve-cell`, which
+  composes the anchor, the registry, `createSpatialResolution` and `upsertCell` inside
+  one tenant transaction and answers `servedCoordinate: null` beside the resolution —
+  it does not call `requireValidated`, because resolving is not admission.
+  `CONTRACTS_VERSION` and the package version are `0.2.0`. Nothing is registered as
+  `validated`, and no `field_outlook_cells` row is written by any code.
 - Date: 2026-11-21 (decision and acceptance), recorded here 2026-11-21, implementation
   status updated 2026-11-22
 - Depends on: ADR-001 (D8, provider strategy and the per-model rounding rule),
@@ -37,7 +40,8 @@
 - Implemented by: Phase 5.2, steps 5.2.1–5.2.8 of
   `climate-data-foundation.md` §8.2. 5.2.1 landed at `44b278c`, 5.2.2 at `965f528`,
   5.2.3 at `6963709`, 5.2.4 at `6b71256`, 5.2.5 in the phase's fifth change,
-  5.2.6 in the phase's sixth change, and 5.2.8 at `1dff5fd`; 5.2.7 is not started.
+  5.2.6 in the phase's sixth change, 5.2.7 in the phase's seventh change, and 5.2.8 at
+  `1dff5fd`.
 - Register entry: `OPEN-18` — the generic half stays approved and unchanged; the
   provider/model half stays `BLOCKED_EXTERNAL_INPUT`.
 

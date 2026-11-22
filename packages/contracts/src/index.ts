@@ -8,6 +8,7 @@ export * from "./response.js";
 export * from "./weather.js";
 export * from "./climate.js";
 export * from "./grid.js";
+export * from "./cell-resolution.js";
 export * from "./provenance.js";
 export { CanonicalizationError, canonicalJson } from "./canonical.js";
 export { sha256Hex, hashFieldSnapshot, hashDerivationDescriptor } from "./hash.js";

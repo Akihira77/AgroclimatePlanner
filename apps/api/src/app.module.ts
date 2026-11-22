@@ -1,6 +1,9 @@
 import type { DynamicModule } from "@nestjs/common";
 import { Module } from "@nestjs/common";
 
+import type { GridRegistry } from "@agroclimate/contracts";
+import { syntheticGridRegistry } from "@agroclimate/weather-core";
+
 import type { RuntimeConfig } from "./config/runtime-config.js";
 import { ConfigModule } from "./config/config.module.js";
 import type { DatabaseClientFactory } from "./database/database.module.js";
@@ -14,6 +17,12 @@ export interface AppDependencies {
   readonly config: RuntimeConfig;
   /** Overridable so a test can supply a double without a live PostgreSQL. */
   readonly createDatabaseClient: DatabaseClientFactory;
+  /**
+   * Overridable so a resolution test can use a registry of its own. Production
+   * gets `syntheticGridRegistry` — one `synthetic` entry, no provider grid — and
+   * there is no second instance to drift from it.
+   */
+  readonly gridRegistry?: GridRegistry;
 }
 
 /**
@@ -31,7 +40,7 @@ export class AppModule {
         DatabaseModule.register(deps.config, deps.createDatabaseClient),
         AuthModule.register(deps.config, deps.createDatabaseClient),
         FarmModule,
-        FieldModule,
+        FieldModule.register(deps.gridRegistry ?? syntheticGridRegistry),
         HealthModule,
       ],
     };

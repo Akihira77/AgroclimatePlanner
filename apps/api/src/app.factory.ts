@@ -2,6 +2,7 @@ import "reflect-metadata";
 
 import { NestFactory } from "@nestjs/core";
 import type { INestApplication } from "@nestjs/common";
+import type { GridRegistry } from "@agroclimate/contracts";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { createPrismaClient } from "@agroclimate/database";
 import type { DatabaseClientFactory } from "./database/database.module.js";
@@ -18,6 +19,8 @@ import { requestIdMiddleware } from "./http/request-id.middleware.js";
 export interface CreateApplicationOptions {
   readonly config: RuntimeConfig;
   readonly createDatabaseClient?: DatabaseClientFactory;
+  /** Test-only substitution for the grid registry; production omits it. */
+  readonly gridRegistry?: GridRegistry;
 }
 
 /**
@@ -51,6 +54,7 @@ export async function createApplication(
       createDatabaseClient:
         options.createDatabaseClient ??
         ((connectionString) => createPrismaClient({ connectionString })),
+      ...(options.gridRegistry === undefined ? {} : { gridRegistry: options.gridRegistry }),
     }),
     // Errors are logged by the exception filter, which knows the request id.
     {
