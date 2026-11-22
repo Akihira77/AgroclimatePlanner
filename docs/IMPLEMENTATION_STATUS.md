@@ -1148,7 +1148,7 @@ Phases 4.5 and 4.6 remain **not started**.
 
 ---
 
-## Phase 5 — Climate Data Foundation — **5.0 contracts implemented; 5.1 adapter foundation started; 5.2.1–5.2.2 implemented, 5.2.3–5.2.8 pending; 5.3–5.8 not started**
+## Phase 5 — Climate Data Foundation — **5.0 contracts implemented; 5.1 adapter foundation started; 5.2.1–5.2.2 and 5.2.8 implemented, 5.2.3–5.2.7 pending; 5.3–5.8 not started**
 
 Status: **5.0 partially implemented.** Phase 5.0 added contract and resolver code
 to `packages/contracts`, with tests. It added no migration, Prisma model, route,
@@ -1159,9 +1159,9 @@ design is `docs/architecture/climate-data-foundation.md`.
 and the job-lifecycle interface remain. 5.1 has begun: `@agroclimate/weather-core`
 exists with a transport, a failure union, one real provider adapter (SEAS5 monthly),
 and a monthly normalizer. Nothing here claims an ingestion job, a persisted record,
-an aggregation, or a climate endpoint — 5.2 has steps 5.2.1 and 5.2.2 implemented
-(literal hash fixtures, and a registry keyed by `(provider, model)`); 5.2.3–5.2.8 are
-pending and 5.3 through 5.8 are **not started**.
+an aggregation, or a climate endpoint — 5.2 has steps 5.2.1, 5.2.2 and 5.2.8
+implemented (literal hash fixtures, a registry keyed by `(provider, model)`, and the
+status reconciliation); 5.2.3–5.2.7 are pending and 5.3 through 5.8 are **not started**.
 
 | Item | State |
 |---|---|
@@ -1227,8 +1227,8 @@ of it is documentation; no sub-phase moved.
 What remains true: no migration is proposed by the phase; lead months 8–12 stay
 climatology; BMKG stays disabled by default; `bias_corrected` stays `false`.
 `open-decisions.md` §6 has since grown to `Q-P5-1`..`Q-P5-7`. Sub-phase 5.1 has
-started (adapter foundation only); 5.2 has steps 5.2.1–5.2.2 implemented and
-5.2.3–5.2.8 pending; 5.3–5.8 have no work started.
+started (adapter foundation only); 5.2 has steps 5.2.1–5.2.2 and 5.2.8 implemented and
+5.2.3–5.2.7 pending; 5.3–5.8 have no work started.
 
 ### Phase 5.0 — contracts and grid resolver — 2026-11-21
 
@@ -1266,14 +1266,15 @@ started (adapter foundation only); 5.2 has steps 5.2.1–5.2.2 implemented and
 
 ---
 
-### Phase 5.2 — spatial resolution foundation — **5.2.1–5.2.2 implemented 2026-11-22; 5.2.3–5.2.8 pending**
+### Phase 5.2 — spatial resolution foundation — **5.2.1–5.2.2 and 5.2.8 implemented 2026-11-22; 5.2.3–5.2.7 pending**
 
 | Item | State |
 |---|---|
-| Status | **Partially implemented.** Two of eight steps exist in `packages/contracts`: literal hash fixtures (5.2.1, `44b278c`) and the `(provider, model)` registry with declared evidence (5.2.2, `965f528`). No `SpatialResolution`, no registry instance, no centroid read, no route, no persistence, no migration. The design is `climate-data-foundation.md` §5.2.9 and `ADR-007` |
+| Status | **Partially implemented.** Three of eight steps are done: literal hash fixtures (5.2.1, `44b278c`), the `(provider, model)` registry with declared evidence (5.2.2, `965f528`), and the status reconciliation (5.2.8, `1dff5fd`). No `SpatialResolution`, no registry instance, no centroid read, no route, no persistence, no migration. The design is `climate-data-foundation.md` §5.2.9 and `ADR-007` |
 | Implemented — 5.2.1 | four literal `gridSpecHash` fixtures in `grid.test.ts`: 1° global, the same lattice under a second `gridId`, 0.25° global, 0.05° bounded. Editing the preimage, a preimage field, or `canonicalJson`'s treatment of one fails the suite; rewriting the object literal in another order does not, because keys are sorted |
 | Implemented — 5.2.2 | `GridKey`, `GridEvidence`, `GridRegistryEntry`; registry keyed by `(provider, model)` through nested maps; `specFor`, `resolve`, `evidenceFor`, `requireValidated`; duplicate pair → `duplicate_grid_spec`, unknown pair → `unknown_model` naming both components, synthetic entry on an ingest path → `grid_not_validated`. No model-only overload; `models()` removed with no replacement. `CONTRACTS_VERSION` and the package version are `0.2.0` |
-| Not implemented — 5.2.3–5.2.8 | `SpatialResolution` and `resolutionAlgorithmVersion`; the `weather-core` registry instance; `ST_Centroid` field anchor; `upsertCell`; `POST /v1/fields/:id/resolve-cell` |
+| Implemented — 5.2.8 | status reconciliation recorded in `1dff5fd`: the per-step status in §8.2, the §8.1 capability table, `OPEN-18` and `ADR-007`. No code change |
+| Not implemented — 5.2.3–5.2.7 | `SpatialResolution` and `resolutionAlgorithmVersion`; the `weather-core` registry instance; `ST_Centroid` field anchor; `upsertCell`; `POST /v1/fields/:id/resolve-cell` |
 | Evidence is declared, not verified | `GridEvidence` is a registry-entry value. `requireValidated` refuses an entry declared `synthetic`; nothing inspects the grade A + B documents behind `validated`. Admission to `validated` is an explicit review decision, and no provider has been admitted |
 | Registry identity | `(provider, model)`, not `model` alone (§5.2.9.1) — **implemented**. One model string may exist under two providers; one `gridId` may label several pairs |
 | `gridId` | a label on one definition, not unique and never a lookup key. `gridSpecHash` keeps `gridId` in its preimage because the hash pins a named definition |

@@ -269,10 +269,11 @@ change that alters identity requires a **new `model` string inside the same
 | registry instance, provider constants | none exist. `GridEvidence` is a field on a registry entry, and no entry is registered anywhere | **Pending** (5.2.4) |
 
 `CONTRACTS_VERSION` and the package version are `0.2.0`; the registry migration was
-the deliberate breaking change ADR-007 D6 approved. Earlier revisions of this entry,
-of §5.2.2, and of §5.2.5 stated the `(provider, model)` registry and the literal
-fixture as if they were already in force. They were not; that history is recorded here
-instead of being silently rewritten, and both items are now actually implemented.
+the deliberate breaking change ADR-007 D6 approved. The status reconciliation for these
+steps is `1dff5fd` (§8.2 step 5.2.8). Earlier revisions of this entry, of §5.2.2, and of
+§5.2.5 stated the `(provider, model)` registry and the literal fixture as if they were
+already in force. They were not; that history is recorded here instead of being silently
+rewritten, and both items are now actually implemented.
 
 **Owner decision 2026-11-21 — the field-mapping boundary is resolved.**
 `field_outlook_cells.distance_km` is `NOT NULL` and is a distance from the anchor to

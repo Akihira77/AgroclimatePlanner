@@ -713,7 +713,7 @@ and a second provider may use the same string for a different lattice. Keying th
 registry by `model` alone therefore lets the wrong grid serve a request.
 
 ```ts
-// design — packages/contracts/src/grid.ts, not implemented
+// implemented — packages/contracts/src/grid.ts
 interface GridKey { readonly provider: string; readonly model: string }
 type GridEvidence = "synthetic" | "validated";
 
@@ -728,7 +728,6 @@ interface GridRegistry {
   specFor(key: GridKey): GridSpec;                    // unknown → typed failure
   resolve(key: GridKey, r: GridResolutionRequest): ResolvedGridCell;
   evidenceFor(key: GridKey): GridEvidence;
-  keys(): readonly GridKey[];                         // frozen copy
   requireValidated(key: GridKey): GridSpec;           // ingest paths only
 }
 ```
@@ -738,7 +737,7 @@ interface GridRegistry {
 | duplicate registration | same `(provider, model)` twice → `duplicate_grid_spec`, at construction |
 | unknown key | `unknown_model` naming both components; no fallback, no nearest match, no other provider's grid |
 | revision | a re-grid is a new `model` string within the **same** provider; no in-place edit, enforced by the pinned hash (§5.2.5) |
-| immutability | the registry stores a re-defined frozen spec and returns it, as today (`grid.ts:501-517`) |
+| immutability | the registry stores a re-defined frozen spec and returns it, as in `createGridRegistry` today |
 | synthetic vs validated | `evidence` is on the entry, not inferred from `gridId`. A synthetic entry resolves (tests, dev) and `requireValidated` refuses it, so an unvalidated grid cannot reach ingestion |
 | `gridId` | a label on the definition, may repeat across providers and models; never a lookup key |
 | lookup by model alone | **not provided.** A model-only convenience would reintroduce the ambiguity this change removes |
@@ -1331,8 +1330,8 @@ Capability status after 5.0, stated so no reader infers more than exists:
 | Risks | the centroid of a large plot falling near a grid boundary (two cells differ by one step), documented and unsolved while `OPEN-15` is undecided; no real model resolves until its grid configuration reaches §5.2.6 grade A + B, so 5.2 lands while 5.4 waits on evidence |
 | Deferred to 5.4 | the `field_outlook_cells` row, `distance_km`, `elevation_delta_m`, supersession on geometry edit — every one of them needs the served coordinate |
 
-**Implementation sequence.** 5.2.1 and 5.2.2 are implemented; 5.2.3–5.2.8 are not.
-The step numbers are the ones other sections cite.
+**Implementation sequence.** 5.2.1, 5.2.2 and 5.2.8 are implemented; 5.2.3–5.2.7 are
+not. The step numbers are the ones other sections cite.
 
 | Step | Objective | Files | Acceptance | Depends on | Status |
 |---|---|---|---|---|---|
@@ -1343,7 +1342,7 @@ The step numbers are the ones other sections cite.
 | 5.2.5 | field anchor via `ST_Centroid(geom)` inside `withTenant` | `packages/database/src/fields.ts` | known square → known six-decimal anchor; a cross-tenant field is invisible | — | Pending |
 | 5.2.6 | `upsertCell` — three columns, `ON CONFLICT DO NOTHING` | `packages/database/src/climate.ts` (new) | a second resolve reuses the cell id; no fourth column attempted | 5.2.4 | Pending — `climate.ts` does not exist |
 | 5.2.7 | `POST /v1/fields/:id/resolve-cell` | `apps/api/src/field/*` | 200 twice identical; unknown pair and out-of-grid are typed failures that mint nothing; no mapping row | 5.2.4–5.2.6 | Pending — no route is mounted |
-| 5.2.8 | reconcile status and §8.1 after the code lands | `IMPLEMENTATION_STATUS.md`, this document | no section claims an unimplemented guarantee | all | Pending — this document records 5.2.1–5.2.2 only |
+| 5.2.8 | reconcile status and §8.1 after the code lands | `IMPLEMENTATION_STATUS.md`, this document | no section claims an unimplemented guarantee | all | **Done** — `1dff5fd`. Records 5.2.1–5.2.2 as implemented and 5.2.3–5.2.7 as pending |
 
 ### 8.3 Phase 5.3 — run lifecycle and worker runtime
 

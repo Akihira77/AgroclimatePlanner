@@ -28,8 +28,8 @@
   database impact (`field_outlook_cells`). Those sections are corrected in place;
   this ADR is the durable record of why.
 - Implemented by: Phase 5.2, steps 5.2.1–5.2.8 of
-  `climate-data-foundation.md` §8.2. 5.2.1 landed at `44b278c` and 5.2.2 at `965f528`;
-  5.2.3–5.2.8 are not started.
+  `climate-data-foundation.md` §8.2. 5.2.1 landed at `44b278c`, 5.2.2 at `965f528`, and
+  5.2.8 at `1dff5fd`; 5.2.3–5.2.7 are not started.
 - Register entry: `OPEN-18` — the generic half stays approved and unchanged; the
   provider/model half stays `BLOCKED_EXTERNAL_INPUT`.
 
