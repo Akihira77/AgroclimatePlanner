@@ -58,7 +58,12 @@ export interface JobQueue {
   renew(job: ClaimedJob, leaseMs: number): Promise<boolean>;
   succeed(job: ClaimedJob, tx: SqlExecutor): Promise<boolean>;
   fail(job: ClaimedJob, error: JobError, outcome: FailOutcome, tx: SqlExecutor): Promise<boolean>;
-  /** Only before a handler has begun: `ingestion_run_id IS NULL`. */
+  /**
+   * Settle a claim before a handler begins: requeue while a claim remains, go
+   * `dead` when the attempt budget is spent. Reachable only while
+   * `ingestion_run_id IS NULL`, so no IngestionRun exists and none is created.
+   * `false` means ownership was lost and nothing was written.
+   */
   release(job: ClaimedJob): Promise<boolean>;
   reapExpired(): Promise<readonly ReapedJob[]>;
 }

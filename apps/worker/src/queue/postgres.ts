@@ -56,6 +56,17 @@ const LEASE_EXPIRED_ERROR = {
   retryable: true,
 } as const;
 
+/**
+ * The claim was released before a handler began and no claim remained. Nothing
+ * was ingested, so there is no run to fail — the job is dead with this reason
+ * and nothing else is written.
+ */
+const CLAIM_BUDGET_EXHAUSTED_ERROR = {
+  code: "claim_budget_exhausted",
+  message: "attempt budget exhausted before handler execution; no ingestion run was created",
+  retryable: false,
+} as const;
+
 export function createPostgresQueue(options: PostgresQueueOptions): JobQueue {
   const { db, defaultMaxAttempts } = options;
   const reaperBatchSize = options.reaperBatchSize ?? 20;
@@ -236,10 +247,26 @@ export function createPostgresQueue(options: PostgresQueueOptions): JobQueue {
       // running would hand the same work to a second worker while the first is
       // still writing; the lease is what makes that impossible, so it must be
       // allowed to expire instead.
-      const rows = await db.$queryRaw<{ id: string }[]>`
+      //
+      // The claim already charged `attempt`, and `jobs_attempt_check` allows at
+      // most `max_attempts`. Requeueing at the ceiling would leave a row every
+      // future claim rejects with a check violation, so the requeue-or-dead
+      // decision is part of this one statement: a read followed by an update
+      // would put a race between them, and a caller-side branch would have to
+      // re-check ownership to stay correct.
+      //
+      // No IngestionRun is created or touched. This path is reachable only while
+      // `ingestion_run_id IS NULL` — the state before a handler starts — so a
+      // claim that dies here has nothing to ingest, and inventing a run would
+      // fabricate provenance.
+      const rows = await db.$queryRaw<{ status: string }[]>`
         UPDATE app.jobs
-           SET status           = 'queued',
+           SET status           = CASE WHEN attempt >= max_attempts THEN 'dead' ELSE 'queued' END,
                run_at           = now(),
+               finished_at      = CASE WHEN attempt >= max_attempts THEN now() ELSE NULL END,
+               last_error       = CASE WHEN attempt >= max_attempts
+                                       THEN ${CLAIM_BUDGET_EXHAUSTED_ERROR}::jsonb
+                                       ELSE last_error END,
                lease_token      = NULL,
                lease_expires_at = NULL,
                updated_at       = now()
@@ -247,7 +274,7 @@ export function createPostgresQueue(options: PostgresQueueOptions): JobQueue {
            AND lease_token = ${job.leaseToken}::uuid
            AND status = 'running'
            AND ingestion_run_id IS NULL
-        RETURNING id::text AS "id"
+         RETURNING status
       `;
       return rows[0] !== undefined;
     },

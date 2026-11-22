@@ -692,3 +692,166 @@ describe("expired lease ownership", () => {
     assert.equal(runs[0].finished_at, null);
   });
 });
+
+/**
+ * Release is the only path that can settle a claim without starting a handler,
+ * so it is also the only place the claim counter can reach the ceiling with
+ * nothing executed. Requeueing there would produce a row every later claim
+ * rejects on `jobs_attempt_check`.
+ */
+describe("release policy", () => {
+  async function queuedJobAt({ attempt, maxAttempts = 5 }) {
+    const rows = await system.$queryRaw`
+      INSERT INTO app.jobs (kind, idempotency_key, payload, attempt, max_attempts)
+      VALUES ('maintenance', ${key(randomUUID())}, '{}'::jsonb, ${attempt}, ${maxAttempts})
+      RETURNING id::text AS "id"
+    `;
+    return rows[0].id;
+  }
+
+  it("requeues while a claim remains, without touching attempt", async () => {
+    const id = await queuedJobAt({ attempt: 1, maxAttempts: 5 });
+    const claimed = await queue.claim({ leaseMs: 60_000, kinds: ["maintenance"] });
+    assert.equal(claimed?.id, id);
+    assert.equal(claimed.attempt, 2);
+
+    assert.equal(await queue.release(claimed), true);
+
+    const row = await rowOf(id);
+    assert.equal(row.status, "queued");
+    assert.equal(row.attempt, 2);
+    assert.equal(row.leaseToken, null);
+    assert.equal(row.lease_expires_at, null);
+    assert.equal(row.ingestionRunId, null);
+    assert.equal(row.finished_at, null);
+    assert.equal(row.last_error, null);
+  });
+
+  it("kills the claim at the ceiling instead of leaving it unclaimable", async () => {
+    const id = await queuedJobAt({ attempt: 4, maxAttempts: 5 });
+    const claimed = await queue.claim({ leaseMs: 60_000, kinds: ["maintenance"] });
+    assert.equal(claimed?.id, id);
+    assert.equal(claimed.attempt, 5);
+
+    assert.equal(await queue.release(claimed), true);
+
+    const row = await rowOf(id);
+    assert.equal(row.status, "dead");
+    assert.ok(row.finished_at instanceof Date);
+    assert.equal(row.leaseToken, null);
+    assert.equal(row.lease_expires_at, null);
+    assert.equal(row.attempt, 5);
+    assert.equal(row.last_error.code, "claim_budget_exhausted");
+    assert.equal(row.last_error.retryable, false);
+
+    // The row that used to jam every later claim is now terminal, not queued.
+    assert.equal(await queue.claim({ leaseMs: 60_000, kinds: ["maintenance"] }), null);
+  });
+
+  it("refuses release with a stale lease token and writes nothing", async () => {
+    const job = await expiredJobWithToken({ attempt: 2 });
+    const claimed = claimedShape(job, 2);
+    const stale = { ...claimed, leaseToken: randomUUID() };
+
+    assert.equal(await queue.release(stale), false);
+
+    const row = await rowOf(job.id);
+    assert.equal(row.status, "running", "a refused release must not settle the job");
+    assert.equal(row.attempt, 2);
+    assert.equal(row.leaseToken, job.leaseToken);
+  });
+
+  it("refuses release after a handler has begun", async () => {
+    const ingestion = await createRunningIngestion();
+    const job = await expiredJobWithToken({ attempt: 2, ingestionRunId: ingestion.runId });
+
+    assert.equal(await queue.release(claimedShape(job, 2)), false);
+
+    const row = await rowOf(job.id);
+    assert.equal(row.status, "running");
+    assert.equal(row.leaseToken, job.leaseToken);
+    const run = await runRowOf(ingestion.runId);
+    assert.equal(run.status, "running");
+    assert.equal(run.attempt, 1);
+  });
+
+  it("lets attempt = maxAttempts - 1 requeue and be claimed again", async () => {
+    const id = await queuedJobAt({ attempt: 3, maxAttempts: 5 });
+    const first = await queue.claim({ leaseMs: 60_000, kinds: ["maintenance"] });
+    assert.equal(first.attempt, 4);
+    assert.equal(await queue.release(first), true);
+    assert.equal((await rowOf(id)).status, "queued");
+
+    const second = await queue.claim({ leaseMs: 60_000, kinds: ["maintenance"] });
+    assert.equal(second?.id, id);
+    assert.equal(second.attempt, 5);
+
+    assert.equal(await queue.release(second), true);
+    assert.equal((await rowOf(id)).status, "dead");
+  });
+
+  it("releases a claim that completes after shutdown started, and runs no handler", async () => {
+    const job = await queue.enqueue({
+      kind: "maintenance",
+      idempotencyKey: key("inflight"),
+      payload: {},
+    });
+
+    let handlerCalls = 0;
+    let signalClaimed;
+    const claimed = new Promise((resolve) => {
+      signalClaimed = resolve;
+    });
+    let openGate;
+    const gate = new Promise((resolve) => {
+      openGate = resolve;
+    });
+
+    const real = createPostgresQueue({ db: system, defaultMaxAttempts: 3 });
+    const gated = {
+      enqueue: real.enqueue.bind(real),
+      claim: async (options) => {
+        const claimedJob = await real.claim(options);
+        signalClaimed();
+        await gate;
+        return claimedJob;
+      },
+      renew: real.renew.bind(real),
+      succeed: real.succeed.bind(real),
+      fail: real.fail.bind(real),
+      release: real.release.bind(real),
+      reapExpired: real.reapExpired.bind(real),
+    };
+
+    const runner = createRunner({
+      db: system,
+      queue: gated,
+      leaseMs: 60_000,
+      heartbeatMs: 60_000,
+      pollIntervalMs: 10,
+      shutdownGraceMs: 200,
+      reaperIntervalMs: 0,
+      handlers: [
+        {
+          kind: "maintenance",
+          opensIngestionRun: false,
+          async handle() {
+            handlerCalls += 1;
+            return { outcome: "succeeded" };
+          },
+        },
+      ],
+    });
+
+    runner.start();
+    await claimed;
+    await runner.stop();
+    openGate();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    assert.equal(handlerCalls, 0, "no handler may start after stop() resolved");
+    const row = await rowOf(job.id);
+    assert.equal(row.status, "queued");
+    assert.equal(row.leaseToken, null);
+  });
+});

@@ -341,8 +341,11 @@ export function createRunner(options: RunnerOptions): Runner {
     // so releasing is safe and correct; executing here would start work that the
     // shutdown path is no longer waiting for.
     if (stopped) {
-      await queue.release(job);
-      log("claim_abandoned", { jobId: job.id, kind: job.kind });
+      const settled = await queue.release(job);
+      log(settled ? "claim_abandoned" : "claim_release_refused", {
+        jobId: job.id,
+        kind: job.kind,
+      });
       return "idle";
     }
 

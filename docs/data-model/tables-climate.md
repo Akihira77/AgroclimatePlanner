@@ -494,7 +494,9 @@ Notes:
 - `attempt` counts claims, not failures: it rises exactly once per successful claim
   and never resets. `ingestion_runs.attempt` counts handler starts. They are two
   counters over one execution and are deliberately **not** synchronised — a claimed
-  job whose handler never began has no run to count.
+  job whose handler never began has no run to count. Such a claim is released:
+  requeued while a claim remains, `dead` at `max_attempts`, since the next claim
+  would violate `jobs_attempt_check`. No `IngestionRun` is created in either case.
 - `ingestion_run_id` is `NULL` at enqueue because the run row is created when a
   handler starts (`climate-data-foundation.md` §8.3). The FK is `RESTRICT`, not
   `SET NULL`: the reference is provenance, so deleting the run must fail loudly
