@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: 2026-11-21.
+Last updated: 2026-11-22.
 
 ## Phase 0 — Research & validation — **DONE (revised after adversarial review)**
 
@@ -1148,32 +1148,38 @@ Phases 4.5 and 4.6 remain **not started**.
 
 ---
 
-## Phase 5 — Climate Data Foundation — **5.0 contracts implemented; 5.1 adapter foundation started; 5.2.1–5.2.8 all implemented; 5.3–5.8 not started**
+## Phase 5 — Climate Data Foundation — **5.0 complete; 5.1 partially implemented; 5.2 complete (5.2.1–5.2.8); 5.3–5.8 not started**
 
-Status: **5.0 partially implemented.** Phase 5.0 added contract and resolver code
-to `packages/contracts`, with tests. It added no migration, Prisma model, route,
-dependency, grant, policy, worker, provider adapter, queue, or persistence. The
-design is `docs/architecture/climate-data-foundation.md`.
+Status: **5.0 complete; 5.1 partially implemented; 5.2 complete, all eight steps;
+5.3–5.8 not started.** 5.0 delivered the contract and resolver code in
+`packages/contracts` with tests, and added no migration, Prisma model, route, grant,
+policy, worker, queue, or persistence. It is complete as delivered: the `OPEN-14`
+vocabulary freeze remains a deferred open decision rather than a missing deliverable,
+and the job-lifecycle interface moved to 5.3 by design.
 
-5.0's contract scope is started but not complete: the `OPEN-14` vocabulary freeze
-and the job-lifecycle interface remain. 5.1 has begun: `@agroclimate/weather-core`
-exists with a transport, a failure union, one real provider adapter (SEAS5 monthly),
-and a monthly normalizer. Nothing here claims an ingestion job, a persisted record,
-an aggregation, or a climate endpoint — 5.2 is complete (literal hash fixtures, a
-registry keyed by `(provider, model)`, the `SpatialResolution` result contract, a
-weather-core registry holding one synthetic entry, a tenant-scoped field anchor, cell
-identity persistence, the resolution route, and the status reconciliation), and 5.3
-through 5.8 are **not started**. The route still resolves nothing for a real model: no
-provider grid is configured, so only a `synthetic` pair reaches the database, where the
-provider CHECK refuses it.
+5.1 is partial: `@agroclimate/weather-core` exists with a transport, a failure union,
+one real provider adapter (SEAS5 monthly), and a monthly normalizer. 5.2 is complete:
+literal hash fixtures, a registry keyed by `(provider, model)`, the `SpatialResolution`
+result contract, a weather-core registry holding one synthetic entry, a tenant-scoped
+field anchor, cell identity persistence, the resolution route, and the status
+reconciliation. 5.3 through 5.8 are **not started**. Nothing here claims an ingestion
+job, a persisted weather record, an aggregation, a served coordinate, or a
+`field_outlook_cells` row. The route still resolves nothing for a real model: no provider
+grid is configured, so only a `synthetic` pair reaches the database, where the provider
+CHECK refuses it.
+
+Implementation evidence at `8a6f2ec` (2026-11-22): contracts **392** tests, weather-core
+**52**, database integration **77**, API **206** unit + **74** integration; root
+`typecheck` and `lint` clean, `prettier --check` and `git diff --check` clean. No test
+calls a provider.
 
 | Item | State |
 |---|---|
-| Climate plane architecture, adapter boundary, storage and read path | designed (§5) |
+| Climate plane architecture, adapter boundary, storage and read path | designed (§5); cell resolution and cell identity implemented (5.2), storage and read path not |
 | Source evaluation, licensing posture, evidence freshness | designed (§4); evidence dated 2026-11-18 and **not re-tested** |
 | Reconciliation of the 13 existing authorities | designed (§2), with three documented-but-absent items (§3.5) |
-| Implementation sequence, 9 sub-phases | proposed (§8) |
-| Verification strategy | specified (§7); nothing implemented |
+| Implementation sequence, 9 sub-phases | §8; 5.0–5.2 delivered, 5.3–5.8 not started |
+| Verification strategy | specified (§7); the 5.0–5.2 portions are executed (evidence above), 5.4+ not written |
 | Decision register | 8 `OPEN-*` items assessed; 7 `Q-P5-*` decisions recorded; **none closed** (§9) |
 | Owner decisions | 7 recorded; provider grid configuration, BMKG permission, the Open-Meteo commercial evaluation, a CHIRPS route, and the `precipitation_mean` quantity question (`Q-P5-7`) still need **external evidence or an owner call** |
 | Migration | **none proposed** — the climate schema is already sufficient for a precipitation outlook |
@@ -1245,7 +1251,7 @@ work started.
 | Tests | `grid.test.ts` (vectors 1–18 of §5.2.7, orientation, lattice, hash, registry, F-06 immutability) and `climate.test.ts` (bases, identities, adapter coverage invariants, reproducibility, month cross-field rules, twelve-month horizon) |
 | Executed | `pnpm --filter @agroclimate/contracts test` — **354 passed** at 5.0 (**392** after 5.2.1–5.2.3); `typecheck`, `lint`, `prettier --check`, `git diff --check` clean |
 | Corrective pass | F-03 (lead month 1–12, twelve entries, calendar rollover), F-04 (`coveragePercentOf`, complete/partial invariants, zero-request rejected), F-05 (`dataClass` × `evaluationBasis` cross-checks), F-06 (deep-frozen `GridSpec`, frozen registry value), F-07 (counts decide complete/partial; a rounded 100 stays partial), then the monthly **source capability** rule: a month is accepted only from a product with a monthly quantity, so `weather_forecast` (16 d) and `subseasonal_forecast` (no EC46 monthly product) are rejected at every lead month |
-| Not implemented | No adapter, no HTTP client, no queue, no worker runtime, no migration, no Prisma change, no route, no dependency, no persistence. No provider grid is asserted |
+| Not implemented at 5.0 | No adapter, no HTTP client, no queue, no worker runtime, no migration, no Prisma change, no route, no dependency, no persistence. No provider grid is asserted. Later steps added some of these — 5.2 records which |
 | Still open in 5.0 | `OPEN-14` vocabulary freeze; the job-lifecycle interface (now scoped to 5.3) |
 | Layout deviation | Resolver is `packages/contracts/src/grid.ts`, not `packages/weather-core/cells/`; creating a package for one pure module had no consumer and `weather-core` is 5.1's |
 

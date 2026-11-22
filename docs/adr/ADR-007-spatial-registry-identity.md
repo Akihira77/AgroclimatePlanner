@@ -1,11 +1,15 @@
 # ADR-007 — Spatial Registry Identity and the Field-Mapping Boundary
 
 - Status: **Accepted** — approved by **Akihira77 on 2026-11-21** as six decisions in the
-  Phase 5.2 corrective design pass. Acceptance was a **documentation gate at the time**:
-  no contract was changed, no registry instance existed, no centroid read existed, no
-  route existed, and no cell was persisted.
-- Current state (2026-11-22): **D1, D2, D3's contract and D5's structure are
-  implemented.** The registry is keyed by `(provider, model)` with declared
+  Phase 5.2 corrective design pass.
+- State at acceptance (2026-11-21 — **historical, not the current state**): acceptance
+  was a documentation gate. No contract had been changed, no registry instance existed,
+  no centroid read existed, no route existed, and no cell had been persisted. That
+  paragraph describes what the decision authorised at the moment it was made; it is kept
+  as decision history and is superseded by the bullet below.
+- Current state (2026-11-22, through `8a6f2ec`): **D1, D2, D3's contract and D5's
+  structure are implemented, and D4's boundary holds — no code writes
+  `field_outlook_cells`.** The registry is keyed by `(provider, model)` with declared
   `GridEvidence`, `requireValidated` refuses a `synthetic` entry, `models()` is gone,
   four literal `gridSpecHash` fixtures pin the preimage, and `SpatialResolution` exists
   with `GRID_RESOLUTION_ALGORITHM_VERSION = "grid-resolve/1"` — its assembler re-checks

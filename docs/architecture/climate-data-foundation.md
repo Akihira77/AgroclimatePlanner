@@ -1,8 +1,13 @@
 # Climate Data Foundation
 
-Status: **Phase 5 design. No runtime code.** Nothing in this document is implemented
-except where a table or contract is explicitly marked as existing and verified
-against the applied database on 2026-11-21.
+Status: **Phase 5.0 implemented; 5.1 partially implemented; 5.2 implemented;
+5.3–5.8 not started.** 5.2.1–5.2.8 are complete as of `8a6f2ec` (2026-11-22): generic
+grid resolution, a synthetic registry instance, the tenant-scoped field centroid read,
+cell identity persistence, and `POST /v1/fields/:fieldId/resolve-cell`. No provider grid
+has been admitted or validated, `app.field_outlook_cells` is not written, and
+`apps/worker` is still a stub. Everything else in this document is a plan unless a row
+or section is marked as existing; §8.2 is the per-step record and
+`IMPLEMENTATION_STATUS.md` is the index.
 
 This is the implementation plan for the climate plane. It does not replace any
 existing authority: `ADR-001` decides *which* sources and *how* they are labelled,
@@ -20,7 +25,7 @@ the authorities have measurably diverged.
 
 ## 1. Scope
 
-In scope, as design only:
+In scope of the plan (status per §8.2; writing here implements nothing):
 
 - Provider adapter and normalizer boundary.
 - Spatial cell identity and field → cell resolution.
@@ -31,9 +36,12 @@ In scope, as design only:
 - Failure handling, observability, licensing constraints, verification.
 - A dependency-ordered roadmap (§8).
 
-Out of scope, deliberately: provider adapters, workers, API routes, migrations,
-Prisma changes, contracts, dependencies, agronomic calculation, planting windows,
-AI briefing, frontend, deployment.
+Out of scope of this document's own edits, deliberately: provider adapters, workers,
+API routes, migrations, Prisma changes, contracts, dependencies, agronomic calculation,
+planting windows, AI briefing, frontend, deployment. 5.1 and 5.2 have since built some
+of them — a package, one provider adapter, one route and one dependency edge — and §11
+lists them; this section describes what the plan specifies, not what the document
+performs.
 
 Awaiting this phase: `field_observations` ingestion, verification/scoring
 (`OPEN-12`), and anything agronomic. Phase 5 ends at "a labelled monthly outlook for
@@ -45,23 +53,23 @@ a field can be served from stored data".
 
 The row "Implementation status" is measured, not inferred: it reflects the applied
 database (catalogue query as `migration_owner`, 2026-11-21) and the source tree as it
-stands at `d7eeff4`.
+stands at `8a6f2ec` (2026-11-22).
 
 | Concern | Existing authority | Current decision | Implementation status | Remaining gap |
 |---|---|---|---|---|
-| Provider strategy | `ADR-001` D1–D5 | Open-Meteo is transport, ECMWF is authority; BMKG gated off; no bias correction in v1 | **designed only.** No adapter, no HTTP client, no provider credential, no feature flag exists in `apps/` or `packages/` | Every adapter; the `BMKG_SHORT_RANGE_ENABLED` flag; the Open-Meteo plan decision (`OPEN-03`) |
+| Provider strategy | `ADR-001` D1–D5 | Open-Meteo is transport, ECMWF is authority; BMKG gated off; no bias correction in v1 | **partially implemented.** `@agroclimate/weather-core` ships the transport boundary and one real adapter (Open-Meteo SEAS5 monthly) with a monthly normalizer; no provider credential, no feature flag, and no daily, EC46, ERA5, BMKG or Set VII adapter exists | The daily, EC46, ERA5, BMKG and Set VII adapters; the `BMKG_SHORT_RANGE_ENABLED` flag; the Open-Meteo plan decision (`OPEN-03`) |
 | Data classes | `provenance-contract.md` §1; `ADR-001` D9 | Nine `WeatherDataClass` values, `temporalClass` deprecated | **contract typed.** `enums.ts` + `weather.ts` define the enum and four value variants; `weather_records_data_class_check` restricts stored rows to the four forecast classes — verified in the catalogue | No persistence contract for a `WeatherRecord` row (only the value variant); no mapping table from adapter output to `dataClass` |
-| `ForecastRun` identity | `provenance-contract.md` §3; `background-processing.md` §3 | UUIDv7 id, natural key `(provider, model, product, initialized_at)`, upserted | **table exists and is granted** (`forecast_runs`, 9 columns, `app_api` SELECT, `app_system` RW, `forecast_runs_natural_key` + `forecast_runs_recent_idx`) | No TypeScript schema or repository for the row; no upsert helper; no `horizon_end` derivation rule per product |
-| `IngestionRun` identity | `provenance-contract.md` §3; `tables-climate.md` §3 | Unique on `(forecast_run_id, ingestion_version)`; `attempt` is a counter, not identity | **table exists and is granted** (15 columns, `ingestion_runs_identity_key`, `ingestion_runs_running_idx`) | No `ingestion_version` computation, no `target_selector_hash` definition, no status transition helper; `attempt` update path undefined |
-| Cell resolution | `tables-climate.md` §1; `physical-model.md`; `OPEN-18` | `cell_key` is `text`; identity is `(provider, model, cell_key)`; the key is produced by a resolver keyed on `(provider, model)` whose origin, spacing, orientation, and revision are explicit inputs (owner-approved 2026-11-21, §5.2.9) | **resolver, registry and result contract implemented** in `packages/contracts/src/grid.ts`: eighteen synthetic vectors, four literal `gridSpecHash` fixtures, registry keyed by `(provider, model)` with declared `GridEvidence`, and `SpatialResolution` at `grid-resolve/1`. No provider grid constant exists | The registry instance (§8.2 step 5.2.4); the five provider grid configurations, all pending external evidence (§5.2.6); field → cell writes |
-| Field → cell mapping | `data-flow.md` §2; `tables-identity.md` §4 | Centroid in v1 (`OPEN-15`); resolution stored, never recomputed on read; a geometry edit supersedes rows | **tables exist and are tenant-scoped with `FORCE` RLS**; no code resolves a field into a cell | The resolution service; the geometry-edit supersession trigger; `field_outlook_cells` writes are not in the Field API |
+| `ForecastRun` identity | `provenance-contract.md` §3; `background-processing.md` §3 | UUIDv7 id, natural key `(provider, model, product, initialized_at)`, upserted | **table only — exists and is granted, no runtime reader or writer** (`forecast_runs`, 9 columns, `app_api` SELECT, `app_system` RW, `forecast_runs_natural_key` + `forecast_runs_recent_idx`) | No TypeScript schema or repository for the row; no upsert helper; no `horizon_end` derivation rule per product |
+| `IngestionRun` identity | `provenance-contract.md` §3; `tables-climate.md` §3 | Unique on `(forecast_run_id, ingestion_version)`; `attempt` is a counter, not identity | **table only — exists and is granted, no runtime reader or writer** (15 columns, `ingestion_runs_identity_key`, `ingestion_runs_running_idx`) | No `ingestion_version` computation, no `target_selector_hash` definition, no status transition helper; `attempt` update path undefined |
+| Cell resolution | `tables-climate.md` §1; `physical-model.md`; `OPEN-18` | `cell_key` is `text`; identity is `(provider, model, cell_key)`; the key is produced by a resolver keyed on `(provider, model)` whose origin, spacing, orientation, and revision are explicit inputs (owner-approved 2026-11-21, §5.2.9) | **resolver, registry, result contract and registry instance implemented.** `packages/contracts/src/grid.ts` has eighteen synthetic vectors, four literal `gridSpecHash` fixtures, a registry keyed by `(provider, model)` with declared `GridEvidence`, and `SpatialResolution` at `grid-resolve/1`; `packages/weather-core/src/grids/` holds `syntheticGridRegistry` with one `synthetic` entry. No provider grid constant exists and nothing is registered as `validated` | The five provider grid configurations, all pending external evidence (§5.2.6); served-coordinate assignment; the `field_outlook_cells` mapping write |
+| Field → cell mapping | `data-flow.md` §2; `tables-identity.md` §4 | Centroid in v1 (`OPEN-15`); resolution stored, never recomputed on read; a geometry edit supersedes rows | **identity half implemented, mapping half not.** The tables exist and are tenant-scoped with `FORCE` RLS; `POST /v1/fields/:fieldId/resolve-cell` resolves the tenant's own centroid through the registry and persists the resulting `app.outlook_cells` identity, but `app.field_outlook_cells` is never written | The `field_outlook_cells` row (`distance_km` and `extraction_policy` are `NOT NULL`), served-coordinate assignment, and the geometry-edit supersession trigger |
 | Normalized records | `tables-climate.md` §4 | One row per `(run, cell, variable, valid_at, ensemble_member)`; `value` nullable; never deleted, only superseded | **table exists** (32 columns, 5 indexes, `weather_records_live_key` uses `NULLS NOT DISTINCT`) | The normalizer itself; unit conversion table; the supersession writer; `OPEN-14` vocabulary for `temporal_resolution`/`aggregation_level` |
 | Climatology | `ADR-001` D2; `tables-climate.md` §6 | 1991–2020, CHIRPS preferred, ERA5 as implemented fallback; a rebuild is a new `baseline_version` | **table exists** (`climatology_normals`, 11 columns, unique `(baseline_version, outlook_cell_id, month)`) | The baseline builder; the route to a reachable CHIRPS v3.0 (host timed out 2026-11-18); `baselineHash` computation over a consumed subset |
 | Temporal aggregation | `temporal-and-weather-semantics.md` §1–§6 | Every instant `timestamptz(6)` UTC; every calendar decision Asia/Jakarta; one conversion at aggregation | **designed only.** `temporal.ts` exists in contracts; no aggregation code | The daily → weekly → monthly aggregation; the UTC → Jakarta day boundary at the one permitted conversion point; `monthly_outlooks` assembly order |
-| Provenance | `provenance-contract.md`; `provenance-storage.md`; `canonical.ts` | Hash preimages stored as documents; freshness computed at read time, never stored | **implemented in contracts only**, with 239 passing contract tests including golden vectors; the derived tables that store those documents exist | No producer writes any `input_refs`; `DerivedFreshness` has no producer; the provenance audit that resolves dangling refs does not exist |
+| Provenance | `provenance-contract.md`; `provenance-storage.md`; `canonical.ts` | Hash preimages stored as documents; freshness computed at read time, never stored | **implemented in contracts only**, with 392 passing contract tests including golden vectors; the derived tables that store those documents exist | No producer writes any `input_refs`; `DerivedFreshness` has no producer; the provenance audit that resolves dangling refs does not exist |
 | Raw payload retention | `OPEN-05`; `OPEN-03` | Retention is **deferred** by the owner (2026-11-21); the normalized row is the system of record, and every artifact built on a non-retained payload records `reproducible: false` with a reason | **nothing exists**: no object store, no `raw_payload_ref` writer, no retention table — and none is planned for the initial release | Reopening awaits a lawful, paid or self-hosted plan and a verification run that must re-derive a score (§5.4) |
 | Tenant access | `ADR-003`; `tenant.ts`; `system-architecture.md` | `withTenant(userId, fn)` is the only entry point; one `createTenantScope` per request; `app_system` owns global writes and holds no tenant-row grant | **implemented and tested**: `withTenant` ships, `test:rls` passes 90 assertions as real roles, `db:verify` passes | The recompute fan-out has no permitted read of `field_outlook_cells` (`OPEN-27`); climate read path is `app_api` only, which is already granted |
-| Background processing | `background-processing.md`; `Q-P5-1` | Six queues, run identity by `forecastRunId`, retry classes, budget guards, explicit failure semantics; **queue backing is PostgreSQL-first** (owner decision 2026-11-21), behind an abstraction | **nothing exists.** `apps/worker/src/main.ts` is a stub; no queue library, no Redis client, no scheduler, no HTTP client is installed anywhere in the workspace; no `jobs` table exists | The worker runtime, the six queues, the Postgres job table, the budget buckets, the maintenance sweep (§8.3) |
+| Background processing | `background-processing.md`; `Q-P5-1` | Six queues, run identity by `forecastRunId`, retry classes, budget guards, explicit failure semantics; **queue backing is PostgreSQL-first** (owner decision 2026-11-21), behind an abstraction | **queue and worker not implemented.** `apps/worker/src/main.ts` remains a stub; no queue library, Redis client or scheduler is installed in the workspace, and no `jobs` table exists — `weather-core`'s transport is not a queue | The worker runtime, the six queues, the Postgres job table, the budget buckets, the maintenance sweep (§8.3) |
 
 ---
 
@@ -97,15 +105,19 @@ Constraint checks confirmed from `pg_constraint`, not from the migration text:
 four-variant discriminated union (forecast / baseline / dataset / observation) plus
 `SourceFreshness`. `provenance.ts` defines `DataInputRef`, `EvidenceSegment`,
 `DerivedProvenance`, `FieldSnapshot`. `canonical.ts` implements the canonicaliser
-with golden vectors enforced by `hash.golden.test.ts`.
+with golden vectors enforced by `hash.golden.test.ts`. `grid.ts` holds the resolver,
+the `(provider, model)` registry and `SpatialResolution`; `cell-resolution.ts` holds
+the request and response shape of the one route that uses them (5.2).
 
 ### 3.3 Application
 
 `apps/api/src` contains `auth`, `farm`, `field`, `health`, `http`, `database`,
-`config`. There is no climate module and no `/v1/climate` route.
-`packages/database/src` contains `auth-*`, `farms`, `fields`, `tenant`. There is no
-climate repository. `apps/worker/src/main.ts` is a stub with no dependencies beyond
-`@agroclimate/contracts`.
+`config`. There is no `climate` module and no `/v1/climate` route; the only climate
+route is `POST /v1/fields/:fieldId/resolve-cell`, mounted in `field` (5.2.7).
+`packages/database/src` contains `auth-*`, `farms`, `fields`, `tenant`, and `climate`
+— the last holding only the cell-identity helpers (`upsertCell`, its input type, its
+error). `apps/worker/src/main.ts` is a
+stub with no dependencies beyond `@agroclimate/contracts`.
 
 ### 3.4 Therefore
 
@@ -220,7 +232,7 @@ provider ──▶ adapter ──▶ raw payload ──▶ normalizer ──▶ 
 | Cell resolution | `packages/weather-core/src/grids/*` (the registry instance; **exists**, one synthetic entry) + `@agroclimate/contracts` `grid.ts` (the pure resolver; **implemented**) | **pure** | `(provider, model)` → `GridSpec` selection; requested coordinate → `(i, j)`, anchor, `cellKey`. **Never** served coordinates, **never** distance |
 | Ingestion pipeline | `apps/worker/src/ingest/*` | impure | run upsert, transaction, supersession, status transitions |
 | Aggregation | `apps/worker/src/aggregate/*` + `packages/climate-core/aggregate/*` (the documented `climate-core`) | pure core, impure writer | daily/weekly/monthly rollup, anomaly, coverage, spread |
-| Persistence | `packages/database/src/climate.ts` (new; not importable from `weather-core`) | impure | typed access to the six global tables, and to `field_outlook_cells` for the ingest-side mapping write |
+| Persistence | `packages/database/src/climate.ts` (**exists**; `upsertCell` only, not importable from `weather-core`) | impure | typed access to the six global tables, and to `field_outlook_cells` for the ingest-side mapping write |
 | Read path | `apps/api/src/climate/*` (new module) | impure, read-only | `GET /v1/climate/outlook`, freshness computation |
 
 Two rules that shape every file above:
@@ -697,13 +709,30 @@ nullable — not by a fabricated value.
 
 #### 5.2.9 Phase 5.2 design addendum — registry identity, result, longitude
 
-Approved 2026-11-21. **Partially implemented.** Steps 5.2.1, 5.2.2 and 5.2.3 landed at
-`44b278c`, `965f528` and `6963709`: the literal hash fixtures exist, the registry is
-keyed by `(provider, model)` with declared evidence, and `SpatialResolution` with
-`GRID_RESOLUTION_ALGORITHM_VERSION` exists in `grid.ts`, assembled by
-`createSpatialResolution` after it re-checks the entry's `gridSpecHash`. The registry
-instance, the centroid read, persistence and the route are **not** implemented — the
-5.2 steps in §8.2 say which is which.
+Approved 2026-11-21. **Implemented** through step 5.2.7 at `8a6f2ec`. The sequence is
+six pieces, and each one is a fact about the repo rather than a plan:
+
+1. Registry keyed by `(provider, model)` with declared `GridEvidence`, and no
+   model-only lookup — `packages/contracts/src/grid.ts` (5.2.2, `965f528`; the four
+   `gridSpecHash` literals at `44b278c`).
+2. `SpatialResolution` and `GRID_RESOLUTION_ALGORITHM_VERSION = "grid-resolve/1"`,
+   assembled by `createSpatialResolution`, which re-checks the entry's
+   `gridSpecHash` before resolving (5.2.3, `6963709`).
+3. The registry instance: `packages/weather-core/src/grids/registry.ts` exports
+   `syntheticGridRegistry` with exactly one `synthetic` entry, defined in
+   `synthetic.ts` (5.2.4).
+4. The field centroid read: `selectFieldAnchor` inside the caller's tenant
+   transaction, six-decimal strings (5.2.5).
+5. Cell identity persistence: `upsertCell` writes the `(provider, model, cell_key)`
+   triple and returns its id (5.2.6).
+6. `POST /v1/fields/:fieldId/resolve-cell`: one tenant transaction that reads the
+   anchor, selects the spec through the registry, resolves it, persists the identity,
+   and answers `{ cellId, servedCoordinate: null, resolution }` (5.2.7).
+
+What is still **not** implemented in this addendum: the five provider grid
+configurations, any entry registered as `validated`, served-coordinate assignment, and
+`field_outlook_cells`. The provider-validation limits below are unchanged by 5.2.7 —
+the route made the resolver reachable, it did not validate a provider.
 
 ##### 5.2.9.1 Registry identity is `(provider, model)`
 
@@ -1305,19 +1334,19 @@ new file, dependency, or sub-phase.
 | **F-09** | `precipitation_mean` is a **mean**, and `MonthlyOutlook.valueMm` reads as a monthly amount. No approved definition says they are the same quantity, so the adapter and normalizer stop at the provider-native series and populate no `valueMm`. The decision — whether a monthly outlook stores a mean, a total derived by an approved rule, or gains a separate column — is `Q-P5-7`, owner-owned and open |
 | **F-10** | A seven-row monthly axis is not a seven-month forecast: strictly increasing keys can still skip a month. The adapter and the normalizer both require each key to be the calendar successor of the previous one, using one shared `year * 12 + month` adjacency check (`calendar-month.ts`) with no `Date` and no elapsed-time division. Row count alone is never completeness |
 
-Capability status after 5.0, stated so no reader infers more than exists:
+Capability status after 5.2, stated so no reader infers more than exists:
 
 | Capability | Status |
 |---|---|
 | Generic `GridSpec` resolver | **Implemented** — `packages/contracts/src/grid.ts`, eighteen synthetic vectors |
 | Generic grid hash and registry | **Implemented.** `gridSpecHash` with four literal fixtures (`grid.test.ts`), and `createGridRegistry` keyed by `(provider, model)` with declared `GridEvidence` and `requireValidated` (5.2.2 at `965f528`) |
-| Weather-core registry instance | **Implemented** — `packages/weather-core/src/grids/`: `syntheticGridRegistry`, built by `createGridRegistry` from one entry labelled `synthetic`, which `requireValidated` refuses (5.2.4) |
+| Synthetic registry instance | **Implemented** — `packages/weather-core/src/grids/`: `syntheticGridRegistry`, built by `createGridRegistry` from one entry labelled `synthetic`, which `requireValidated` refuses (5.2.4). It is a development and test grid, **not** a validated production provider grid |
 | Field anchor | **Implemented** — `selectFieldAnchor` in `packages/database/src/fields.ts`: `ST_Centroid` inside the supplied `TenantTransaction`, six-decimal strings, `null` for another tenant's, a deleted, or a missing field (5.2.5) |
 | Golden grid resolver tests | **Implemented** — vectors 1–18 plus F-06 immutability |
 | Provider-specific grid configurations | **Pending external evidence** — all five |
 | Field-to-cell resolution service | **Implemented** — `POST /v1/fields/:fieldId/resolve-cell`: one tenant transaction, anchor → registry → resolution → `upsertCell`, `200` with `{ cellId, servedCoordinate: null, resolution }` (5.2.7). No `field_outlook_cells` row and no `distance_km` |
 | Cell identity persistence | **Implemented** — `upsertCell` in `packages/database/src/climate.ts`: three identity columns, `ON CONFLICT (provider, model, cell_key) DO NOTHING`, then a three-column lookup; served columns stay NULL (5.2.6) |
-| Persisting resolved cells | **Not implemented** — `field_outlook_cells` is never written, and no migration adds one |
+| Field-to-cell mapping persistence | **Not implemented** — `app.field_outlook_cells` is never written, and no migration changes that. `distance_km` and `extraction_policy` are `NOT NULL`; the row waits for a served coordinate (§5.2.8, §8.2) |
 | Served-coordinate assignment | **Not implemented** |
 | Provider adapters | **Partially implemented** — SEAS5 monthly only; daily, EC46, ERA5 deferred, BMKG and Set VII blocked (§5.1.2) |
 | HTTP transport | **Implemented** — `packages/weather-core/src/http.ts`, cap + timeout + AbortSignal, no retry |
@@ -1366,8 +1395,25 @@ numbers are the ones other sections cite.
 | 5.2.4 | registry instance with one labelled synthetic entry | `packages/weather-core/src/grids/{registry,synthetic}.ts` | unknown pair fails; a synthetic entry is not ingestion-eligible | 5.2.2 | **Done** — in the 5.2.4 implementation change. `syntheticGridRegistry` built by `createGridRegistry` from one `synthetic` entry, whose `gridSpecHash` is pinned by a literal fixture; sixteen weather-core tests |
 | 5.2.5 | field anchor via `ST_Centroid(geom)` inside `withTenant` | `packages/database/src/fields.ts` | known square → known six-decimal anchor; a cross-tenant field is invisible | — | **Done** — in the 5.2.5 implementation change. `selectFieldAnchor` returns `{ lat, lon }` strings rounded in SQL; the four integration cases (square, cross-tenant, soft-deleted, nonexistent) pass |
 | 5.2.6 | `upsertCell` — three columns, `ON CONFLICT DO NOTHING` | `packages/database/src/climate.ts` (new) | a second resolve reuses the cell id; no fourth column attempted | 5.2.4 | **Done** — in the 5.2.6 implementation change. `upsertCell` returns the persisted id, falls back to a three-column `SELECT` when the insert returns no row, and throws rather than inventing one if the lookup fails; served columns stay NULL; seven integration cases including a concurrent insert |
-| 5.2.7 | `POST /v1/fields/:id/resolve-cell` | `apps/api/src/field/*` | 200 twice identical; unknown pair and out-of-grid are typed failures that mint nothing; no mapping row | 5.2.4–5.2.6 | **Done** — in the 5.2.7 implementation change. `200` (not `201`: the cell identity has no addressable URL); the body is `{ cellId, servedCoordinate: null, resolution }`; `FIELD_NOT_FOUND`, `GRID_NOT_FOUND`, `CELL_NOT_FOUND` are the three refusals, and only the first two can occur before a write. Thirteen API integration cases, including cross-tenant indistinguishability and the served columns staying NULL |
-| 5.2.8 | reconcile status and §8.1 after the code lands | `IMPLEMENTATION_STATUS.md`, this document | no section claims an unimplemented guarantee | all | **Done** — `1dff5fd`. Recorded 5.2.1–5.2.2 as implemented and 5.2.3–5.2.7 as pending. 5.2.3 then landed at `6963709`; §8.2 now reads 5.2.1–5.2.3 and 5.2.8 done, 5.2.4–5.2.7 pending |
+| 5.2.7 | `POST /v1/fields/:id/resolve-cell` | `apps/api/src/field/*` | 200 twice identical; unknown pair and out-of-grid are typed failures that mint nothing; no mapping row | 5.2.4–5.2.6 | **Done** — in the 5.2.7 implementation change. `200` (not `201`: the cell identity has no addressable URL); the body is `{ cellId, servedCoordinate: null, resolution }`; the three refusals are `FIELD_NOT_FOUND` (missing, foreign or deleted field), `GRID_NOT_FOUND` (pair not registered) and `CELL_NOT_FOUND` (centroid outside the grid), all `404`, and **all three occur before `upsertCell`**, so none of them mints a cell. Thirteen API integration cases, including cross-tenant indistinguishability and the served columns staying NULL |
+| 5.2.8 | reconcile status and §8.1 after the code lands | `IMPLEMENTATION_STATUS.md`, this document | no section claims an unimplemented guarantee | all | **Done** — `1dff5fd`; historical record. At that commit it recorded 5.2.1–5.2.2 as implemented and 5.2.3–5.2.7 as pending. 5.2.3 then landed at `6963709` and 5.2.4–5.2.7 after it, so the current state is all eight done at `8a6f2ec`; the row above each step is the authority |
+
+Two writes, deliberately separate. §5.2.8 states the rule; here it is stated against
+the code, because "a field resolves to a cell" is true of the first operation and false
+of the second:
+
+| Operation | Code | Table | In 5.2 |
+|---|---|---|---|
+| Cell identity creation | `upsertCell()` | global `app.outlook_cells`, keyed `(provider, model, cell_key)` | **Yes** — 5.2.6, reached from 5.2.7 |
+| Tenant field-to-cell mapping | none | tenant `app.field_outlook_cells`, keyed `(user_id, field_id, outlook_cell_id)` | **No** — never written |
+
+The mapping is blocked on a value, not on a decision. `distance_km` is `NOT NULL` and
+means the geodesic distance to the provider's **served** coordinate; `extraction_policy`
+is `NOT NULL` as well and belongs to the field-mapping decision 5.2 defers. `0` is not
+a placeholder distance, the resolver's anchor is not a served coordinate, and a provider
+coordinate is never fabricated to unblock the insert. The row is created by the ingest
+that first learns the served coordinate (5.4), or by a later migration that changes the
+column — never by inventing the value.
 
 ### 8.3 Phase 5.3 — run lifecycle and worker runtime
 
@@ -1527,8 +1573,10 @@ lead-time shape, ensemble null boundary).
 5. **`OPEN-16`** — no automatic pruning until at least one month of measured 5.4
    ingestion.
 
-Recording a decision is not implementing it. Each item above still names the
-sub-phase that delivers it, and that sub-phase has not started.
+Recording a decision is not implementing it. `OPEN-18`'s generic half is implemented
+(5.2.1–5.2.3 and 5.2.7), while its provider half stays `BLOCKED_EXTERNAL_INPUT`; every
+other item above still names the sub-phase that delivers it, and those have not
+started.
 
 ### 10.2 Still needs external evidence
 
@@ -1541,15 +1589,34 @@ fallback or does not run.
 
 ## 11. What this document does not change
 
-- No migration, no Prisma model, no column, constraint, index, grant, or policy.
-- No queue table: the `jobs` table is 5.3's deliverable, not this document's.
-- No API contract, no route, no response envelope.
+This document is an architecture and implementation roadmap. Writing in it changes no
+implementation and overrides no authoritative decision; §8.2 records what the code has
+already done, and a row marked *pending* is not permission to build it.
+
+What this document itself does not change:
+
+- No migration, no Prisma model, no column, constraint, index, grant, or policy. The
+  `jobs` table (5.3) and the `field_outlook_cells` write (5.4) remain their own
+  deliverables.
 - No authentication, RLS, or tenant-transaction behaviour.
-- No dependency, and no new package (the two new packages are *proposed*, §8.1).
-- No phase status: Phase 5.0's contracts and resolver are **implemented and tested**;
-  sub-phases 5.1–5.8 are **not started**.
+- No phase status is changed by this document: §8.2 records 5.2 as complete, which is
+  not an instruction to start 5.3.
 - `ADR-001`, `provenance-contract.md`, `tables-climate.md`,
   `temporal-and-weather-semantics.md`, and `data-flow.md` are cited, not edited.
   `background-processing.md` is edited only to record the queue backing decision and
   to mark its queue tables as proposed. Where another document is wrong (§3.5), the
   divergence is recorded here for a separate correction, not silently overridden.
+
+What 5.0–5.2 have already changed, recorded here rather than proposed:
+
+- One contract family in `packages/contracts`: the resolver, the `(provider, model)`
+  registry, `SpatialResolution`, and `cellResolutionRequestSchema` (§5.2).
+- One route: `POST /v1/fields/:fieldId/resolve-cell`, mounted in the Field module
+  (5.2.7); there is still no `/v1/climate` route.
+- One workspace dependency edge: `apps/api` → `@agroclimate/weather-core`, because the
+  production registry instance lives there (§8.2, 5.2.4).
+- Two database helpers: `upsertCell` and `selectFieldAnchor` (5.2.5–5.2.6).
+
+Phases 5.3–5.8 remain pending: their rows in §8 are plans, and no part of this
+reconciliation starts them. A future change to an authoritative document still goes
+through that document's own review, exactly as before.
