@@ -91,6 +91,102 @@ describe("GridSpec", () => {
   });
 });
 
+/**
+ * Phase 5.2.1 — literal hash fixtures.
+ *
+ * Each expected value was computed once, reviewed, and committed as a literal.
+ * Nothing here calls `gridSpecHash` to build an expectation: if the preimage
+ * fields, their order, or the canonical serialisation drift, these assertions
+ * fail instead of silently agreeing with the implementation under test.
+ *
+ * The preimage is flat (`preimageOf` in `grid.ts`) and covers `gridId`,
+ * `originLat`, `originLon`, `stepLat`, `stepLon`, `latRange[0]`, `latRange[1]`,
+ * `lonDomain`, `lonRange[0]`/`lonRange[1]` on a bounded grid, `rowCount`,
+ * `colCount`, `spatialResolutionKm`, and `cellAnchor` (= `orientation`).
+ * `rowCount`, `colCount`, and `cellAnchor` are derived from the other inputs, or
+ * single-valued (`south-west` only), so they cannot be varied independently: the
+ * fixtures pin them, the mutation table below cannot.
+ *
+ * To regenerate after an intentional preimage change: run the resolver once,
+ * inspect the diff, and replace a literal in the same commit that changes the
+ * preimage.
+ */
+const HASH_FIXTURES = {
+  oneDegreeGlobal: "56627b0a0c71045e568088b6daa43506b6abd338182bf8b2c4b332d785e8ff97",
+  oneDegreeRelabelled: "34921954e6a2f2eb645193a68522c02c42e5bf18fc947cac457ebae297cf68df",
+  quarterDegreeGlobal: "573811ac31e40c7d563c85d7bc8f33cd178dfd6abe1cb6766b454f21bd9a3641",
+  twentiethDegreeBounded: "ef5b4a4192569c0c12025e5f8630af1e9dc9c9a167d62200040d6b0a66d68f12",
+} as const;
+
+describe("gridSpecHash — literal fixtures (5.2.1)", () => {
+  it.each<[string, GridSpecInput, string]>([
+    ["1° global", BASE, HASH_FIXTURES.oneDegreeGlobal],
+    [
+      "1° global under a different gridId — the label is hashed",
+      { ...BASE, gridId: "synthetic-1deg-relabelled" },
+      HASH_FIXTURES.oneDegreeRelabelled,
+    ],
+    [
+      "0.25° global",
+      {
+        ...BASE,
+        gridId: "synthetic-0.25deg",
+        stepLat: "0.25",
+        stepLon: "0.25",
+        spatialResolutionKm: 28,
+      },
+      HASH_FIXTURES.quarterDegreeGlobal,
+    ],
+    [
+      "0.05° bounded",
+      {
+        ...BASE,
+        gridId: "synthetic-0.05deg",
+        originLat: "-90",
+        originLon: "-180",
+        stepLat: "0.05",
+        stepLon: "0.05",
+        lonDomain: "bounded",
+        lonRange: ["-180", "180"],
+        spatialResolutionKm: 5.5,
+      },
+      HASH_FIXTURES.twentiethDegreeBounded,
+    ],
+  ])("pins %s", (_label, input, expected) => {
+    expect(defineGridSpec(input).gridSpecHash).toBe(expected);
+  });
+
+  it.each<[string, Partial<GridSpecInput>]>([
+    ["gridId", { gridId: "synthetic-1deg-other" }],
+    ["originLat", { originLat: "1" }],
+    ["originLon", { originLon: "1" }],
+    ["stepLat", { stepLat: "0.5" }],
+    ["stepLon", { stepLon: "0.5" }],
+    ["latRange[0]", { latRange: ["-45", "90"] }],
+    ["latRange[1]", { latRange: ["-90", "45"] }],
+    ["lonDomain", { lonDomain: "bounded", lonRange: ["-180", "180"] }],
+    ["spatialResolutionKm", { spatialResolutionKm: 112 }],
+  ])("changing %s changes the hash", (_field, override) => {
+    expect(defineGridSpec({ ...BASE, ...override }).gridSpecHash).not.toBe(
+      HASH_FIXTURES.oneDegreeGlobal,
+    );
+  });
+
+  it("changing a bounded lonRange bound changes the hash", () => {
+    const original: GridSpecInput = {
+      ...BASE,
+      lonDomain: "bounded",
+      lonRange: ["-180", "180"],
+    };
+    const moved: GridSpecInput = {
+      ...BASE,
+      lonDomain: "bounded",
+      lonRange: ["-170", "180"],
+    };
+    expect(defineGridSpec(moved).gridSpecHash).not.toBe(defineGridSpec(original).gridSpecHash);
+  });
+});
+
 describe("resolveGridCell — golden vectors 1–12", () => {
   it.each<[string, string, string, number, number, string]>([
     ["1 interior point", "0.5", "0.5", 0, 0, "0.00,0.00"],
