@@ -266,7 +266,7 @@ change that alters identity requires a **new `model` string inside the same
 |---|---|---|
 | registry key | `createGridRegistry` is keyed by `(provider, model)` through nested maps; duplicate pair → `duplicate_grid_spec`, unknown pair → `unknown_model` naming both components; no model-only overload | **Done** (5.2.2) |
 | literal hash fixture | four literals in `grid.test.ts` pin the preimage: 1° global, the same lattice under a second `gridId`, 0.25° global, 0.05° bounded | **Done** (5.2.1) |
-| result contract | `SpatialResolution` and `GRID_RESOLUTION_ALGORITHM_VERSION = "grid-resolve/1"`, assembled by `createSpatialResolution`. `ResolvedCell` (`provenance.ts:104-112`) is still not reused: it requires `servedLat`, `servedLon`, and `distanceKm`, so it cannot describe a pre-ingest resolution | **Done** (5.2.3) |
+| result contract | `SpatialResolution` and `GRID_RESOLUTION_ALGORITHM_VERSION = "grid-resolve/1"`, assembled by `createSpatialResolution`, which re-checks `gridSpecHash` before resolving. `ResolvedCell` (`provenance.ts:104-112`) is still not reused: it requires `servedLat`, `servedLon`, and `distanceKm`, so it cannot describe a pre-ingest resolution | **Done** (5.2.3) |
 | registry instance, provider constants | none exist. `GridEvidence` is a field on a registry entry, and no entry is registered anywhere | **Pending** (5.2.4) |
 
 `CONTRACTS_VERSION` and the package version are `0.2.0`; the registry migration was
@@ -324,7 +324,7 @@ same research calls it an interpolated point.
 `GridKey`, `GridEvidence`, a registry keyed by `(provider, model)` with
 `specFor` / `resolve` / `evidenceFor` / `requireValidated`, and `SpatialResolution`
 with `GRID_RESOLUTION_ALGORITHM_VERSION = "grid-resolve/1"` built by
-`createSpatialResolution`. Eighteen synthetic golden vectors, four literal
+`createSpatialResolution`, which refuses a spec whose hash does not describe its lattice. Eighteen synthetic golden vectors, four literal
 `gridSpecHash` fixtures and the resolution-result cases execute in
 `packages/contracts/src/grid.test.ts`.
 

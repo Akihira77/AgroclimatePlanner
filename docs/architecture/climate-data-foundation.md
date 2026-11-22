@@ -698,11 +698,12 @@ nullable — not by a fabricated value.
 #### 5.2.9 Phase 5.2 design addendum — registry identity, result, longitude
 
 Approved 2026-11-21. **Partially implemented.** Steps 5.2.1, 5.2.2 and 5.2.3 landed at
-`44b278c`, `965f528` and in the 5.2.3 change: the literal hash fixtures exist, the
-registry is keyed by `(provider, model)` with declared evidence, and `SpatialResolution`
-with `GRID_RESOLUTION_ALGORITHM_VERSION` exists in `grid.ts`. The registry instance, the
-centroid read, persistence and the route are **not** implemented — the 5.2 steps in
-§8.2 say which is which.
+`44b278c`, `965f528` and `6963709`: the literal hash fixtures exist, the registry is
+keyed by `(provider, model)` with declared evidence, and `SpatialResolution` with
+`GRID_RESOLUTION_ALGORITHM_VERSION` exists in `grid.ts`, assembled by
+`createSpatialResolution` after it re-checks the entry's `gridSpecHash`. The registry
+instance, the centroid read, persistence and the route are **not** implemented — the
+5.2 steps in §8.2 say which is which.
 
 ##### 5.2.9.1 Registry identity is `(provider, model)`
 
@@ -803,10 +804,11 @@ interface SpatialResolution {
 `GRID_RESOLUTION_ALGORITHM_VERSION` is `"grid-resolve/1"`, and the field's type is
 `GridResolutionAlgorithmVersion`, the literal type of that constant — so the contract
 cannot silently carry an arbitrary version string. `createSpatialResolution(entry,
-request)` adds no validation of its own: the entry's spec is already hashed,
-`resolveGridCell` rejects an unparseable or out-of-grid request, and a failure throws
-before any object is minted. It reads `evidence` from the entry as declared and never
-upgrades it.
+request)` first re-checks `entry.spec.gridSpecHash` with `assertGridSpecIntegrity`, so a
+hand-built entry or an in-place edited lattice fails with `grid_spec_hash_mismatch`
+before any result exists. Beyond that it adds no validation: `resolveGridCell` rejects
+an unparseable or out-of-grid request, and a failure throws before an object is minted.
+It reads `evidence` from the entry as declared and never upgrades it.
 
 | Field | Why it is there | Why nothing else is |
 |---|---|---|
@@ -1260,7 +1262,7 @@ a pure abstraction layer. Dependency graph:
 | Scope | **Delivered:** `packages/contracts/src/climate.ts` (run identities, `AdapterResult`, `MonthlyOutlook`), `packages/contracts/src/grid.ts` (resolver, registry, `gridSpecHash`), `packages/contracts/src/provenance.ts` (reproducibility shape), `packages/contracts/src/weather.ts` (`valueBase` → `singleValueEvaluationBasisSchema`), plus `climate.test.ts` / `grid.test.ts`. **Not delivered:** `packages/weather-core/cells/` (weather-core is 5.1's package, not created here), `apps/worker/src/queue/contract.ts` (the job interface belongs to 5.3), `packages/database/src/climate.ts` (no row types needed yet), and the `OPEN-14` vocabulary freeze |
 | Contracts | `ForecastRun` (+ natural identity), `IngestionRun` (+ `ingestionVersionOf`), `AdapterResult` (five classes), `GridSpec`, `GridRegistry`, `ResolvedGridCell`, `MonthlyOutlook` (+ `OutlookMonth` band rules), `DerivationProvenance` / `Reproducibility`. `ResolvedCell` is reused from `provenance.ts` rather than duplicated |
 | Database impact | **none.** The `jobs` table belongs to 5.3, not 5.0 |
-| Tests | `grid.test.ts` executes vectors 1–18 of §5.2.7, orientation rejection, lattice rejection, hash-mismatch detection, the four literal `gridSpecHash` fixtures, a `(provider, model)` registry (duplicate pair, unknown pair, one model string under two providers, one `gridId` on two pairs, declared evidence, `requireValidated` rejection), the `SpatialResolution` cases (algorithm version, identity components, requested ≠ anchor, frozen result and nested coordinates, no served coordinate or distance, a failed request mints nothing), coordinate rejection, and the F-06 immutability cases (input copy, frozen nested ranges, frozen registry value). `climate.test.ts` covers `mixed` rejection, run identity and version derivation, the five adapter classes, the `reproducible` / `inputRefs` distinction, the F-04 coverage invariants, the F-05 month cross-field rules, the F-03 twelve-month horizon, the F-07 count-authority cases, and the monthly source-capability cases. `pnpm --filter @agroclimate/contracts test`: **389 passed** after 5.2.1–5.2.3 (354 at 5.0) |
+| Tests | `grid.test.ts` executes vectors 1–18 of §5.2.7, orientation rejection, lattice rejection, hash-mismatch detection, the four literal `gridSpecHash` fixtures, a `(provider, model)` registry (duplicate pair, unknown pair, one model string under two providers, one `gridId` on two pairs, declared evidence, `requireValidated` rejection), the `SpatialResolution` cases (algorithm version, identity components, requested ≠ anchor, frozen result and nested coordinates, no served coordinate or distance, a failed request mints nothing, a hash-mismatched entry rejected), coordinate rejection, and the F-06 immutability cases (input copy, frozen nested ranges, frozen registry value). `climate.test.ts` covers `mixed` rejection, run identity and version derivation, the five adapter classes, the `reproducible` / `inputRefs` distinction, the F-04 coverage invariants, the F-05 month cross-field rules, the F-03 twelve-month horizon, the F-07 count-authority cases, and the monthly source-capability cases. `pnpm --filter @agroclimate/contracts test`: **392 passed** after 5.2.1–5.2.3 (354 at 5.0) |
 | Acceptance | met: `mixed` is **rejected** on a single value; vectors 1–18 pass, including negative-floor, longitude-wrap, and origin-precision cases; `reproducible: false` needs a reason and empty `inputRefs` fails on `inputRefs`; a complete result at less than 100% is rejected; a duplicate, missing, or out-of-order lead month is rejected; a mutated `GridSpec` range is impossible; **not met yet:** the queue interface, which moved to 5.3 |
 | Dependencies | — |
 | Risks | freezing a vocabulary too early (`OPEN-14`) — still deferred, not guessed at; contract churn while 5.1 is written — mitigate by versioning adapter and normalizer constants in 5.1, not the row contracts |
@@ -1350,12 +1352,12 @@ Capability status after 5.0, stated so no reader infers more than exists:
 |---|---|---|---|---|---|
 | 5.2.1 | pin `gridSpecHash` with a literal fixture | `packages/contracts/src/grid.test.ts` | editing the resolver's preimage or a spec field fails the suite | — | **Done** — `44b278c`. Four literals: 1° global, 1° relabelled, 0.25° global, 0.05° bounded |
 | 5.2.2 | registry key → `(provider, model)`; add `evidence`, `requireValidated`; drop model-only lookup | `packages/contracts/src/grid.ts` | duplicate pair rejected; unknown pair rejected; one `gridId` on two pairs accepted; two providers sharing one model string independent; `CONTRACTS_VERSION` bumped | 5.2.1 | **Done** — `965f528`. `CONTRACTS_VERSION` and the package version are `0.2.0` |
-| 5.2.3 | `SpatialResolution` + `resolutionAlgorithmVersion` | `packages/contracts/src/grid.ts` | requested ≠ anchor; no served coordinate; hash and evidence present | 5.2.2 | **Done** — `SpatialResolution`, `GRID_RESOLUTION_ALGORITHM_VERSION = "grid-resolve/1"`, and `createSpatialResolution`; nine tests |
+| 5.2.3 | `SpatialResolution` + `resolutionAlgorithmVersion` | `packages/contracts/src/grid.ts` | requested ≠ anchor; no served coordinate; hash and evidence present | 5.2.2 | **Done** — `6963709`. `SpatialResolution`, `GRID_RESOLUTION_ALGORITHM_VERSION = "grid-resolve/1"`, and `createSpatialResolution`, which re-checks `gridSpecHash` before resolving; twelve tests |
 | 5.2.4 | registry instance with one labelled synthetic entry | `packages/weather-core/src/grids/{registry,synthetic}.ts` | unknown pair fails; a synthetic entry is not ingestion-eligible | 5.2.2 | Pending — no such file exists |
 | 5.2.5 | field anchor via `ST_Centroid(geom)` inside `withTenant` | `packages/database/src/fields.ts` | known square → known six-decimal anchor; a cross-tenant field is invisible | — | Pending |
 | 5.2.6 | `upsertCell` — three columns, `ON CONFLICT DO NOTHING` | `packages/database/src/climate.ts` (new) | a second resolve reuses the cell id; no fourth column attempted | 5.2.4 | Pending — `climate.ts` does not exist |
 | 5.2.7 | `POST /v1/fields/:id/resolve-cell` | `apps/api/src/field/*` | 200 twice identical; unknown pair and out-of-grid are typed failures that mint nothing; no mapping row | 5.2.4–5.2.6 | Pending — no route is mounted |
-| 5.2.8 | reconcile status and §8.1 after the code lands | `IMPLEMENTATION_STATUS.md`, this document | no section claims an unimplemented guarantee | all | **Done** — `1dff5fd`. Records 5.2.1–5.2.2 as implemented and 5.2.3–5.2.7 as pending |
+| 5.2.8 | reconcile status and §8.1 after the code lands | `IMPLEMENTATION_STATUS.md`, this document | no section claims an unimplemented guarantee | all | **Done** — `1dff5fd`. Recorded 5.2.1–5.2.2 as implemented and 5.2.3–5.2.7 as pending. 5.2.3 then landed at `6963709`; §8.2 now reads 5.2.1–5.2.3 and 5.2.8 done, 5.2.4–5.2.7 pending |
 
 ### 8.3 Phase 5.3 — run lifecycle and worker runtime
 

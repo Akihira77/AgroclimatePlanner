@@ -636,16 +636,24 @@ export interface SpatialResolution {
 }
 
 /**
- * Assembles the result from an already-validated registry entry. It adds no
- * validation of its own: the entry's spec carries its hash, and `resolveGridCell`
- * rejects an unparseable or out-of-grid request, so a failed resolution throws and
- * mints nothing. The evidence is copied as declared; this function does not decide
- * whether a grid is fit to ingest.
+ * Assembles the result from a registry entry.
+ *
+ * It re-checks the entry's own `gridSpecHash` before resolving, because an entry
+ * built by hand — or a spec mutated in place — need not have passed through
+ * `createGridRegistry`, and a resolution minted from an edited lattice would carry
+ * a hash that no longer describes it. The check costs one hash and fails with
+ * `grid_spec_hash_mismatch`, the same typed error registration raises.
+ *
+ * Beyond that it adds no validation: `resolveGridCell` rejects an unparseable or
+ * out-of-grid request, so a failed resolution throws and mints nothing. The
+ * evidence is copied as declared; this function does not decide whether a grid is
+ * fit to ingest.
  */
 export function createSpatialResolution(
   entry: GridRegistryEntry,
   request: GridResolutionRequest,
 ): SpatialResolution {
+  assertGridSpecIntegrity(entry.spec);
   const cell = resolveGridCell(entry.spec, request);
   return Object.freeze({
     provider: entry.provider,

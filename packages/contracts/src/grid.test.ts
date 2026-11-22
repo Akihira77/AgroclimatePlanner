@@ -674,4 +674,47 @@ describe("SpatialResolution — 5.2.3", () => {
     expect(() => resolve({ lat: "1e3", lon: "0" })).toThrow(CellResolutionError);
     expect(() => resolve({ lat: "100", lon: "0" })).toThrow(/out_of_grid/);
   });
+
+  it("still produces the complete result for a valid entry", () => {
+    expect(resolve({ lat: "1.5", lon: "2.25" })).toEqual({
+      provider: "provider-a",
+      model: "synthetic-1",
+      gridId: "synthetic-1deg",
+      gridSpecHash: entry.spec.gridSpecHash,
+      resolutionAlgorithmVersion: "grid-resolve/1",
+      evidence: "synthetic",
+      requested: { lat: "1.5", lon: "2.25" },
+      anchor: { lat: "1.00", lon: "2.00" },
+      i: 1,
+      j: 2,
+      cellKey: "1.00,2.00",
+    });
+  });
+
+  it("rejects a spec edited without recomputing its hash", () => {
+    const edited = { ...spec({}), stepLat: "2" };
+    expect(edited.gridSpecHash).toBe(spec({}).gridSpecHash);
+    const attempt = () =>
+      createSpatialResolution(
+        { provider: "provider-a", model: "synthetic-1", spec: edited, evidence: "synthetic" },
+        { lat: "0.5", lon: "0.5" },
+      );
+    expect(attempt).toThrow(GridConfigurationError);
+    expect(attempt).toThrow(/grid_spec_hash_mismatch/);
+  });
+
+  it("rejects a hand-built entry whose hash does not describe its lattice", () => {
+    const attempt = () =>
+      createSpatialResolution(
+        {
+          provider: "provider-a",
+          model: "synthetic-1",
+          spec: { ...spec({}), gridSpecHash: "0".repeat(64) },
+          evidence: "validated",
+        },
+        { lat: "0.5", lon: "0.5" },
+      );
+    expect(attempt).toThrow(GridConfigurationError);
+    expect(attempt).toThrow(/grid_spec_hash_mismatch/);
+  });
 });
