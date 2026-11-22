@@ -9,10 +9,11 @@
   `GridEvidence`, `requireValidated` refuses a `synthetic` entry, `models()` is gone,
   four literal `gridSpecHash` fixtures pin the preimage, and `SpatialResolution` exists
   with `GRID_RESOLUTION_ALGORITHM_VERSION = "grid-resolve/1"` — its assembler re-checks
-  the entry's hash before resolving. `CONTRACTS_VERSION` and the package version are
-  `0.2.0`. Still absent: the registry instance (5.2.4), the centroid read (5.2.5),
-  persistence (5.2.6), and the route (5.2.7). No provider grid is configured, nothing is
-  registered as `validated`, and no `field_outlook_cells` row is written by any code.
+  the entry's hash before resolving. `packages/weather-core/src/grids/` holds
+  `syntheticGridRegistry` with exactly one `synthetic` entry and no provider grid.
+  `CONTRACTS_VERSION` and the package version are `0.2.0`. Still absent: the centroid
+  read (5.2.5), persistence (5.2.6), and the route (5.2.7). Nothing is registered as
+  `validated`, and no `field_outlook_cells` row is written by any code.
 - Date: 2026-11-21 (decision and acceptance), recorded here 2026-11-21, implementation
   status updated 2026-11-22
 - Depends on: ADR-001 (D8, provider strategy and the per-model rounding rule),
@@ -30,7 +31,8 @@
   this ADR is the durable record of why.
 - Implemented by: Phase 5.2, steps 5.2.1–5.2.8 of
   `climate-data-foundation.md` §8.2. 5.2.1 landed at `44b278c`, 5.2.2 at `965f528`,
-  5.2.3 at `6963709`, and 5.2.8 at `1dff5fd`; 5.2.4–5.2.7 are not started.
+  5.2.3 at `6963709`, 5.2.4 in the phase's fourth change, and 5.2.8 at `1dff5fd`;
+  5.2.5–5.2.7 are not started.
 - Register entry: `OPEN-18` — the generic half stays approved and unchanged; the
   provider/model half stays `BLOCKED_EXTERNAL_INPUT`.
 

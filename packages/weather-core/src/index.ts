@@ -39,3 +39,11 @@ export {
   type NormalizedMonth,
   type NormalizedMonthlySeries,
 } from "./normalize/monthly.js";
+
+export {
+  SYNTHETIC_GRID_ID,
+  SYNTHETIC_GRID_MODEL,
+  SYNTHETIC_GRID_PROVIDER,
+} from "./grids/synthetic.js";
+
+export { syntheticGridRegistry } from "./grids/registry.js";

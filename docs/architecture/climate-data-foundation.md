@@ -217,7 +217,7 @@ provider ──▶ adapter ──▶ raw payload ──▶ normalizer ──▶ 
 |---|---|---|---|
 | Adapter (per provider/product) | `packages/weather-core/src/adapters/*` (**exists**; SEAS5 monthly only) | pure given `(request, now)` except for the injected fetch | request shape, response parse, provider error mapping, attribution |
 | Normalizer | `packages/weather-core/src/normalize/*` (**exists**; monthly only, no unit conversion yet) | **pure** | unit conversion, `dataClass`, validity times, coverage accounting, record assembly |
-| Cell resolution | `packages/weather-core/src/grids/*` (the registry instance; **not written**) + `@agroclimate/contracts` `grid.ts` (the pure resolver; **implemented**) | **pure** | `(provider, model)` → `GridSpec` selection; requested coordinate → `(i, j)`, anchor, `cellKey`. **Never** served coordinates, **never** distance |
+| Cell resolution | `packages/weather-core/src/grids/*` (the registry instance; **exists**, one synthetic entry) + `@agroclimate/contracts` `grid.ts` (the pure resolver; **implemented**) | **pure** | `(provider, model)` → `GridSpec` selection; requested coordinate → `(i, j)`, anchor, `cellKey`. **Never** served coordinates, **never** distance |
 | Ingestion pipeline | `apps/worker/src/ingest/*` | impure | run upsert, transaction, supersession, status transitions |
 | Aggregation | `apps/worker/src/aggregate/*` + `packages/climate-core/aggregate/*` (the documented `climate-core`) | pure core, impure writer | daily/weekly/monthly rollup, anomaly, coverage, spread |
 | Persistence | `packages/database/src/climate.ts` (new; not importable from `weather-core`) | impure | typed access to the six global tables, and to `field_outlook_cells` for the ingest-side mapping write |
@@ -751,21 +751,23 @@ before any hash is persisted. Consequence to state plainly: two byte-identical
 lattices under different `gridId`s hash differently. That is intended — they are two
 reviewed definitions — and it does not affect `cellKey`, which carries only the node.
 
-**Status.** The identity layer and the result contract are implemented. At `965f528`
-the registry in `grid.ts` is keyed by `(provider, model)`, entries declare
-`GridEvidence`, `requireValidated` refuses a `synthetic` entry, and four literal
-`gridSpecHash` fixtures pin the preimage (`grid.test.ts`). 5.2.3 added
+**Status.** The identity layer, the result contract and the registry instance are
+implemented. At `965f528` the registry in `grid.ts` is keyed by `(provider, model)`,
+entries declare `GridEvidence`, `requireValidated` refuses a `synthetic` entry, and four
+literal `gridSpecHash` fixtures pin the preimage (`grid.test.ts`). 5.2.3 added
 `SpatialResolution` and `GRID_RESOLUTION_ALGORITHM_VERSION = "grid-resolve/1"`, with a
-`createSpatialResolution` assembler that copies the requested coordinate verbatim and
-the anchor from the resolver's own node. The result shape of §5.2.9.2 now exists; the
-HTTP layer's `servedCoordinate: null` and `extractionPolicy` still do not, and
-5.2.4–5.2.7 are unbuilt.
+`createSpatialResolution` assembler that re-checks the spec hash, copies the requested
+coordinate verbatim, and takes the anchor from the resolver's own node. 5.2.4 added
+`packages/weather-core/src/grids/`: `syntheticGridRegistry` built by
+`createGridRegistry` from one entry labelled `synthetic`. The result shape of §5.2.9.2
+now exists; the HTTP layer's `servedCoordinate: null` and `extractionPolicy` still do
+not, and 5.2.5–5.2.7 are unbuilt.
 
 Two limits worth stating, because the code cannot enforce them. `GridEvidence` is a
 **declared** value: `requireValidated` rejects an entry declared `synthetic`, but no
 code verifies the grade A + B documents behind a `validated` entry. Admission to that
-string is a review decision, not a runtime check. And no provider grid is registered
-at all, so every real model still fails with `unknown_model`.
+string is a review decision, not a runtime check. And the only registered entry is
+synthetic, so every real model still fails with `unknown_model`.
 
 Compatibility: this was a **deliberate breaking change** to `createGridRegistry`, not
 an extension, and it has landed. There was no production consumer (`grep` found
@@ -1304,6 +1306,7 @@ Capability status after 5.0, stated so no reader infers more than exists:
 |---|---|
 | Generic `GridSpec` resolver | **Implemented** — `packages/contracts/src/grid.ts`, eighteen synthetic vectors |
 | Generic grid hash and registry | **Implemented.** `gridSpecHash` with four literal fixtures (`grid.test.ts`), and `createGridRegistry` keyed by `(provider, model)` with declared `GridEvidence` and `requireValidated` (5.2.2 at `965f528`) |
+| Weather-core registry instance | **Implemented** — `packages/weather-core/src/grids/`: `syntheticGridRegistry`, built by `createGridRegistry` from one entry labelled `synthetic`, which `requireValidated` refuses (5.2.4) |
 | Golden grid resolver tests | **Implemented** — vectors 1–18 plus F-06 immutability |
 | Provider-specific grid configurations | **Pending external evidence** — all five |
 | Field-to-cell resolution service | **Not implemented** |
@@ -1345,15 +1348,15 @@ Capability status after 5.0, stated so no reader infers more than exists:
 | Risks | the centroid of a large plot falling near a grid boundary (two cells differ by one step), documented and unsolved while `OPEN-15` is undecided; no real model resolves until its grid configuration reaches §5.2.6 grade A + B, so 5.2 lands while 5.4 waits on evidence |
 | Deferred to 5.4 | the `field_outlook_cells` row, `distance_km`, `elevation_delta_m`, supersession on geometry edit — every one of them needs the served coordinate |
 
-**Implementation sequence.** 5.2.1, 5.2.2, 5.2.3 and 5.2.8 are implemented;
-5.2.4–5.2.7 are not. The step numbers are the ones other sections cite.
+**Implementation sequence.** 5.2.1, 5.2.2, 5.2.3, 5.2.4 and 5.2.8 are implemented;
+5.2.5–5.2.7 are not. The step numbers are the ones other sections cite.
 
 | Step | Objective | Files | Acceptance | Depends on | Status |
 |---|---|---|---|---|---|
 | 5.2.1 | pin `gridSpecHash` with a literal fixture | `packages/contracts/src/grid.test.ts` | editing the resolver's preimage or a spec field fails the suite | — | **Done** — `44b278c`. Four literals: 1° global, 1° relabelled, 0.25° global, 0.05° bounded |
 | 5.2.2 | registry key → `(provider, model)`; add `evidence`, `requireValidated`; drop model-only lookup | `packages/contracts/src/grid.ts` | duplicate pair rejected; unknown pair rejected; one `gridId` on two pairs accepted; two providers sharing one model string independent; `CONTRACTS_VERSION` bumped | 5.2.1 | **Done** — `965f528`. `CONTRACTS_VERSION` and the package version are `0.2.0` |
 | 5.2.3 | `SpatialResolution` + `resolutionAlgorithmVersion` | `packages/contracts/src/grid.ts` | requested ≠ anchor; no served coordinate; hash and evidence present | 5.2.2 | **Done** — `6963709`. `SpatialResolution`, `GRID_RESOLUTION_ALGORITHM_VERSION = "grid-resolve/1"`, and `createSpatialResolution`, which re-checks `gridSpecHash` before resolving; twelve tests |
-| 5.2.4 | registry instance with one labelled synthetic entry | `packages/weather-core/src/grids/{registry,synthetic}.ts` | unknown pair fails; a synthetic entry is not ingestion-eligible | 5.2.2 | Pending — no such file exists |
+| 5.2.4 | registry instance with one labelled synthetic entry | `packages/weather-core/src/grids/{registry,synthetic}.ts` | unknown pair fails; a synthetic entry is not ingestion-eligible | 5.2.2 | **Done** — in the 5.2.4 implementation change. `syntheticGridRegistry` built by `createGridRegistry` from one `synthetic` entry; fifteen weather-core tests |
 | 5.2.5 | field anchor via `ST_Centroid(geom)` inside `withTenant` | `packages/database/src/fields.ts` | known square → known six-decimal anchor; a cross-tenant field is invisible | — | Pending |
 | 5.2.6 | `upsertCell` — three columns, `ON CONFLICT DO NOTHING` | `packages/database/src/climate.ts` (new) | a second resolve reuses the cell id; no fourth column attempted | 5.2.4 | Pending — `climate.ts` does not exist |
 | 5.2.7 | `POST /v1/fields/:id/resolve-cell` | `apps/api/src/field/*` | 200 twice identical; unknown pair and out-of-grid are typed failures that mint nothing; no mapping row | 5.2.4–5.2.6 | Pending — no route is mounted |
