@@ -15,6 +15,17 @@ import {
 } from "./synthetic.js";
 
 /**
+ * The pinned hash of the synthetic configuration.
+ *
+ * Editing `synthetic.ts` — a step, an origin, a range, the resolution figure, or
+ * the hash preimage — changes this value, and the suite fails until the new hash
+ * is reviewed and written here. Recomputing the hash from the same fields only
+ * proves the function is deterministic; it never proves the configuration is the
+ * one that was reviewed.
+ */
+const SYNTHETIC_GRID_HASH = "494d8e41fdac7d18193f8df78fe52f9d25c7a188f6f602482210d7580a9a8726";
+
+/**
  * The registry in this package holds one synthetic grid and nothing else. No
  * assertion below is a claim about a real provider, and none reaches the network.
  */
@@ -28,7 +39,11 @@ describe("synthetic grid entry", () => {
     expect(SYNTHETIC_GRID_SPEC.gridId).toBe(SYNTHETIC_GRID_ID);
   });
 
-  it("carries a hash that describes its own lattice", () => {
+  it("pins gridSpecHash with a literal fixture", () => {
+    expect(SYNTHETIC_GRID_SPEC.gridSpecHash).toBe(SYNTHETIC_GRID_HASH);
+  });
+
+  it("recomputes that literal from the same reviewed fields", () => {
     const recomputed = defineGridSpec({
       gridId: SYNTHETIC_GRID_SPEC.gridId,
       originLat: SYNTHETIC_GRID_SPEC.originLat,
@@ -41,8 +56,8 @@ describe("synthetic grid entry", () => {
       orientation: SYNTHETIC_GRID_SPEC.orientation,
       spatialResolutionKm: SYNTHETIC_GRID_SPEC.spatialResolutionKm,
     });
-    expect(recomputed.gridSpecHash).toBe(SYNTHETIC_GRID_SPEC.gridSpecHash);
-    expect(SYNTHETIC_GRID_SPEC.gridSpecHash).toMatch(/^[0-9a-f]{64}$/);
+    expect(recomputed.gridSpecHash).toBe(SYNTHETIC_GRID_HASH);
+    expect(SYNTHETIC_GRID_HASH).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("is immutable at runtime", () => {

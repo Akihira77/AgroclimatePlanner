@@ -258,14 +258,14 @@ change that alters identity requires a **new `model` string inside the same
 §5.2, with the registry identity and the resolution result in §5.2.9 and
 `docs/adr/ADR-007-spatial-registry-identity.md`.
 
-**Implementation status 2026-11-22 — three of the four pieces landed.**
+**Implementation status 2026-11-22 — all four pieces landed.**
 5.2.1 (`44b278c`) and 5.2.2 (`965f528`) closed the registry key and the hash fixture;
 5.2.3 added the result contract and 5.2.4 the concrete registry instance:
 
 | Piece | Current fact (2026-11-22) | Status |
 |---|---|---|
 | registry key | `createGridRegistry` is keyed by `(provider, model)` through nested maps; duplicate pair → `duplicate_grid_spec`, unknown pair → `unknown_model` naming both components; no model-only overload | **Done** (5.2.2) |
-| literal hash fixture | four literals in `grid.test.ts` pin the preimage: 1° global, the same lattice under a second `gridId`, 0.25° global, 0.05° bounded | **Done** (5.2.1) |
+| literal hash fixture | four literals in `packages/contracts/src/grid.test.ts` pin the preimage (1° global, the same lattice under a second `gridId`, 0.25° global, 0.05° bounded), and a fifth pins the registered synthetic spec in `packages/weather-core/src/grids/registry.test.ts` | **Done** (5.2.1, plus 5.2.4's own spec) |
 | result contract | `SpatialResolution` and `GRID_RESOLUTION_ALGORITHM_VERSION = "grid-resolve/1"`, assembled by `createSpatialResolution`, which re-checks `gridSpecHash` before resolving. `ResolvedCell` (`provenance.ts:104-112`) is still not reused: it requires `servedLat`, `servedLon`, and `distanceKm`, so it cannot describe a pre-ingest resolution | **Done** (5.2.3) |
 | registry instance | `syntheticGridRegistry` in `packages/weather-core/src/grids/`, built by `createGridRegistry` from one entry labelled `synthetic` (provider `synthetic`, model `synthetic_1deg_20x20`). The pair resolves; unknown pairs fail with `unknown_model`; `requireValidated` fails with `grid_not_validated`. No provider constant beyond the synthetic one | **Done** (5.2.4), but synthetic only |
 
