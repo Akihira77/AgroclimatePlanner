@@ -1,6 +1,6 @@
 # Phase 5.4 — Planning Consolidation
 
-**Status:** consolidation only. No design revision, no implementation, no owner approval recorded.
+**Status:** consolidation only. No design revision, no implementation. Owner approval is recorded for `D21` and `D15c` only.
 **Baseline:** `a383c59b4fc1121c2eeb6efcb01141d1d8aa1007` — `fix(worker): kill claim at attempt ceiling`.
 **Date:** 2026-11-22.
 
@@ -14,11 +14,11 @@ Design work is substantially complete. 28 issues were closed at specification le
 
 The remaining gap is **authority and consistency**, not design depth:
 
-- **0 of 31** tracked decisions carry explicit owner approval.
+- **2 of 31** tracked decisions carry explicit owner approval: `D21` (single lock order) and `D15c` (`settlePair`). No other decision is approved.
 - **10** decision IDs (`D4`, `D6`–`D8`, `D10`–`D14`, `D18`) have no recoverable resolution text in any durable source. They are deferred with a stated reason and a reopening rule. This document does not guess.
 - **2** implementation blockers:
-  - **A-1** — a `dead` job can coexist with a `running` run, and nothing recovers it (`runner.ts:148-165`; reaper filter `postgres.ts:285-296`; `jobs_identity_key`).
-  - **A-2** — every settlement path in the baseline locks **run → job** while the reaper locks **job → run**. Two paths invert, not one: `beginIngestionExecution` (`climate.ts:253-296`), and `failTerminal`/`settle` (`runner.ts:156-183`). The inversion is resolvable only by D21 **plus** D15c together.
+  - **A-1** — a `dead` job can coexist with a `running` run, and nothing recovers it (`runner.ts:148-165`; reaper filter `postgres.ts:285-296`; `jobs_identity_key`). Remains open until the **complete** settlement contract is approved and implemented; `D15c` alone does not close it.
+  - **A-2** — every settlement path in the baseline locks **run → job** while the reaper locks **job → run**. Two paths invert, not one: `beginIngestionExecution` (`climate.ts:253-296`), and `failTerminal`/`settle` (`runner.ts:156-183`). Resolvable only by D21 **plus** D15c together. **The design contract is approved; the implementation is pending, so the blocker stays open.**
 - **7** operational dependencies, two of which are hard gates already recorded in the repo: `OPEN-03` (no commercial operation) and `OPEN-18` (no real ingestion on an unvalidated grid).
 - **2** factual claims retracted: `transaction_timeout` is not configured anywhere in the repository (0 occurrences), and `jobs_active_ingestion_idx` does not block replacement of a `dead` job (the index is partial on `status='running'`).
 
@@ -151,7 +151,7 @@ Settled; not reopened. Restated so this document is readable standalone.
 
 ## 5. Master decision register
 
-Status vocabulary: **Approved** only with explicit owner approval (none exists); **Open**; **Rejected**; **Deferred**.
+Status vocabulary: **Approved** only with explicit owner approval; **Open**; **Rejected**; **Deferred**. Two approvals exist (`D21`, `D15c`) and are recorded verbatim from the owner's decision. No approval is inferred for any other ID.
 
 | ID | Topic | Current decision | Alternatives | Owner status | Evidence | Deps | Implementation impact | Recommendation |
 |---|---|---|---|---|---|---|---|---|
@@ -176,7 +176,7 @@ Status vocabulary: **Approved** only with explicit owner approval (none exists);
 | D15 | T3 atomicity | T3 is strictly atomic: records + supersession + `horizon_end` + served coords + run terminal + job terminal commit together. The **handler** emits an operational outcome; the **runner** decides whether a retry is available; `settlePair` performs the transition | handler performs the retry-budget check | **Open** | `markIngestionStatus` has no lease predicate (`climate.ts:335-366`) | D15a-e | T3 shape | approve |
 | D15a | Settlement ownership | The handler settles atomically **inside T3 only**, because atomicity requires it. All failure-side settlement is runner-invoked | handler owns terminal settlement generally | **Open** | `runner.ts:148-215` | D15 | handler contract | approve |
 | D15b | `HandlerResult` first revision | superseded by D15e | — | **Superseded** | — | — | — | none |
-| D15c | `settlePair` primitive | one primitive, three modes `succeed`/`failed`/`adopt`; `expectsRun`; authoritative run id from the locked job row; **job-then-run lock order**; lease predicate; `ROW_COUNT` assertions | separate success primitive | **Open** | `runner.ts:148-215` | D15, D15d, D21 | replaces `failTerminal`/`settle` and their run→job order | approve |
+| D15c | `settlePair` primitive | one primitive, three modes `succeed`/`failed`/`adopt`; `expectsRun`; authoritative run id from the locked job row; **job-then-run lock order**; lease predicate; `ROW_COUNT` assertions | separate success primitive | **Approved** — owner decision: Approve, no notes recorded | `runner.ts:148-215` | D15, D15d, D21 | replaces `failTerminal`/`settle` and their run→job order; implementation pending | approved |
 | D15d | Retry-budget ownership | runner owns `attempt`/`maxAttempts`; handler returns an operational outcome only; `retryable` at the ceiling goes to `settlePair(mode:'failed')`; `unknown` is never treated as `not_committed` | handler decides terminality | **Open** | `runner.ts:195-201` — the ceiling branch already lives in the runner | D15c | removes `attempt` from the handler | approve |
 | D15e | Final `HandlerResult` | `settled` (+`anomaly?`) \| `succeeded` \| `retryable` \| `terminal` \| `abandoned{reason}`; `runId?` removed; `settled` never carries `failed` | keep `runId?` | **Open** | `runner.ts:65` exposes `opensIngestionRun` | D15c | type change | approve |
 | D16 | Concurrency | transaction-scoped advisory lock on `'weather_records:'||forecastRunId`; lock order job row → advisory → guard → data; lease revalidated **after** the advisory wait; `FOR UPDATE` added to `upsertCell` read-back; served-coordinate drift > 1e-6° is whole-run terminal `provider_changed`; exact `(cellKey, variable)` footprint matching; one ordering relation | per-key advisory locks; unlocked read-back | **Open** | `climate.ts:68-95` read-back has no `FOR UPDATE`; `lock_timeout` does cancel an advisory wait (probe) | D17, D19, D21 | T3 shape | approve |
@@ -185,11 +185,13 @@ Status vocabulary: **Approved** only with explicit owner approval (none exists);
 | D19 | Lock timeout | `LOCK_TIMEOUT_MS = 5000` for T2, T3, T4/T5 and the witness; `55P03` is `retryable` in write paths and `unknown` in the witness | 2 s in T3 / 5 s in witness | **Open** | `lock_timeout` cancels `pg_advisory_xact_lock` (probe) | D16, D15c | three call sites | approve |
 | D20 | `enqueue_seq` column | `enqueue_seq bigint GENERATED ALWAYS AS IDENTITY` + unique index on `app.jobs`, joined via `jobs_ingestion_run_idx` | `jobs.id` fallback | **Open** | `jobs` is empty; `jobs_ingestion_run_idx` exists (`jobs/migration.sql:103`) | D17 | one migration | approve |
 | D20a | Supersession semantics | **newest successfully persisted ingestion wins**; a pending newer submission does not block an older one | newest submitted wins | **Open** | G2 reaches newer runs only through `weather_records → ingestion_runs → jobs` | D17, D20 | semantics + docs | approve |
-| D21 | Single lock order | job → run in **every** transaction. `beginIngestionExecution` acquires the job row `FOR UPDATE` — same transaction, same lease predicate (`id AND lease_token AND status='running' AND lease_expires_at > now()`) — **before** any statement touches `ingestion_runs`. `settlePair` is job → run by construction. Both changes are required; neither alone restores a single order | keep run→job and classify `40P01` retryable | **Open** | `climate.ts:253-296` (T2 run→job); `runner.ts:156-183` (`failTerminal`/`settle` run→job); `postgres.ts:288-330` (reaper job→run) | D15c, D16 | one added statement in T2 + replacement of two settlement paths | approve |
+| D21 | Single lock order | job → run in **every** transaction. `beginIngestionExecution` acquires the job row `FOR UPDATE` — same transaction, same lease predicate (`id AND lease_token AND status='running' AND lease_expires_at > now()`) — **before** any statement touches `ingestion_runs`. `settlePair` is job → run by construction. Both changes are required; neither alone restores a single order | keep run→job and classify `40P01` retryable | **Approved** — owner decision: Approve, no notes recorded | `climate.ts:253-296` (T2 run→job); `runner.ts:156-183` (`failTerminal`/`settle` run→job); `postgres.ts:288-330` (reaper job→run) | D15c, D16 | one added statement in T2 + replacement of two settlement paths; implementation pending | approved |
 
-**Tally:** 31 IDs — **0 approved**, **20 open**, **1 superseded**, **10 deferred**.
+**Tally:** 31 IDs — **2 approved**, **18 open**, **1 superseded**, **10 deferred**.
 
-Open: `D1`, `D2`, `D2a`, `D3`, `D5`, `D9`, `D9a`, `D9b`, `D9c`, `D15`, `D15a`, `D15c`, `D15d`, `D15e`, `D16`, `D17`, `D19`, `D20`, `D20a`, `D21`.
+Approved: `D21`, `D15c`. Owner decision recorded as "Approve", no notes, no timestamp invented. Approval is limited to these two IDs and implies nothing about any other decision.
+
+Open: `D1`, `D2`, `D2a`, `D3`, `D5`, `D9`, `D9a`, `D9b`, `D9c`, `D15`, `D15a`, `D15d`, `D15e`, `D16`, `D17`, `D19`, `D20`, `D20a`.
 
 ### 5.1 Deferred historical IDs
 
@@ -257,6 +259,7 @@ Additional settled points carried from earlier rounds: the lease-margin question
 | Why not an accepted risk | The state is terminal-unreachable, silently inflates in-flight metrics, and its only exit is undocumented operator SQL that must also reset `attempt` |
 | Why it does not trigger today | `handlers: []` (`main.ts:32`) — `execute` is never reached |
 | Minimum action | Route every terminal settlement through `settlePair` (D15c), which reads the run id from the locked job row and does not depend on `execution`. Must ship in the same delivery as 5.4 |
+| Current status | **Open.** `D15c` is approved, but the rest of the settlement contract — `D15` (T3 atomicity), `D15a` (settlement ownership), `D15d` (retry-budget ownership), `D15e` (`HandlerResult`) — is still open, so the blocker cannot yet be closed by decision. Nothing is implemented |
 
 **A-2 — Lock-order inversion between the write paths and the reaper.**
 
@@ -271,14 +274,15 @@ Additional settled points carried from earlier rounds: the lease-margin question
 | Why not an accepted risk | The consolidation asserts a single lock order (job → run) for T3/T4/T5/witness. Two baseline paths falsify that assertion, so the design statement is currently untrue |
 | Minimum action | **D21 + D15c together.** D21 adds a job-row `FOR UPDATE` — in the same transaction, with the same lease predicate — before `beginIngestionExecution` touches `ingestion_runs`. D15c replaces `failTerminal`/`settle` with `settlePair`, whose order is job → run by construction. Neither change alone restores a single order |
 | Residual check | After both, no statement touches `ingestion_runs` before the owning job row is locked in the same transaction. This is the assertion D21 must be reviewed against, not the query count |
-| If D21 and D15c are declined | Reclassify as accepted risk **D-13**; both paths must then classify `40P01` as `retryable` |
+| Design status | **Approved.** `D21` and `D15c` are owner-approved; the design disagreement is closed and the ordering contract is now binding |
+| Implementation status | **Pending.** Neither `beginIngestionExecution` nor the settlement paths have changed. The source still inverts, so A-2 remains an open implementation blocker |
+| If D21 and D15c are declined | Not applicable — both are approved. The conditional fallback (classify `40P01` as `retryable`) is no longer the selected path |
 
 ### B. Owner decisions required
 
 | Group | IDs | What it gates |
 |---|---|---|
-| Lock ordering | `D21` | T2 reorder; the single-order claim |
-| Settlement contract | `D15`, `D15a`, `D15c`, `D15d`, `D15e` | T3/T4/T5 shape, `HandlerResult`, `settlePair` |
+| Settlement contract | `D15`, `D15a`, `D15d`, `D15e` | T3/T4/T5 shape, `HandlerResult`, retry-budget ownership. `settlePair` (`D15c`) and the single lock order (`D21`) are approved but cannot be implemented until these are settled |
 | Timeout policy | `D9`, `D9a`, `D9b`, `D9c`, `D19` | every transaction, worker bootstrap |
 | Supersession + ordering | `D17`, `D20`, `D20a` | G2 predicate, retirement predicate, one migration |
 | Schema/constraint change | `D1`, `D16` | one migration |
@@ -315,7 +319,7 @@ Deferred, not requested: `D4`, `D6`–`D8`, `D10`–`D14`, `D18` (§5.1).
 | D-10 | `lock_timeout = 5000` may starve under contention | Measurable; remedy is a longer witness budget, not a longer T3 budget |
 | D-11 | `targetSelectorSchema` does not canonicalise — only the hash does | Handler must canonicalise identically to `canonicalArrayRules.cells`; unit test on the array builder, not only on the query |
 | D-12 | A pre-existing database could contain a `dead`+`running` pair from the 5.3 latent path | Both tables are empty here; operator handling documented |
-| D-13 *(conditional)* | The lock-order inversion is tolerated if D21 and D15c are declined | `40P01` must be classified `retryable` in T2 and in settlement; escalate to a blocker on the first observed occurrence |
+| D-13 *(not applicable)* | The lock-order inversion would be tolerated if D21 and D15c were declined | Both are approved, so this fallback is not the selected path. Retained for the historical record; A-2 is an open blocker until implemented |
 
 ### E. Deferred / out of scope
 
@@ -347,14 +351,14 @@ Deferred, not requested: `D4`, `D6`–`D8`, `D10`–`D14`, `D18` (§5.1).
 | Target selector | schema + canonical hash exist; the schema itself does not canonicalise | no | no | no | `contracts/climate.ts:111-119`; `canonical.ts:53-75` | canonicalise in the handler; unit-test the builder |
 | WeatherRecord persistence | table + `NULLS NOT DISTINCT` live key exist; no writer | no | **yes (D16)** | no | `domain_tables:431-515` | implement T3 |
 | Supersession | linked-list columns exist; FK/CHECK changes designed, not applied | no | **yes (D1, D16, D17, D20, D20a)** | no | probes R1–R4, R13–R17 | approve + one migration |
-| Concurrency | advisory lock + ordering relation designed; `upsertCell` read-back lacks `FOR UPDATE`; **two baseline paths invert the lock order** | **A-2** | **yes (D16, D19, D21)** | no | `climate.ts:253-296`; `runner.ts:156-183`; `postgres.ts:288-330` | approve D21 + D15c; reorder T2; replace settlement |
+| Concurrency | advisory lock + ordering relation designed; `upsertCell` read-back lacks `FOR UPDATE`; **two baseline paths invert the lock order** | **A-2** | **yes (D16, D19)**; `D21` approved, implementation pending | no | `climate.ts:253-296`; `runner.ts:156-183`; `postgres.ts:288-330` | approve D16/D19; implement D21 (reorder T2); replace settlement via D15c |
 | Lease fencing | client-side fencing exists in `renew`/`succeed`/`fail`; T3 revalidation designed | no | **yes (D9, D19)** | no | `postgres.ts:156-235` | implement revalidation |
-| Recovery | witness, five classifications, ceiling routing designed; a `dead`+`running` pair has no automated exit | **A-1** | **yes (D15c, D15d, D15e)** | no | `runner.ts:148-165`; `postgres.ts:285-296`; `jobs/migration.sql:24-26` | ship settlement change with 5.4 |
-| Settlement | `failTerminal` can write `dead` over a `running` run; `settlePair` designed; ownership layers now distinct | **A-1** | **yes (D15, D15a, D15c–e)** | no | `runner.ts:148-215` | approve contract; implement |
+| Recovery | witness, five classifications, ceiling routing designed; a `dead`+`running` pair has no automated exit | **A-1** | **yes (D15, D15a, D15d, D15e)**; `D15c` approved | no | `runner.ts:148-165`; `postgres.ts:285-296`; `jobs/migration.sql:24-26` | approve the remaining settlement decisions; ship settlement change with 5.4 |
+| Settlement | `failTerminal` can write `dead` over a `running` run; `settlePair` contract approved, not implemented; ownership layers distinct | **A-1** | **yes (D15, D15a, D15d, D15e)**; `D15c` approved | no | `runner.ts:148-215` | approve the rest; implement `settlePair` |
 | Database privilege | `app_system` has the needed grants; no `field_outlook_cells` | no | no | no | grants in `domain_tables` | none |
 | Timeout | all four GUCs are `0`; `transaction_timeout` appears 0 times in the repo | no | **yes (D9, D9a–c, D19)** | **yes (C-3)** | `roles.sql:22-28`; grep = 0 | provision + startup probe |
 | Observability | log vocabulary defined; none implemented | no | **yes (D15e)** | no | design record | implement with handler |
-| Testing | plan covers settlement modes, run-NULL, retry budget, witness matrix, commit ambiguity, lock ordering, consistency | no | **yes (D15c–e, D21)** | no | §9 | approve contract, then implement |
+| Testing | plan covers settlement modes, run-NULL, retry budget, witness matrix, commit ambiguity, lock ordering, consistency | no | **yes (D15, D15a, D15d, D15e)**; `D15c` and `D21` approved | no | §9 | approve the rest, then implement |
 
 ---
 
@@ -429,7 +433,7 @@ Deferred, not requested: `D4`, `D6`–`D8`, `D10`–`D14`, `D18` (§5.1).
 
 ## 10. Accepted risks
 
-See §7.D (D-1 … D-12, plus conditional D-13 if D21 and D15c are declined). None is promoted to a blocker.
+See §7.D (D-1 … D-12). D-13 is retained as not applicable because `D21` and `D15c` are approved. None is promoted to a blocker.
 
 ---
 
@@ -443,19 +447,19 @@ See §7.C (C-1 … C-7). Two are hard gates already recorded in the repository: 
 
 | # | Criterion | Current |
 |---|---|---|
-| G1 | Every §7.A blocker is closed | **fails** — A-1, A-2 |
-| G2 | Every §7.B decision is explicitly approved | **fails** — 0 of 20 |
+| G1 | Every §7.A blocker is closed | **fails** — A-1 and A-2 remain open; both are implementation blockers, and neither is resolved by a decision alone |
+| G2 | Every §7.B decision is explicitly approved | **fails** — 2 of 31 approved; 18 open |
 | G3 | The ten deferred historical IDs are accepted as deferred, or reopened | **fails** |
 | G4 | C-1 … C-3 satisfied or covered by an approved rollout plan | **fails** |
-| G5 | No contradiction between the design and the source at `a383c59` | **fails** — the asserted job→run lock order is contradicted by two baseline paths |
-| G6 | Transaction boundaries, lease fencing and lock ordering fully defined and mutually consistent | **fails** — D21 open |
+| G5 | No contradiction between the design and the source at `a383c59` | **fails** — the contradiction is decided (D21) but the source still inverts until D21 is implemented |
+| G6 | Transaction boundaries, lease fencing and lock ordering fully defined and mutually consistent | **passes** — D21 and D15c are approved, so the ordering contract is defined and consistent |
 | G7 | Retry and recovery defined for both attempt branches | **passes** |
 | G8 | Persistence and supersession defined, including exact footprint and ordering relation | **passes** |
 | G9 | Test plan covers failure and concurrency cases | **passes** |
 | G10 | Scope not expanded beyond §2.1 | **passes** |
 | G11 | No claim asserts a state the source does not support | **passes** |
 
-**Five of eleven pass. Six fail.** Document completeness is not a gate criterion, which is why G7–G11 passing does not imply readiness.
+**Six of eleven pass. Five fail.** Document completeness is not a gate criterion, which is why G6–G11 passing does not imply readiness. G6 passing records that the ordering *contract* is settled; it does not record that the code follows it.
 
 ---
 
@@ -468,7 +472,8 @@ See §7.C (C-1 … C-7). Two are hard gates already recorded in the repository: 
 | Settle contract | `failTerminal` + `settle` (two implementations) → `settlePair` with `failed`/`adopt` → `settlePair` with `succeed`/`failed`/`adopt` | last is current; D15b superseded by D15e |
 | Settlement ownership | "handler performs the retry-budget check" / "handler owns terminal settlement" | corrected into three layers (R26) |
 | Witness | unlocked `SELECT` → `FOR UPDATE` on job only → `FOR UPDATE` job then run, five classifications | last is current |
-| Lock ordering | assumed job→run everywhere | **two baseline paths are run→job**; A-2 / D21 open |
+| Lock ordering | assumed job→run everywhere | **two baseline paths are run→job**; A-2 open. `D21` approved; implementation pending |
+| Owner approvals | none | `D21` and `D15c` approved. No timestamp or note recorded, because none was given. All other decisions remain open |
 | `transaction_timeout` | assumed active at role level → **verified absent (0 occurrences)** | dependency C-3 / D9c, not a contract |
 | A-1 impact | "the partial unique index blocks replacement" | **withdrawn** — the index is partial on `running`; `jobs_identity_key` is what blocks |
 | `dead + running` | "unreachable" → "reachable via the legacy path" → stage-classified | latent in code, configured-unreachable, design-unreachable after `settlePair`; **not auto-recoverable** |
@@ -486,9 +491,11 @@ Resolved findings from earlier rounds are in §6 and must not be re-raised as ac
 
 ## 14. Open owner decisions requiring explicit approval
 
-No decision in this document is approved.
+No decision outside this list is approved.
 
-**Twenty open decisions:** `D1`, `D2`, `D2a`, `D3`, `D5`, `D9`, `D9a`, `D9b`, `D9c`, `D15`, `D15a`, `D15c`, `D15d`, `D15e`, `D16`, `D17`, `D19`, `D20`, `D20a`, `D21`.
+**Two approved:** `D21` (single lock order) and `D15c` (`settlePair`). Owner decision: Approve. No notes were given, and none are recorded.
+
+**Eighteen open:** `D1`, `D2`, `D2a`, `D3`, `D5`, `D9`, `D9a`, `D9b`, `D9c`, `D15`, `D15a`, `D15d`, `D15e`, `D16`, `D17`, `D19`, `D20`, `D20a`.
 
 **Ten deferred decisions** (`D4`, `D6`–`D8`, `D10`–`D14`, `D18`): accept the disposition, or reopen with one line.
 
@@ -498,33 +505,32 @@ No decision in this document is approved.
 
 `CONSOLIDATION COMPLETE — READY FOR OWNER REVIEW`
 
-**Scope of that verdict, stated precisely:** the *artifact* is complete — internally consistent, every claim checked against `a383c59`, every contradiction either reconciled or surfaced as a named blocker, and every remaining item an explicit owner decision. The *design* is not complete: 2 blockers and 6 failed gate criteria remain.
+**Scope of that verdict, stated precisely:** the *artifact* is complete — internally consistent, every claim checked against `a383c59`, every contradiction either reconciled or surfaced as a named blocker, and every remaining item an explicit owner decision. The *design* is not complete: 2 implementation blockers and 5 failed gate criteria remain.
 
-**Readiness NOT claimed.** Phase 5.4 is not ready for implementation. Accepting this document does not approve any decision and does not authorise implementation.
+**Readiness NOT claimed.** Phase 5.4 is not ready for implementation. Two approved decisions do not authorise implementation; `A-1` and `A-2` are open until their contracts are complete and the code follows them.
 
 ### Summary
 
 | Metric | Count |
 |---|---|
-| Decisions approved | **0** |
-| Decisions open | **20** |
+| Decisions approved | **2** (`D21`, `D15c`) |
+| Decisions open | **18** |
 | Decisions superseded | **1** (`D15b` → `D15e`) |
 | Decisions deferred | **10** |
 | Total decision IDs | **31** |
 | Resolved issues | **28** |
-| Implementation blockers | **2** (A-1, A-2) |
+| Implementation blockers | **2** (A-1 open; A-2 design approved, implementation pending) |
 | Operational dependencies | **7** (2 hard gates: `OPEN-03`, `OPEN-18`) |
-| Accepted risks | **12** (+ conditional D-13) |
+| Accepted risks | **12** (D-13 retained as not applicable) |
 | Deferred items | **10** |
-| Gate criteria passing | **5 of 11** |
+| Gate criteria passing | **6 of 11** |
 
 ### Top remaining actions
 
-1. **Approve or decline `D21` plus `D15c` together.** They are the only combination that closes A-2; neither alone restores a single lock order, because two baseline paths — not one — invert it.
-2. **Approve `D15d`/`D15e`** with `D15c`; together with the settlement contract they close A-1.
-3. **Accept or reopen the ten deferred IDs.**
-4. **Approve `D20a`, `D20`, `D17`** — supersession semantics and the ordering column; they decide one migration and two predicates.
-5. **Approve `D9c` and provision `transaction_timeout`**, then rerun bootstrap. Until then the 15 s bound does not exist.
-6. **Settle `OPEN-03` and `OPEN-18`.** Both are hard gates already recorded in the repository.
-7. **Approve `D1`, `D16`, `D19`** — the remaining migration content and the lock policy.
-8. **Approve `D2`, `D2a`, `D3`, `D5`** to start adapter work on synthetic fixtures.
+1. **Approve `D15`, `D15a`, `D15d`, `D15e`.** They complete the settlement contract; `D15c` and `D21` are approved but cannot be implemented until these are settled, and A-1 cannot close without them.
+2. **Accept or reopen the ten deferred IDs.**
+3. **Approve `D20a`, `D20`, `D17`** — supersession semantics and the ordering column; they decide one migration and two predicates.
+4. **Approve `D9c` and provision `transaction_timeout`**, then rerun bootstrap. Until then the 15 s bound does not exist.
+5. **Settle `OPEN-03` and `OPEN-18`.** Both are hard gates already recorded in the repository.
+6. **Approve `D1`, `D16`, `D19`** — the remaining migration content and the lock policy.
+7. **Approve `D2`, `D2a`, `D3`, `D5`** to start adapter work on synthetic fixtures.
