@@ -761,7 +761,7 @@ coordinate verbatim, and takes the anchor from the resolver's own node. 5.2.4 ad
 `packages/weather-core/src/grids/`: `syntheticGridRegistry` built by
 `createGridRegistry` from one entry labelled `synthetic`. The result shape of §5.2.9.2
 now exists; the HTTP layer's `servedCoordinate: null` and `extractionPolicy` still do
-not, and 5.2.5–5.2.7 are unbuilt.
+not, and 5.2.6–5.2.7 are unbuilt.
 
 Two limits worth stating, because the code cannot enforce them. `GridEvidence` is a
 **declared** value: `requireValidated` rejects an entry declared `synthetic`, but no
@@ -1307,6 +1307,7 @@ Capability status after 5.0, stated so no reader infers more than exists:
 | Generic `GridSpec` resolver | **Implemented** — `packages/contracts/src/grid.ts`, eighteen synthetic vectors |
 | Generic grid hash and registry | **Implemented.** `gridSpecHash` with four literal fixtures (`grid.test.ts`), and `createGridRegistry` keyed by `(provider, model)` with declared `GridEvidence` and `requireValidated` (5.2.2 at `965f528`) |
 | Weather-core registry instance | **Implemented** — `packages/weather-core/src/grids/`: `syntheticGridRegistry`, built by `createGridRegistry` from one entry labelled `synthetic`, which `requireValidated` refuses (5.2.4) |
+| Field anchor | **Implemented** — `selectFieldAnchor` in `packages/database/src/fields.ts`: `ST_Centroid` inside the supplied `TenantTransaction`, six-decimal strings, `null` for another tenant's, a deleted, or a missing field (5.2.5) |
 | Golden grid resolver tests | **Implemented** — vectors 1–18 plus F-06 immutability |
 | Provider-specific grid configurations | **Pending external evidence** — all five |
 | Field-to-cell resolution service | **Not implemented** |
@@ -1348,8 +1349,8 @@ Capability status after 5.0, stated so no reader infers more than exists:
 | Risks | the centroid of a large plot falling near a grid boundary (two cells differ by one step), documented and unsolved while `OPEN-15` is undecided; no real model resolves until its grid configuration reaches §5.2.6 grade A + B, so 5.2 lands while 5.4 waits on evidence |
 | Deferred to 5.4 | the `field_outlook_cells` row, `distance_km`, `elevation_delta_m`, supersession on geometry edit — every one of them needs the served coordinate |
 
-**Implementation sequence.** 5.2.1, 5.2.2, 5.2.3, 5.2.4 and 5.2.8 are implemented;
-5.2.5–5.2.7 are not. The step numbers are the ones other sections cite.
+**Implementation sequence.** 5.2.1, 5.2.2, 5.2.3, 5.2.4, 5.2.5 and 5.2.8 are
+implemented; 5.2.6–5.2.7 are not. The step numbers are the ones other sections cite.
 
 | Step | Objective | Files | Acceptance | Depends on | Status |
 |---|---|---|---|---|---|
@@ -1357,7 +1358,7 @@ Capability status after 5.0, stated so no reader infers more than exists:
 | 5.2.2 | registry key → `(provider, model)`; add `evidence`, `requireValidated`; drop model-only lookup | `packages/contracts/src/grid.ts` | duplicate pair rejected; unknown pair rejected; one `gridId` on two pairs accepted; two providers sharing one model string independent; `CONTRACTS_VERSION` bumped | 5.2.1 | **Done** — `965f528`. `CONTRACTS_VERSION` and the package version are `0.2.0` |
 | 5.2.3 | `SpatialResolution` + `resolutionAlgorithmVersion` | `packages/contracts/src/grid.ts` | requested ≠ anchor; no served coordinate; hash and evidence present | 5.2.2 | **Done** — `6963709`. `SpatialResolution`, `GRID_RESOLUTION_ALGORITHM_VERSION = "grid-resolve/1"`, and `createSpatialResolution`, which re-checks `gridSpecHash` before resolving; twelve tests |
 | 5.2.4 | registry instance with one labelled synthetic entry | `packages/weather-core/src/grids/{registry,synthetic}.ts` | unknown pair fails; a synthetic entry is not ingestion-eligible | 5.2.2 | **Done** — in the 5.2.4 implementation change. `syntheticGridRegistry` built by `createGridRegistry` from one `synthetic` entry, whose `gridSpecHash` is pinned by a literal fixture; sixteen weather-core tests |
-| 5.2.5 | field anchor via `ST_Centroid(geom)` inside `withTenant` | `packages/database/src/fields.ts` | known square → known six-decimal anchor; a cross-tenant field is invisible | — | Pending |
+| 5.2.5 | field anchor via `ST_Centroid(geom)` inside `withTenant` | `packages/database/src/fields.ts` | known square → known six-decimal anchor; a cross-tenant field is invisible | — | **Done** — in the 5.2.5 implementation change. `selectFieldAnchor` returns `{ lat, lon }` strings rounded in SQL; the four integration cases (square, cross-tenant, soft-deleted, nonexistent) pass |
 | 5.2.6 | `upsertCell` — three columns, `ON CONFLICT DO NOTHING` | `packages/database/src/climate.ts` (new) | a second resolve reuses the cell id; no fourth column attempted | 5.2.4 | Pending — `climate.ts` does not exist |
 | 5.2.7 | `POST /v1/fields/:id/resolve-cell` | `apps/api/src/field/*` | 200 twice identical; unknown pair and out-of-grid are typed failures that mint nothing; no mapping row | 5.2.4–5.2.6 | Pending — no route is mounted |
 | 5.2.8 | reconcile status and §8.1 after the code lands | `IMPLEMENTATION_STATUS.md`, this document | no section claims an unimplemented guarantee | all | **Done** — `1dff5fd`. Recorded 5.2.1–5.2.2 as implemented and 5.2.3–5.2.7 as pending. 5.2.3 then landed at `6963709`; §8.2 now reads 5.2.1–5.2.3 and 5.2.8 done, 5.2.4–5.2.7 pending |

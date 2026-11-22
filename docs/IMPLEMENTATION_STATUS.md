@@ -1148,7 +1148,7 @@ Phases 4.5 and 4.6 remain **not started**.
 
 ---
 
-## Phase 5 — Climate Data Foundation — **5.0 contracts implemented; 5.1 adapter foundation started; 5.2.1–5.2.4 and 5.2.8 implemented, 5.2.5–5.2.7 pending; 5.3–5.8 not started**
+## Phase 5 — Climate Data Foundation — **5.0 contracts implemented; 5.1 adapter foundation started; 5.2.1–5.2.5 and 5.2.8 implemented, 5.2.6–5.2.7 pending; 5.3–5.8 not started**
 
 Status: **5.0 partially implemented.** Phase 5.0 added contract and resolver code
 to `packages/contracts`, with tests. It added no migration, Prisma model, route,
@@ -1159,11 +1159,11 @@ design is `docs/architecture/climate-data-foundation.md`.
 and the job-lifecycle interface remain. 5.1 has begun: `@agroclimate/weather-core`
 exists with a transport, a failure union, one real provider adapter (SEAS5 monthly),
 and a monthly normalizer. Nothing here claims an ingestion job, a persisted record,
-an aggregation, or a climate endpoint — 5.2 has steps 5.2.1, 5.2.2, 5.2.3, 5.2.4 and
-5.2.8 implemented (literal hash fixtures, a registry keyed by `(provider, model)`, the
-`SpatialResolution` result contract, a weather-core registry holding one synthetic entry,
-and the status reconciliation); 5.2.5–5.2.7 are pending and 5.3 through 5.8 are **not
-started**.
+an aggregation, or a climate endpoint — 5.2 has steps 5.2.1–5.2.5 and 5.2.8 implemented
+(literal hash fixtures, a registry keyed by `(provider, model)`, the `SpatialResolution`
+result contract, a weather-core registry holding one synthetic entry, a tenant-scoped
+field anchor, and the status reconciliation); 5.2.6–5.2.7 are pending and 5.3 through
+5.8 are **not started**.
 
 | Item | State |
 |---|---|
@@ -1229,8 +1229,8 @@ of it is documentation; no sub-phase moved.
 What remains true: no migration is proposed by the phase; lead months 8–12 stay
 climatology; BMKG stays disabled by default; `bias_corrected` stays `false`.
 `open-decisions.md` §6 has since grown to `Q-P5-1`..`Q-P5-7`. Sub-phase 5.1 has
-started (adapter foundation only); 5.2 has steps 5.2.1–5.2.4 and 5.2.8 implemented and
-5.2.5–5.2.7 pending; 5.3–5.8 have no work started.
+started (adapter foundation only); 5.2 has steps 5.2.1–5.2.5 and 5.2.8 implemented and
+5.2.6–5.2.7 pending; 5.3–5.8 have no work started.
 
 ### Phase 5.0 — contracts and grid resolver — 2026-11-21
 
@@ -1268,17 +1268,18 @@ started (adapter foundation only); 5.2 has steps 5.2.1–5.2.4 and 5.2.8 impleme
 
 ---
 
-### Phase 5.2 — spatial resolution foundation — **5.2.1–5.2.4 and 5.2.8 implemented 2026-11-22; 5.2.5–5.2.7 pending**
+### Phase 5.2 — spatial resolution foundation — **5.2.1–5.2.5 and 5.2.8 implemented 2026-11-22; 5.2.6–5.2.7 pending**
 
 | Item | State |
 |---|---|
-| Status | **Partially implemented.** Five of eight steps are done: literal hash fixtures (5.2.1, `44b278c`), the `(provider, model)` registry with declared evidence (5.2.2, `965f528`), the `SpatialResolution` result contract (5.2.3, `6963709`), the weather-core registry instance (5.2.4), and the status reconciliation (5.2.8, `1dff5fd`). No centroid read, no route, no persistence, no migration. The design is `climate-data-foundation.md` §5.2.9 and `ADR-007` |
+| Status | **Partially implemented.** Six of eight steps are done: literal hash fixtures (5.2.1, `44b278c`), the `(provider, model)` registry with declared evidence (5.2.2, `965f528`), the `SpatialResolution` result contract (5.2.3, `6963709`), the weather-core registry instance (5.2.4), the tenant-scoped field anchor (5.2.5), and the status reconciliation (5.2.8, `1dff5fd`). No route, no persistence, no migration. The design is `climate-data-foundation.md` §5.2.9 and `ADR-007` |
 | Implemented — 5.2.1 | four literal `gridSpecHash` fixtures in `grid.test.ts`: 1° global, the same lattice under a second `gridId`, 0.25° global, 0.05° bounded. Editing the preimage, a preimage field, or `canonicalJson`'s treatment of one fails the suite; rewriting the object literal in another order does not, because keys are sorted |
 | Implemented — 5.2.2 | `GridKey`, `GridEvidence`, `GridRegistryEntry`; registry keyed by `(provider, model)` through nested maps; `specFor`, `resolve`, `evidenceFor`, `requireValidated`; duplicate pair → `duplicate_grid_spec`, unknown pair → `unknown_model` naming both components, synthetic entry on an ingest path → `grid_not_validated`. No model-only overload; `models()` removed with no replacement. `CONTRACTS_VERSION` and the package version are `0.2.0` |
 | Implemented — 5.2.3 | `6963709`. `SpatialResolution` and `GRID_RESOLUTION_ALGORITHM_VERSION = "grid-resolve/1"` (typed as the constant's literal type, not `string`); `createSpatialResolution(entry, request)` re-checks `entry.spec.gridSpecHash` before resolving, so a hand-built entry or an edited lattice fails with `grid_spec_hash_mismatch`; it copies the caller's coordinate into `requested` unchanged, takes `anchor` from the resolver's own node, freezes the result and both nested objects, and never upgrades `evidence` |
 | Implemented — 5.2.4 | `packages/weather-core/src/grids/{synthetic,registry}.ts`. Exactly one entry: provider `synthetic`, model `synthetic_1deg_20x20`, `gridId` `synthetic-1deg-20x20`, a bounded 20×20 one-degree lattice, `evidence: "synthetic"`. `syntheticGridRegistry` is `createGridRegistry([…])`, not a second implementation. The exact pair resolves deterministically; an unknown provider, an unknown model, and an unknown pair each fail with `unknown_model` naming both components; there is no model-only lookup and no fallback; `requireValidated` fails with `grid_not_validated`. The entry's `gridSpecHash` is pinned by a literal fixture, so editing the definition fails the suite |
+| Implemented — 5.2.5 | `selectFieldAnchor(tx, fieldId)` in `packages/database/src/fields.ts`, returning `FieldAnchor { lat, lon }` as six-decimal **strings**. `ST_Centroid(geom)` inside the statement, `ST_X` → `lon`, `ST_Y` → `lat`, rounded with `round(…::numeric, 6)` so the six decimals are PostgreSQL's, not JavaScript's. Tenant, soft-delete, and existence are the same SQL predicate as `findField`, so another tenant's field, a deleted field, and a missing one all return `null`. Takes the caller's `TenantTransaction`; opens none. **Not** a cell, not a served coordinate, and no `outlook_cells` or `field_outlook_cells` write |
 | Implemented — 5.2.8 | status reconciliation recorded in `1dff5fd`: the per-step status in §8.2, the §8.1 capability table, `OPEN-18` and `ADR-007`. No code change. It recorded 5.2.1–5.2.2 at the time; 5.2.3 landed later at `6963709` |
-| Not implemented — 5.2.5–5.2.7 | `ST_Centroid` field anchor; `upsertCell`; `POST /v1/fields/:id/resolve-cell` |
+| Not implemented — 5.2.6–5.2.7 | `upsertCell`; `POST /v1/fields/:id/resolve-cell` |
 | Evidence is declared, not verified | `GridEvidence` is a registry-entry value. `requireValidated` refuses an entry declared `synthetic`; nothing inspects the grade A + B documents behind `validated`. Admission to `validated` is an explicit review decision, and no provider has been admitted |
 | Registry identity | `(provider, model)`, not `model` alone (§5.2.9.1) — **implemented**. One model string may exist under two providers; one `gridId` may label several pairs |
 | `gridId` | a label on one definition, not unique and never a lookup key. `gridSpecHash` keeps `gridId` in its preimage because the hash pins a named definition |
@@ -1286,4 +1287,4 @@ started (adapter foundation only); 5.2 has steps 5.2.1–5.2.4 and 5.2.8 impleme
 | Longitude | four separate concepts — normalization, domain validation, wrapping, indexing — with a boundary table for `-180`, `180`, `0`, `360`, `-0.5`, `359.5`, and five questions left to the owner: three longitude, the `lonRange` bound, and the `spatialResolutionKm` hash preimage (§5.2.9.3, `OPEN-18`) |
 | `field_outlook_cells` | **not written in 5.2.** `distance_km` is `NOT NULL` and is a distance to a served coordinate that does not exist yet; `0` is never a placeholder (§5.2.8) |
 | Provider grids | all five still pending. Evidence is graded A (documented), B (measured), C (inferred), with a protocol; grade C never configures a row. The only registered entry is synthetic; no provider grid is configured and nothing is `validated` |
-| Next | `climate-data-foundation.md` §8.2 step 5.2.5: the field anchor via `ST_Centroid` |
+| Next | `climate-data-foundation.md` §8.2 step 5.2.6: `upsertCell` in a new `packages/database/src/climate.ts` |

@@ -287,6 +287,53 @@ export async function softDeleteField(tx: TenantTransaction, fieldId: string): P
   return rows.length > 0;
 }
 
+/**
+ * A field's geographic anchor: the centroid of its geometry, as six-decimal
+ * strings. `lat`/`lon`, never one packed value, and never a served coordinate or
+ * a grid-cell anchor — those are different concepts (§5.2.9.2).
+ *
+ * Strings, not numbers: `resolveGridCell` takes canonical decimal strings, and a
+ * JavaScript number cannot carry `-6.150000` — it would arrive as `-6.15` and the
+ * precision the SQL rounded to would be lost before the resolver saw it.
+ */
+export interface FieldAnchor {
+  readonly lat: string;
+  readonly lon: string;
+}
+
+/**
+ * The centroid of one live, tenant-visible field (`climate-data-foundation.md`
+ * §8.2 step 5.2.5).
+ *
+ * Rounding is PostgreSQL's: `round(ST_Y(...)::numeric, 6)` keeps a numeric scale
+ * of six, so its text form is exactly six decimals. Formatting in JavaScript
+ * would reintroduce the floating-point value the cast exists to avoid.
+ *
+ * `ST_X` is longitude and `ST_Y` is latitude; the statement names them that way
+ * so the axes cannot be swapped silently. Another tenant's field, a soft-deleted
+ * one, and a nonexistent one all return `null` — the same answer, so the call
+ * cannot be used to probe for a field it may not see.
+ */
+export async function selectFieldAnchor(
+  tx: TenantTransaction,
+  fieldId: string,
+): Promise<FieldAnchor | null> {
+  const rows = await tx.$queryRaw<{ lat: string; lon: string }[]>`
+    SELECT round(public.ST_Y(centroid)::numeric, 6)::text AS lat,
+           round(public.ST_X(centroid)::numeric, 6)::text AS lon
+      FROM (
+        SELECT public.ST_Centroid(geom) AS centroid
+          FROM app.fields
+         WHERE id = ${fieldId}::uuid
+           AND user_id = NULLIF(current_setting('app.user_id', true), '')::uuid
+           AND deleted_at IS NULL
+      ) AS anchor
+  `;
+
+  const row = rows[0];
+  return row === undefined ? null : { lat: row.lat, lon: row.lon };
+}
+
 interface RawField {
   readonly id: string;
   readonly farm_id: string;

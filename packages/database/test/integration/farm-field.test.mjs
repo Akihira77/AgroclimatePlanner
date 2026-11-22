@@ -31,6 +31,7 @@ import {
   findField,
   listFarms,
   listFields,
+  selectFieldAnchor,
   softDeleteFarm,
   softDeleteField,
   updateFarm,
@@ -695,5 +696,61 @@ describe("constraints and transactions", () => {
     created.fields.push(field.id);
     assert.equal(await deleting, "has_live_fields");
     assert.equal((await readFarm(farm.id)).deleted_at, null);
+  });
+});
+
+describe("field anchor", () => {
+  const SIX_DECIMALS = /^-?\d+\.\d{6}$/;
+
+  it("returns the centroid of a known square at six decimals", async () => {
+    const userId = await createUser("anchor-square");
+    const farm = await farmFor(userId, "Petak anchor");
+    const field = await fieldFor(userId, farm.id, "Kotak", SQUARE);
+
+    const anchor = await scope.withTenant(userId, (tx) => selectFieldAnchor(tx, field.id));
+
+    assert.notEqual(anchor, null, "the owning tenant sees its own anchor");
+    assert.equal(anchor.lat, "-6.150000");
+    assert.equal(anchor.lon, "106.850000");
+    assert.match(anchor.lat, SIX_DECIMALS);
+    assert.match(anchor.lon, SIX_DECIMALS);
+    // Axes in order: latitude is the small negative, longitude the large positive.
+    // A swapped result would be `lon = -6.15`, which both assertions below reject.
+    assert.ok(Number(anchor.lat) < 0, "latitude is the negative component");
+    assert.ok(Number(anchor.lon) > 100, "longitude is the positive component");
+  });
+
+  it("returns null for another tenant's field instead of its coordinates", async () => {
+    const ownerId = await createUser("anchor-owner");
+    const strangerId = await createUser("anchor-stranger");
+    const farm = await farmFor(ownerId, "Milik A");
+    const field = await fieldFor(ownerId, farm.id, "Rahasia", SQUARE);
+
+    assert.notEqual(
+      await scope.withTenant(ownerId, (tx) => selectFieldAnchor(tx, field.id)),
+      null,
+      "the owner can read it",
+    );
+    assert.equal(await scope.withTenant(strangerId, (tx) => selectFieldAnchor(tx, field.id)), null);
+  });
+
+  it("returns null once the field is soft-deleted", async () => {
+    const userId = await createUser("anchor-deleted");
+    const farm = await farmFor(userId, "Petak dihapus");
+    const field = await fieldFor(userId, farm.id, "Sementara", SQUARE);
+
+    assert.notEqual(await scope.withTenant(userId, (tx) => selectFieldAnchor(tx, field.id)), null);
+    assert.equal(await scope.withTenant(userId, (tx) => softDeleteField(tx, field.id)), true);
+    assert.equal(await scope.withTenant(userId, (tx) => selectFieldAnchor(tx, field.id)), null);
+  });
+
+  it("returns null for a field that never existed", async () => {
+    const userId = await createUser("anchor-missing");
+    assert.equal(
+      await scope.withTenant(userId, (tx) =>
+        selectFieldAnchor(tx, "00000000-0000-4000-8000-000000000000"),
+      ),
+      null,
+    );
   });
 });

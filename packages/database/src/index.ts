@@ -43,11 +43,13 @@ export {
   findField,
   listAllFields,
   listFields,
+  selectFieldAnchor,
   softDeleteField,
   updateField,
 } from "./fields.js";
 export type {
   Field,
+  FieldAnchor,
   FieldCreate,
   FieldListOptions,
   FieldPage,
