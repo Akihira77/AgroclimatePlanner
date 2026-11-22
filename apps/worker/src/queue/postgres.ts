@@ -160,6 +160,11 @@ export function createPostgresQueue(options: PostgresQueueOptions): JobQueue {
     },
 
     async succeed(job: ClaimedJob, tx: SqlExecutor): Promise<boolean> {
+      // `lease_expires_at > now()` belongs in the same guard as the token: the
+      // reaper runs on a timer, so an expired lease keeps its token and
+      // `status = 'running'` for up to one interval. Without the expiry check a
+      // worker whose lease lapsed could finish work it no longer owns, and race
+      // the reaper to the terminal write.
       const rows = await tx.$queryRaw<{ id: string }[]>`
         UPDATE app.jobs
            SET status           = 'succeeded',
@@ -171,6 +176,7 @@ export function createPostgresQueue(options: PostgresQueueOptions): JobQueue {
          WHERE id = ${job.id}::uuid
            AND lease_token = ${job.leaseToken}::uuid
            AND status = 'running'
+           AND lease_expires_at > now()
         RETURNING id::text AS "id"
       `;
       return rows[0] !== undefined;
@@ -202,6 +208,7 @@ export function createPostgresQueue(options: PostgresQueueOptions): JobQueue {
            WHERE id = ${job.id}::uuid
              AND lease_token = ${job.leaseToken}::uuid
              AND status = 'running'
+             AND lease_expires_at > now()
           RETURNING id::text AS "id"
         `;
         return rows[0] !== undefined;
@@ -218,6 +225,7 @@ export function createPostgresQueue(options: PostgresQueueOptions): JobQueue {
          WHERE id = ${job.id}::uuid
            AND lease_token = ${job.leaseToken}::uuid
            AND status = 'running'
+           AND lease_expires_at > now()
         RETURNING id::text AS "id"
       `;
       return rows[0] !== undefined;

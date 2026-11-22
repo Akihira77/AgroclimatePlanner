@@ -337,6 +337,15 @@ export function createRunner(options: RunnerOptions): Runner {
     const job = await queue.claim({ leaseMs, kinds });
     if (job === null) return "idle";
 
+    // SIGTERM can land while the claim is in flight. The handler has not begun,
+    // so releasing is safe and correct; executing here would start work that the
+    // shutdown path is no longer waiting for.
+    if (stopped) {
+      await queue.release(job);
+      log("claim_abandoned", { jobId: job.id, kind: job.kind });
+      return "idle";
+    }
+
     log("job_claimed", { jobId: job.id, kind: job.kind, attempt: job.attempt });
     await execute(job);
     return "handled";

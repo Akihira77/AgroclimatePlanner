@@ -11,7 +11,8 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { after, before, beforeEach, describe, it } from "node:test";
 
-import { createPrismaClient } from "@agroclimate/database";
+import { ingestionVersionOf } from "@agroclimate/contracts";
+import { createPrismaClient, markIngestionStatus } from "@agroclimate/database";
 
 import { createPostgresQueue } from "../../dist/queue/postgres.js";
 import { createRunner } from "../../dist/runner.js";
@@ -47,6 +48,81 @@ async function expiredJob({ attempt = 1, maxAttempts = 3, ingestionRunId = null 
   return rows[0].id;
 }
 
+/** An expired lease whose token is still the one the stale worker holds. */
+async function expiredJobWithToken({ attempt = 1, maxAttempts = 3, ingestionRunId = null } = {}) {
+  const rows = await system.$queryRaw`
+    INSERT INTO app.jobs (kind, idempotency_key, payload, status, attempt, max_attempts,
+                          lease_token, lease_expires_at, ingestion_run_id)
+    VALUES ('maintenance', ${key(randomUUID())}, '{}'::jsonb, 'running',
+            ${attempt}, ${maxAttempts}, gen_random_uuid(), now() - interval '1 second',
+            ${ingestionRunId}::uuid)
+    RETURNING id::text AS "id", lease_token::text AS "leaseToken"
+  `;
+  return rows[0];
+}
+
+/** The `ClaimedJob` a worker would still be holding after its lease lapsed. */
+function claimedShape({ id, leaseToken }, attempt = 1, maxAttempts = 3) {
+  return {
+    id,
+    kind: "maintenance",
+    payload: {},
+    attempt,
+    maxAttempts,
+    leaseToken,
+    leaseExpiresAt: new Date(Date.now() - 1_000),
+  };
+}
+
+let runSeq = 0;
+
+/**
+ * A fresh forecast run plus a `running` IngestionRun, for the cases that must
+ * show a refused job write also refusing the run write.
+ */
+async function createForecastRun() {
+  runSeq += 1;
+  const provider = `audit53_${token}`;
+  const initializedAt = new Date(Date.UTC(2026, 9, 1) + runSeq * 3_600_000);
+  const inserted = await system.$queryRaw`
+    INSERT INTO app.forecast_runs (provider, model, product, initialized_at, horizon_end, received_at)
+    VALUES (${provider}, 'm', 'seasonal', ${initializedAt},
+            ${new Date(initializedAt.getTime() + 30 * 86_400_000)}, now())
+    ON CONFLICT (provider, model, product, initialized_at) DO NOTHING
+    RETURNING id::text AS "id"
+  `;
+  return (
+    inserted[0]?.id ??
+    (
+      await owner.$queryRaw`
+        SELECT id::text AS "id" FROM app.forecast_runs
+         WHERE provider = ${provider} AND model = 'm' AND product = 'seasonal'
+           AND initialized_at = ${initializedAt}
+      `
+    )[0].id
+  );
+}
+
+async function createRunningIngestion() {
+  const forecastRunId = await createForecastRun();
+  const hash = randomUUID().replace(/-/g, "").repeat(2);
+  const runs = await system.$queryRaw`
+    INSERT INTO app.ingestion_runs
+      (forecast_run_id, adapter_version, normalizer_version,
+       target_selector_hash, ingestion_version, status)
+    VALUES (${forecastRunId}::uuid, 'audit-adapter', 'audit-normalizer', ${hash}, ${hash}, 'running')
+    RETURNING id::text AS "id"
+  `;
+  return { forecastRunId, runId: runs[0].id, targetSelectorHash: hash };
+}
+
+async function runRowOf(id) {
+  const rows = await owner.$queryRaw`
+    SELECT status, attempt, finished_at FROM app.ingestion_runs WHERE id = ${id}::uuid
+  `;
+  return rows[0];
+}
+
 before(async () => {
   await owner.$queryRaw`SELECT 1`;
 });
@@ -59,11 +135,12 @@ beforeEach(async () => {
 });
 
 after(async () => {
+  await owner.$queryRaw`DELETE FROM app.jobs WHERE idempotency_key LIKE ${"test:" + token + ":%"}`;
   await owner.$queryRaw`
-    DELETE FROM app.jobs
-     WHERE kind = 'maintenance' AND idempotency_key LIKE ${"test:" + token + ":%"}
-        OR kind = 'verify' AND idempotency_key LIKE ${"test:" + token + ":%"}
+    DELETE FROM app.ingestion_runs
+     WHERE forecast_run_id IN (SELECT id FROM app.forecast_runs WHERE provider = ${"audit53_" + token})
   `;
+  await owner.$queryRaw`DELETE FROM app.forecast_runs WHERE provider = ${"audit53_" + token}`;
   await system.$disconnect();
   await owner.$disconnect();
 });
@@ -261,6 +338,42 @@ describe("reaper", () => {
     assert.equal(row.last_error.code, "lease_expired");
   });
 
+  it("fails the run when it kills the job that owned it", async () => {
+    const ingestion = await createRunningIngestion();
+    const job = await expiredJobWithToken({
+      attempt: 3,
+      maxAttempts: 3,
+      ingestionRunId: ingestion.runId,
+    });
+
+    await queue.reapExpired();
+
+    const jobRow = await rowOf(job.id);
+    assert.equal(jobRow.status, "dead");
+
+    const run = await runRowOf(ingestion.runId);
+    assert.equal(run.status, "failed");
+    assert.ok(run.finished_at instanceof Date);
+  });
+
+  it("leaves a terminal run alone when it kills a job", async () => {
+    const ingestion = await createRunningIngestion();
+    await owner.$queryRaw`
+      UPDATE app.ingestion_runs SET status = 'succeeded', finished_at = now()
+       WHERE id = ${ingestion.runId}::uuid
+    `;
+    const job = await expiredJobWithToken({
+      attempt: 3,
+      maxAttempts: 3,
+      ingestionRunId: ingestion.runId,
+    });
+
+    await queue.reapExpired();
+
+    assert.equal((await rowOf(job.id)).status, "dead");
+    assert.equal((await runRowOf(ingestion.runId)).status, "succeeded");
+  });
+
   it("does not touch a live lease", async () => {
     await queue.enqueue({ kind: "verify", idempotencyKey: key("live"), payload: {} });
     const claimed = await queue.claim({ leaseMs: 60_000, kinds: ["verify"] });
@@ -399,5 +512,183 @@ describe("runner", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     await runner.stop();
     assert.equal(aborted, true);
+  });
+});
+
+/**
+ * The stale-owner window: a lease that expired but that the reaper has not yet
+ * requeued. The token and `status = 'running'` are still exactly what the stale
+ * worker holds, so only `lease_expires_at` can refuse the write.
+ */
+describe("expired lease ownership", () => {
+  it("refuses success with an expired lease, before any reaper pass", async () => {
+    const job = await expiredJobWithToken();
+
+    const owned = await system.$transaction((tx) => queue.succeed(claimedShape(job), tx));
+    assert.equal(owned, false);
+
+    const row = await rowOf(job.id);
+    assert.equal(row.status, "running");
+    assert.equal(row.leaseToken, job.leaseToken);
+  });
+
+  it("refuses a retryable failure with an expired lease", async () => {
+    const job = await expiredJobWithToken();
+
+    const owned = await system.$transaction((tx) =>
+      queue.fail(
+        claimedShape(job),
+        { code: "slow", message: "slow", retryable: true },
+        { retryable: true, retryAfterMs: 60_000 },
+        tx,
+      ),
+    );
+    assert.equal(owned, false);
+
+    const row = await rowOf(job.id);
+    assert.equal(row.status, "running");
+    assert.equal(row.attempt, 1);
+  });
+
+  it("refuses a terminal failure and rolls the run transition back", async () => {
+    const ingestion = await createRunningIngestion();
+    const job = await expiredJobWithToken({ ingestionRunId: ingestion.runId });
+    const claimed = claimedShape(job);
+
+    await assert.rejects(
+      () =>
+        system.$transaction(async (tx) => {
+          await markIngestionStatus(tx, {
+            runId: ingestion.runId,
+            to: "failed",
+            error: { code: "late", message: "late" },
+          });
+          const owned = await queue.fail(
+            claimed,
+            { code: "late", message: "late", retryable: false },
+            { terminal: true },
+            tx,
+          );
+          if (!owned) throw new Error("lease lost");
+        }),
+      /lease lost/,
+    );
+
+    const run = await runRowOf(ingestion.runId);
+    assert.equal(run.status, "running", "the run write must roll back with the job write");
+    assert.equal(run.finished_at, null);
+    assert.equal((await rowOf(job.id)).status, "running");
+  });
+
+  it("still succeeds a live lease", async () => {
+    await queue.enqueue({ kind: "maintenance", idempotencyKey: key("live-ok"), payload: {} });
+    const claimed = await queue.claim({ leaseMs: 60_000, kinds: ["maintenance"] });
+    assert.ok(claimed);
+
+    assert.equal(await system.$transaction((tx) => queue.succeed(claimed, tx)), true);
+    const row = await rowOf(claimed.id);
+    assert.equal(row.status, "succeeded");
+    assert.ok(row.finished_at instanceof Date);
+  });
+
+  it("still schedules a retry on a live lease", async () => {
+    await queue.enqueue({ kind: "maintenance", idempotencyKey: key("live-retry"), payload: {} });
+    const claimed = await queue.claim({ leaseMs: 60_000, kinds: ["maintenance"] });
+    assert.ok(claimed);
+
+    const owned = await system.$transaction((tx) =>
+      queue.fail(
+        claimed,
+        { code: "slow", message: "slow", retryable: true },
+        { retryable: true, retryAfterMs: 60_000 },
+        tx,
+      ),
+    );
+    assert.equal(owned, true);
+
+    const row = await rowOf(claimed.id);
+    assert.equal(row.status, "queued");
+    assert.equal(row.attempt, 1);
+    assert.ok(row.run_at > new Date());
+  });
+
+  it("still kills a job on a live lease", async () => {
+    await queue.enqueue({ kind: "maintenance", idempotencyKey: key("live-dead"), payload: {} });
+    const claimed = await queue.claim({ leaseMs: 60_000, kinds: ["maintenance"] });
+    assert.ok(claimed);
+
+    const owned = await system.$transaction((tx) =>
+      queue.fail(
+        claimed,
+        { code: "bad", message: "bad", retryable: false },
+        { terminal: true },
+        tx,
+      ),
+    );
+    assert.equal(owned, true);
+
+    const row = await rowOf(claimed.id);
+    assert.equal(row.status, "dead");
+    assert.equal(row.last_error.code, "bad");
+  });
+
+  it("leaves the run running when the lease expires mid-handler", async () => {
+    const forecastRunId = await createForecastRun();
+    const targetSelectorHash = randomUUID().replace(/-/g, "").repeat(2);
+
+    const job = await queue.enqueue({
+      kind: "ingest.climate",
+      idempotencyKey: key("late-run"),
+      payload: {
+        forecastRunId,
+        adapterVersion: "audit-adapter",
+        normalizerVersion: "audit-normalizer",
+        targetSelectorHash,
+      },
+    });
+
+    const runner = createRunner({
+      db: system,
+      queue,
+      leaseMs: 250,
+      heartbeatMs: 60_000,
+      pollIntervalMs: 10,
+      shutdownGraceMs: 500,
+      reaperIntervalMs: 0,
+      handlers: [
+        {
+          kind: "ingest.climate",
+          opensIngestionRun: true,
+          async handle() {
+            // Longer than the lease, shorter than the heartbeat: the worker is
+            // still working when ownership lapses.
+            await new Promise((resolve) => setTimeout(resolve, 450));
+            return {
+              outcome: "terminal",
+              error: { code: "late", message: "late", retryable: false },
+            };
+          },
+        },
+      ],
+    });
+
+    assert.equal(await runner.runOnce(), "handled");
+
+    const jobRow = await rowOf(job.id);
+    assert.equal(jobRow.status, "running", "the stale worker must not finish the job");
+    assert.ok(jobRow.leaseToken !== null);
+
+    const version = ingestionVersionOf({
+      adapterVersion: "audit-adapter",
+      normalizerVersion: "audit-normalizer",
+      targetSelectorHash,
+    });
+    const runs = await owner.$queryRaw`
+      SELECT status, finished_at FROM app.ingestion_runs
+       WHERE forecast_run_id = ${forecastRunId}::uuid AND ingestion_version = ${version}
+    `;
+    assert.equal(runs.length, 1);
+    assert.equal(runs[0].status, "running");
+    assert.equal(runs[0].finished_at, null);
   });
 });
