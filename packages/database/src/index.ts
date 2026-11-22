@@ -57,6 +57,8 @@ export type {
   FieldUpdate,
   PolygonGeometry,
 } from "./fields.js";
+export { OutlookCellIdentityError, upsertCell } from "./climate.js";
+export type { OutlookCellIdentity } from "./climate.js";
 export { createTenantScope, normaliseTenantId, TenantContextError } from "./tenant.js";
 export type { TenantScope, TenantTransaction } from "./tenant.js";
 

@@ -330,10 +330,11 @@ the resolution-result cases execute in `packages/contracts/src/grid.test.ts`.
 `packages/weather-core/src/grids/` holds `syntheticGridRegistry` — one entry, labelled
 `synthetic`, resolving provider `synthetic` model `synthetic_1deg_20x20`.
 
-**Still unbuilt:** every field→cell write and every real provider grid. The registry
-exists, but only the synthetic entry is in it; the field anchor exists, but nothing
-resolves it to a cell yet. A model cannot ingest until its configuration reaches grade
-A + B, and `validated` is a review decision the code does not make.
+**Still unbuilt:** the route, every field→cell write, and every real provider grid.
+The registry exists, but only the synthetic entry is in it; the field anchor exists and
+`upsertCell` stores an identity triple, but nothing joins the two yet. A model cannot
+ingest until its configuration reaches grade A + B, and `validated` is a review decision
+the code does not make.
 
 **Revised would-be-settled-by:** a validated `GridSpec` per `(provider, model)` with
 grade A + B evidence, not a resolution figure and not one measured pair.
