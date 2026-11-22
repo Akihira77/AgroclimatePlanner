@@ -4,14 +4,15 @@
   Phase 5.2 corrective design pass. Acceptance was a **documentation gate at the time**:
   no contract was changed, no registry instance existed, no centroid read existed, no
   route existed, and no cell was persisted.
-- Current state after `965f528` (2026-11-22): **D1, D2 and D5's structure are
+- Current state (2026-11-22): **D1, D2, D3's contract and D5's structure are
   implemented.** The registry is keyed by `(provider, model)` with declared
   `GridEvidence`, `requireValidated` refuses a `synthetic` entry, `models()` is gone,
-  and four literal `gridSpecHash` fixtures pin the preimage. `CONTRACTS_VERSION` and the
-  package version are `0.2.0`. Still absent: `SpatialResolution` (5.2.3), the registry
-  instance (5.2.4), the centroid read (5.2.5), persistence (5.2.6), and the route
-  (5.2.7). No provider grid is configured, nothing is registered as `validated`, and no
-  `field_outlook_cells` row is written by any code.
+  four literal `gridSpecHash` fixtures pin the preimage, and `SpatialResolution` exists
+  with `GRID_RESOLUTION_ALGORITHM_VERSION = "grid-resolve/1"`. `CONTRACTS_VERSION` and
+  the package version are `0.2.0`. Still absent: the registry instance (5.2.4), the
+  centroid read (5.2.5), persistence (5.2.6), and the route (5.2.7). No provider grid is
+  configured, nothing is registered as `validated`, and no `field_outlook_cells` row is
+  written by any code.
 - Date: 2026-11-21 (decision and acceptance), recorded here 2026-11-21, implementation
   status updated 2026-11-22
 - Depends on: ADR-001 (D8, provider strategy and the per-model rounding rule),
@@ -28,8 +29,9 @@
   database impact (`field_outlook_cells`). Those sections are corrected in place;
   this ADR is the durable record of why.
 - Implemented by: Phase 5.2, steps 5.2.1–5.2.8 of
-  `climate-data-foundation.md` §8.2. 5.2.1 landed at `44b278c`, 5.2.2 at `965f528`, and
-  5.2.8 at `1dff5fd`; 5.2.3–5.2.7 are not started.
+  `climate-data-foundation.md` §8.2. 5.2.1 landed at `44b278c`, 5.2.2 at `965f528`,
+  5.2.3 in the phase's third change, and 5.2.8 at `1dff5fd`; 5.2.4–5.2.7 are not
+  started.
 - Register entry: `OPEN-18` — the generic half stays approved and unchanged; the
   provider/model half stays `BLOCKED_EXTERNAL_INPUT`.
 

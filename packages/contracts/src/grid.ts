@@ -591,3 +591,73 @@ export function createGridRegistry(entries: readonly GridRegistryEntry[]): GridR
     },
   });
 }
+
+/**
+ * Semantics version of cell resolution — `docs/architecture/climate-data-foundation.md`
+ * §5.2.9.2, `ADR-007` D3.
+ *
+ * Bump it when a change can move a request to a different cell, or change how a
+ * result reproduces: the index arithmetic, the coordinate domain and wrapping rules,
+ * the anchor derivation, or the `cellKey` format. It is deliberately **not** the
+ * package version — a dependency bump that leaves cells alone must not re-point
+ * stored identities — and it is deliberately **not** `gridSpecHash`, which pins a
+ * configuration rather than the algorithm reading it.
+ */
+export const GRID_RESOLUTION_ALGORITHM_VERSION = "grid-resolve/1";
+
+export type GridResolutionAlgorithmVersion = typeof GRID_RESOLUTION_ALGORITHM_VERSION;
+
+/**
+ * The reproducible result of mapping one requested coordinate to a cell.
+ *
+ * `requested` is the caller's coordinate, unchanged — never the anchor and never a
+ * normalized form. `anchor` is the cell node the resolver computed. There is no
+ * served coordinate and no `distanceKm`: neither exists before the first ingest, and
+ * `0` is not a placeholder for an unknown distance (`ADR-007` D4).
+ */
+export interface SpatialResolution {
+  readonly provider: string;
+  readonly model: string;
+  readonly gridId: string;
+  readonly gridSpecHash: string;
+  readonly resolutionAlgorithmVersion: GridResolutionAlgorithmVersion;
+  readonly evidence: GridEvidence;
+  readonly requested: {
+    readonly lat: string;
+    readonly lon: string;
+  };
+  readonly anchor: {
+    readonly lat: string;
+    readonly lon: string;
+  };
+  readonly i: number;
+  readonly j: number;
+  readonly cellKey: string;
+}
+
+/**
+ * Assembles the result from an already-validated registry entry. It adds no
+ * validation of its own: the entry's spec carries its hash, and `resolveGridCell`
+ * rejects an unparseable or out-of-grid request, so a failed resolution throws and
+ * mints nothing. The evidence is copied as declared; this function does not decide
+ * whether a grid is fit to ingest.
+ */
+export function createSpatialResolution(
+  entry: GridRegistryEntry,
+  request: GridResolutionRequest,
+): SpatialResolution {
+  const cell = resolveGridCell(entry.spec, request);
+  return Object.freeze({
+    provider: entry.provider,
+    model: entry.model,
+    gridId: cell.gridId,
+    gridSpecHash: cell.gridSpecHash,
+    resolutionAlgorithmVersion: GRID_RESOLUTION_ALGORITHM_VERSION,
+    evidence: entry.evidence,
+    requested: Object.freeze({ lat: request.lat, lon: request.lon }),
+    anchor: Object.freeze({ lat: cell.nodeLat, lon: cell.nodeLon }),
+    i: cell.i,
+    j: cell.j,
+    cellKey: cell.cellKey,
+  });
+}

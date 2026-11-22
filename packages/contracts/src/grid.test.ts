@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   CellResolutionError,
+  GRID_RESOLUTION_ALGORITHM_VERSION,
   GridConfigurationError,
   SUPPORTED_GRID_ORIENTATIONS,
   assertGridSpecIntegrity,
   createGridRegistry,
+  createSpatialResolution,
   defineGridSpec,
   resolveGridCell,
   type GridEvidence,
   type GridRegistryEntry,
   type GridSpecInput,
+  type SpatialResolution,
 } from "../src/grid.js";
 
 /**
@@ -595,5 +598,80 @@ describe("grid registry — integrity", () => {
       { provider: "provider-a", model: "synthetic-1", spec: handed, evidence: "synthetic" },
     ]);
     expect(registry.specFor({ provider: "provider-a", model: "synthetic-1" })).not.toBe(handed);
+  });
+});
+
+describe("SpatialResolution — 5.2.3", () => {
+  const entry: GridRegistryEntry = registryEntry("provider-a", "synthetic-1");
+  const resolve = (request = { lat: "0.5", lon: "0.5" }) => createSpatialResolution(entry, request);
+
+  it("carries the one algorithm version, spelled exactly", () => {
+    expect(GRID_RESOLUTION_ALGORITHM_VERSION).toBe("grid-resolve/1");
+    expect(resolve().resolutionAlgorithmVersion).toBe("grid-resolve/1");
+  });
+
+  it("carries provider and model independently", () => {
+    const resolution = resolve();
+    expect(resolution.provider).toBe("provider-a");
+    expect(resolution.model).toBe("synthetic-1");
+  });
+
+  it("preserves the reviewed grid label and the spec hash", () => {
+    const resolution = resolve();
+    expect(resolution.gridId).toBe(entry.spec.gridId);
+    expect(resolution.gridSpecHash).toBe(entry.spec.gridSpecHash);
+  });
+
+  it("copies the declared evidence without upgrading it", () => {
+    expect(resolve().evidence).toBe("synthetic");
+    expect(
+      createSpatialResolution(registryEntry("provider-a", "v", {}, "validated"), {
+        lat: "0",
+        lon: "0",
+      }).evidence,
+    ).toBe("validated");
+  });
+
+  it("keeps the requested coordinate distinct from the anchor", () => {
+    const resolution = resolve({ lat: "0.500000", lon: "0.75" });
+    expect(resolution.requested).toEqual({ lat: "0.500000", lon: "0.75" });
+    expect(resolution.anchor).toEqual({ lat: "0.00", lon: "0.00" });
+    expect(resolution.requested.lat).not.toBe(resolution.anchor.lat);
+  });
+
+  it("reports the resolver's indices and canonical cell key", () => {
+    const resolution = resolve({ lat: "1.5", lon: "2.25" });
+    const cell = resolveGridCell(entry.spec, { lat: "1.5", lon: "2.25" });
+    expect({ i: resolution.i, j: resolution.j }).toEqual({ i: cell.i, j: cell.j });
+    expect(resolution.cellKey).toBe(cell.cellKey);
+    expect(resolution.cellKey).toBe("1.00,2.00");
+  });
+
+  it("exposes no served coordinate and no distance", () => {
+    const resolution = resolve();
+    for (const absent of ["servedCoordinate", "servedLat", "servedLon", "distanceKm"]) {
+      expect(resolution).not.toHaveProperty(absent);
+    }
+    // @ts-expect-error — the contract has no distance field; there is no ingest yet
+    void resolution.distanceKm;
+  });
+
+  it("freezes the result and both nested coordinates", () => {
+    const resolution: SpatialResolution = resolve();
+    expect(Object.isFrozen(resolution)).toBe(true);
+    expect(Object.isFrozen(resolution.requested)).toBe(true);
+    expect(Object.isFrozen(resolution.anchor)).toBe(true);
+    expect(() => {
+      (resolution as { cellKey: string }).cellKey = "tampered";
+    }).toThrow(TypeError);
+    expect(() => {
+      (resolution.requested as { lat: string }).lat = "1";
+    }).toThrow(TypeError);
+    expect(resolution.requested.lat).toBe("0.5");
+  });
+
+  it("mints nothing when the request cannot be resolved", () => {
+    expect(() => resolve({ lat: "1e3", lon: "0" })).toThrow(CellResolutionError);
+    expect(() => resolve({ lat: "100", lon: "0" })).toThrow(/out_of_grid/);
   });
 });
