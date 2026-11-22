@@ -13,9 +13,9 @@ adapter, no ingestion job, no climate route, no agronomy evaluation.
 | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Monorepo                                        | implemented — pnpm workspaces + Turborepo, three applications and two shared packages, pinned versions                                                      |
 | Contracts                                       | implemented — Zod schemas, provenance contract, canonical serialisation, SHA-256 golden vectors                                                             |
-| Database                                        | implemented — 23 tables in schema `app` (22 domain + `sessions`), RLS forced on every tenant-owned table, three explicit roles, hand-written SQL migrations |
+| Database                                        | implemented — 24 tables in schema `app` (23 domain + `sessions`), RLS forced on every tenant-owned table, three explicit roles, hand-written SQL migrations |
 | API                                             | implemented — health, auth (register, login, logout, CSRF), and tenant-scoped Farm and Field CRUD; no climate routes                                        |
-| Worker                                          | scaffold only — process starts, no queue, no job                                                                                                            |
+| Worker                                          | implemented — PostgreSQL queue, lease/reaper/retry runner, `IngestionRun` lifecycle; no provider handler yet (Phase 5.4)                                    |
 | Web                                             | scaffold only — Vite React shell, no screens                                                                                                                |
 | Weather ingestion, agronomy engine, AI briefing | not implemented — their tables exist and are documented, the code does not                                                                                  |
 

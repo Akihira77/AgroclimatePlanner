@@ -327,6 +327,9 @@ importers:
       '@agroclimate/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@agroclimate/database':
+        specifier: workspace:*
+        version: link:../../packages/database
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
@@ -359,6 +362,9 @@ importers:
 
   packages/database:
     dependencies:
+      '@agroclimate/contracts':
+        specifier: workspace:*
+        version: link:../contracts
       '@prisma/adapter-pg':
         specifier: 7.10.1
         version: 7.10.1

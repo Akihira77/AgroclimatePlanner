@@ -57,8 +57,42 @@ export type {
   FieldUpdate,
   PolygonGeometry,
 } from "./fields.js";
-export { OutlookCellIdentityError, upsertCell } from "./climate.js";
-export type { OutlookCellIdentity } from "./climate.js";
+export {
+  beginIngestionExecution,
+  markIngestionStatus,
+  OutlookCellIdentityError,
+  upsertCell,
+  upsertForecastRun,
+} from "./climate.js";
+export type {
+  BeginIngestionExecutionInput,
+  ForecastRunRecord,
+  IngestionExecution,
+  IngestionOutcome,
+  NewForecastRun,
+  OutlookCellIdentity,
+  SqlExecutor,
+  TerminalIngestionStatus,
+} from "./climate.js";
+export {
+  IngestionAlreadyOwnedError,
+  IngestionRunMissingError,
+  IngestionTerminalError,
+  InvariantViolationError,
+  isCheckViolation,
+  isTransientTransactionError,
+  isUniqueViolationOn,
+  JobRetryExhaustedError,
+  LeaseLostError,
+  PG_CHECK_VIOLATION,
+  PG_DEADLOCK_DETECTED,
+  PG_FOREIGN_KEY_VIOLATION,
+  PG_NOT_NULL_VIOLATION,
+  PG_SERIALIZATION_FAILURE,
+  PG_UNIQUE_VIOLATION,
+  pgErrorInfo,
+  TransientTransactionError,
+} from "./run-errors.js";
 export { createTenantScope, normaliseTenantId, TenantContextError } from "./tenant.js";
 export type { TenantScope, TenantTransaction } from "./tenant.js";
 

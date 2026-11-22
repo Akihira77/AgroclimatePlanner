@@ -82,7 +82,7 @@ The three tables that matter for the boundary:
 | Who owns `app.fields`? | `migration_owner` (the schema owner). Never a runtime role. |
 | Who may read another tenant's field? | Nobody holding `app_api` — RLS denies row-level access. |
 | May `app_system` read a field? | No. It holds `BYPASSRLS` and **zero** grants on tenant tables. |
-| May `app_api` read provider weather? | Yes — `SELECT` only, on the 12 global tables, because the read model needs it. |
+| May `app_api` read provider weather? | Yes — `SELECT` only, on the twelve readable climate tables, because the read model needs it. `app.jobs` is the exception: `app_system`-only, because user-facing ingestion state is read from `app.ingestion_runs`. |
 | May `app_api` write provider weather? | No. Ingest runs as `app_system`. |
 | May `app_api` write the catalog? | No. Catalog rows are seeded by `migration_owner` (D13). |
 

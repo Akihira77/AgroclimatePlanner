@@ -2,15 +2,18 @@
   "name": "@agroclimate/worker",
   "version": "0.0.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src",
-    "test": "node -e \"console.log('[worker] no tests in Phase 2.0')\"",
+    "test": "pnpm build && node --test test/unit/*.test.mjs",
+    "test:integration": "pnpm build && node --test test/integration/*.test.mjs",
     "start": "node dist/main.js"
   },
   "dependencies": {
-    "@agroclimate/contracts": "workspace:*"
+    "@agroclimate/contracts": "workspace:*",
+    "@agroclimate/database": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "catalog:",

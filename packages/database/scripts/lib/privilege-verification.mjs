@@ -67,6 +67,15 @@ export const GLOBAL_TABLES = [
   "climatology_normals",
 ];
 
+/**
+ * Tables the request path must not read. `app.jobs` is the queue: user-facing
+ * ingestion state is read from `app.ingestion_runs`, which `app_api` already
+ * holds SELECT on. Kept out of `GLOBAL_TABLES` on purpose — that list drives a
+ * `{ app_api: R, app_system: RW }` expectation, and inheriting it would grant a
+ * privilege nobody asked for.
+ */
+export const SYSTEM_ONLY_TABLES = ["jobs"];
+
 /** Identifiers here are generated, never user input — but assert before quoting. */
 const SAFE_IDENTIFIER = /^[a-z][a-z0-9_]{0,50}$/;
 
@@ -1907,6 +1916,7 @@ export async function runPrivilegeVerification({
         table,
         { app_api: R, app_system: RW },
       ]),
+      ...SYSTEM_ONLY_TABLES.map((table) => [table, { app_api: NONE, app_system: RW }]),
     ]);
 
     for (const [table, expectations] of Object.entries(EXPECTED)) {
@@ -2009,7 +2019,7 @@ export async function runPrivilegeVerification({
 
     // RLS on a table with no owner column would only lock migration_owner out of
     // its own seed or ingest, so `none` in the matrix is load-bearing.
-    for (const table of [...REFERENCE_TABLES, ...GLOBAL_TABLES]) {
+    for (const table of [...REFERENCE_TABLES, ...GLOBAL_TABLES, ...SYSTEM_ONLY_TABLES]) {
       const { rows } = await owner.query(
         `select c.relrowsecurity as rls
            from pg_class c join pg_namespace n on n.oid = c.relnamespace

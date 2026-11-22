@@ -67,6 +67,12 @@ export const canonicalArrayRules: Readonly<Record<string, SetRule | SequenceRule
   cellKeys: { kind: "set", dedupe: true },
   observationIds: { kind: "set", dedupe: true },
 
+  // The target selector of one ingestion (`targetSelectorSchema`): a set of
+  // (cell, variable) pairs, not two parallel arrays. Sorting on the tuple is
+  // what makes the hash independent of emission order while keeping the pair
+  // intact; dedupe removes an exactly repeated pair and nothing else.
+  cells: { kind: "set", orderBy: ["cellKey", "variable"], dedupe: true },
+
   // Ordered, not set-like: the temporal partition invariant makes position
   // meaningful. Canonicalisation neither sorts nor repairs this collection —
   // the domain validator owns chronology, overlap, and coverage.

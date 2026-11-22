@@ -393,6 +393,7 @@ model IngestionRun {
 
   forecastRun    ForecastRun     @relation(fields: [forecastRunId], references: [id])
   weatherRecords WeatherRecord[]
+  jobs           Job[]
 
   // A retry must not mint a row; the unique key deliberately excludes `attempt`.
   @@unique([forecastRunId, ingestionVersion], map: "ingestion_runs_identity_key")
@@ -401,6 +402,37 @@ model IngestionRun {
   // no Prisma equivalent; created in SQL only.
   @@schema("app")
   @@map("ingestion_runs")
+}
+
+/// Phase 5.3 queue row (`background-processing.md` §2.1). The worker reaches it
+/// through `$queryRaw`, because claiming needs `FOR UPDATE SKIP LOCKED`; the
+/// model exists for typed inspection and `prisma studio`, not for writes.
+model Job {
+  id             String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  kind           String
+  idempotencyKey String    @map("idempotency_key")
+  payload        Json      @default("{}")
+  status         String    @default("queued")
+  attempt        Int       @default(0)
+  maxAttempts    Int       @default(5) @map("max_attempts")
+  runAt          DateTime  @default(now()) @map("run_at") @db.Timestamptz(6)
+  leaseToken     String?   @map("lease_token") @db.Uuid
+  leaseExpiresAt DateTime? @map("lease_expires_at") @db.Timestamptz(6)
+  ingestionRunId String?   @map("ingestion_run_id") @db.Uuid
+  lastError      Json?     @map("last_error")
+  finishedAt     DateTime? @map("finished_at") @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  ingestionRun IngestionRun? @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict, map: "jobs_ingestion_run_fkey")
+
+  @@unique([kind, idempotencyKey], map: "jobs_identity_key")
+  @@index([ingestionRunId], map: "jobs_ingestion_run_idx")
+  // jobs_active_ingestion_idx (unique partial on ingestion_run_id WHERE
+  // status = 'running') and the three claim/lease indexes have no Prisma
+  // equivalent; created in SQL only.
+  @@schema("app")
+  @@map("jobs")
 }
 
 model WeatherRecord {

@@ -1148,10 +1148,10 @@ Phases 4.5 and 4.6 remain **not started**.
 
 ---
 
-## Phase 5 — Climate Data Foundation — **5.0 complete; 5.1 partially implemented; 5.2 complete (5.2.1–5.2.8); 5.3–5.8 not started**
+## Phase 5 — Climate Data Foundation — **5.0 complete; 5.1 partially implemented; 5.2 complete (5.2.1–5.2.8); 5.3 complete; 5.4–5.8 not started**
 
 Status: **5.0 complete; 5.1 partially implemented; 5.2 complete, all eight steps;
-5.3–5.8 not started.** 5.0 delivered the contract and resolver code in
+5.3 complete; 5.4–5.8 not started.** 5.0 delivered the contract and resolver code in
 `packages/contracts` with tests, and added no migration, Prisma model, route, grant,
 policy, worker, queue, or persistence. It is complete as delivered: the `OPEN-14`
 vocabulary freeze remains a deferred open decision rather than a missing deliverable,
@@ -1162,27 +1162,30 @@ one real provider adapter (SEAS5 monthly), and a monthly normalizer. 5.2 is comp
 literal hash fixtures, a registry keyed by `(provider, model)`, the `SpatialResolution`
 result contract, a weather-core registry holding one synthetic entry, a tenant-scoped
 field anchor, cell identity persistence, the resolution route, and the status
-reconciliation. 5.3 through 5.8 are **not started**. Nothing here claims an ingestion
-job, a persisted weather record, an aggregation, a served coordinate, or a
+reconciliation. 5.3 is complete: the `app.jobs` migration, the PostgreSQL queue, the
+worker runner, and the `IngestionRun` lifecycle, with no handler registered. 5.4
+through 5.8 are **not started**. Nothing here claims an executed ingestion, a
+persisted weather record, an aggregation, a served coordinate, or a
 `field_outlook_cells` row. The route still resolves nothing for a real model: no provider
 grid is configured, so only a `synthetic` pair reaches the database, where the provider
 CHECK refuses it.
 
-Implementation evidence at `8a6f2ec` (2026-11-22): contracts **392** tests, weather-core
-**52**, database integration **77**, API **206** unit + **74** integration; root
-`typecheck` and `lint` clean, `prettier --check` and `git diff --check` clean. No test
-calls a provider.
+Implementation evidence after 5.3 (2026-11-22): contracts **408** tests, weather-core
+**52**, database unit **34** + integration **91**, API **206** unit + **74**
+integration, worker **2** unit + **18** integration; root `typecheck` and `lint`
+clean, `prettier --check` clean, `db:verify` **508** assertions, `test:schema` **23**.
+No test calls a provider.
 
 | Item | State |
 |---|---|
 | Climate plane architecture, adapter boundary, storage and read path | designed (§5); cell resolution and cell identity implemented (5.2), storage and read path not |
 | Source evaluation, licensing posture, evidence freshness | designed (§4); evidence dated 2026-11-18 and **not re-tested** |
 | Reconciliation of the 13 existing authorities | designed (§2), with three documented-but-absent items (§3.5) |
-| Implementation sequence, 9 sub-phases | §8; 5.0–5.2 delivered, 5.3–5.8 not started |
-| Verification strategy | specified (§7); the 5.0–5.2 portions are executed (evidence above), 5.4+ not written |
+| Implementation sequence, 9 sub-phases | §8; 5.0–5.3 delivered, 5.4–5.8 not started |
+| Verification strategy | specified (§7); the 5.0–5.3 portions are executed (evidence above), 5.4+ not written |
 | Decision register | 8 `OPEN-*` items assessed; 7 `Q-P5-*` decisions recorded; **none closed** (§9) |
 | Owner decisions | 7 recorded; provider grid configuration, BMKG permission, the Open-Meteo commercial evaluation, a CHIRPS route, and the `precipitation_mean` quantity question (`Q-P5-7`) still need **external evidence or an owner call** |
-| Migration | **none proposed** — the climate schema is already sufficient for a precipitation outlook |
+| Migration | one additive migration at 5.3 (`20261122000000_jobs`). No climate-table column changed; the schema is otherwise sufficient for a precipitation outlook |
 
 What was measured rather than assumed, as `migration_owner` on 2026-11-21:
 
@@ -1237,8 +1240,24 @@ of it is documentation; no sub-phase moved.
 What remains true: no migration is proposed by the phase; lead months 8–12 stay
 climatology; BMKG stays disabled by default; `bias_corrected` stays `false`.
 `open-decisions.md` §6 has since grown to `Q-P5-1`..`Q-P5-7`. Sub-phase 5.1 has
-started (adapter foundation only); 5.2 has all eight steps implemented; 5.3–5.8 have no
+started (adapter foundation only); 5.2 has all eight steps implemented; 5.3 has the
+queue, runner and run lifecycle implemented and no registered handler; 5.4–5.8 have no
 work started.
+
+### Phase 5.3 — run lifecycle and worker runtime — 2026-11-22
+
+| Item | State |
+|---|---|
+| `20261122000000_jobs` | **Implemented.** `app.jobs` with four statuses (`queued`/`running`/`succeeded`/`dead`), `UNIQUE (kind, idempotency_key)`, lease columns, `ingestion_run_id` FK `ON DELETE RESTRICT`, five indexes including the unique partial `jobs_active_ingestion_idx`, and `GRANT SELECT, INSERT, UPDATE, DELETE … TO app_system` only |
+| `packages/contracts/src/job.ts` | **Implemented.** `jobKindSchema` (six queues), `jobStatusSchema` (four states), `jobErrorSchema`, `ingestionJobPayloadSchema`, and `jobSchema` with refinements mirroring the lease and finish CHECKs. `ingestionJobIdentityOf` and `targetSelectorHashOf` live in `climate.ts`, with `canonicalArrayRules.cells` sorting on `(cellKey, variable)` |
+| `packages/database/src/climate.ts` | **Implemented.** `upsertForecastRun` (natural-key upsert, `DO NOTHING` + read-back, `received_at` never rewritten), `beginIngestionExecution` (creates the run at handler start, increments `attempt` on retry without touching `started_at`, assigns `jobs.ingestion_run_id` in the same transaction), `markIngestionStatus` (`running` only; `partial` is terminal) |
+| `packages/database/src/run-errors.ts` | **Implemented.** `LeaseLostError`, `IngestionAlreadyOwnedError`, `IngestionTerminalError`, `IngestionRunMissingError`, `JobRetryExhaustedError`, `TransientTransactionError`, `InvariantViolationError`, plus SQLSTATE classification that reads Prisma's driver-adapter envelope (`meta.driverAdapterError.cause`) |
+| `apps/worker` | **Implemented, ESM.** `queue/types.ts` (the backing-neutral boundary), `queue/postgres.ts` (single-statement claim with `FOR UPDATE SKIP LOCKED`, renew, succeed/fail on the caller's transaction, release only while `ingestion_run_id IS NULL`, batched reaper), `runner.ts` (one job at a time, heartbeat, retry ladder 1/5/20 min, reaper on a timer even when idle, bounded shutdown), `main.ts` (connects as `app_system`, registers **no** handler) |
+| Applied targets | lease 60 s, heartbeat 20 s, poll 1 s, shutdown grace 20 s, reaper 30 s |
+| Tests | `job.test.ts` (identity, statuses, payload, refinements); `run-lifecycle.test.mjs` (14 cases: upsert, run creation, retry `attempt`, lease-loss rollback, terminal refusal, single running owner); `apps/worker/test/**` (2 unit + 18 integration: dedupe, dead-key retention, claim concurrency, lease renewal, reaper requeue/dead, stale token, inert handler, retry exhaustion, invalid payload, bounded shutdown) |
+| Deliberate deviation | graceful shutdown does **not** release an in-flight lease once a handler has begun. Releasing it would let a second worker start while the first may still be writing; the lease expires and the reaper recovers it. `background-processing.md` §2.1 was corrected to match |
+| Not implemented | no provider handler, no HTTP call, no `weather_records` write, no aggregation, no monthly outlook, no `field_outlook_cells` write, no `sync_attempts`, no separate dead-letter table, no pruning, no Redis |
+| Known risk | lease takeover is possible: only the terminal transition is fenced, so a worker whose lease lapsed may still be writing when another worker takes over. 5.4 handlers must make writes idempotent |
 
 ### Phase 5.0 — contracts and grid resolver — 2026-11-21
 
@@ -1297,4 +1316,4 @@ work started.
 | `field_outlook_cells` | **not written in 5.2.** `distance_km` is `NOT NULL` and is a distance to a served coordinate that does not exist yet; `0` is never a placeholder (§5.2.8) |
 | Provider grids | all five still pending. Evidence is graded A (documented), B (measured), C (inferred), with a protocol; grade C never configures a row. The only registered entry is synthetic; no provider grid is configured and nothing is `validated` |
 | Registry binding | `FieldModule.register(gridRegistry)`; production passes `syntheticGridRegistry`, and the only other instance is a test fixture bound in the API integration suite — no mutable global, no second production registry |
-| Next | `climate-data-foundation.md` §8.2, Phase 5.3 (run lifecycle and worker runtime) — not started |
+| Next | `climate-data-foundation.md` §8.4, Phase 5.4 (short-range forecast ingestion) — not started |

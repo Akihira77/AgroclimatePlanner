@@ -1,11 +1,15 @@
 # Climate Data Foundation
 
 Status: **Phase 5.0 implemented; 5.1 partially implemented; 5.2 implemented;
-5.3–5.8 not started.** 5.2.1–5.2.8 are complete as of `8a6f2ec` (2026-11-22): generic
-grid resolution, a synthetic registry instance, the tenant-scoped field centroid read,
-cell identity persistence, and `POST /v1/fields/:fieldId/resolve-cell`. No provider grid
-has been admitted or validated, `app.field_outlook_cells` is not written, and
-`apps/worker` is still a stub. Everything else in this document is a plan unless a row
+5.3 implemented; 5.4–5.8 not started.** 5.2.1–5.2.8 are complete as of `8a6f2ec`
+(2026-11-22): generic grid resolution, a synthetic registry instance, the
+tenant-scoped field centroid read, cell identity persistence, and
+`POST /v1/fields/:fieldId/resolve-cell`. 5.3 is complete as of the working tree on
+2026-11-22: `app.jobs`, the PostgreSQL queue, the worker runner, and the
+`IngestionRun` lifecycle. The worker is operational but registers **no handler**, so
+no provider is called and no weather row is written; `apps/worker` is therefore no
+longer a stub, but ingestion itself is 5.4. No provider grid has been admitted or
+validated and `app.field_outlook_cells` is not written. Everything else in this document is a plan unless a row
 or section is marked as existing; §8.2 is the per-step record and
 `IMPLEMENTATION_STATUS.md` is the index.
 
@@ -69,7 +73,7 @@ stands at `8a6f2ec` (2026-11-22).
 | Provenance | `provenance-contract.md`; `provenance-storage.md`; `canonical.ts` | Hash preimages stored as documents; freshness computed at read time, never stored | **implemented in contracts only**, with 392 passing contract tests including golden vectors; the derived tables that store those documents exist | No producer writes any `input_refs`; `DerivedFreshness` has no producer; the provenance audit that resolves dangling refs does not exist |
 | Raw payload retention | `OPEN-05`; `OPEN-03` | Retention is **deferred** by the owner (2026-11-21); the normalized row is the system of record, and every artifact built on a non-retained payload records `reproducible: false` with a reason | **nothing exists**: no object store, no `raw_payload_ref` writer, no retention table — and none is planned for the initial release | Reopening awaits a lawful, paid or self-hosted plan and a verification run that must re-derive a score (§5.4) |
 | Tenant access | `ADR-003`; `tenant.ts`; `system-architecture.md` | `withTenant(userId, fn)` is the only entry point; one `createTenantScope` per request; `app_system` owns global writes and holds no tenant-row grant | **implemented and tested**: `withTenant` ships, `test:rls` passes 90 assertions as real roles, `db:verify` passes | The recompute fan-out has no permitted read of `field_outlook_cells` (`OPEN-27`); climate read path is `app_api` only, which is already granted |
-| Background processing | `background-processing.md`; `Q-P5-1` | Six queues, run identity by `forecastRunId`, retry classes, budget guards, explicit failure semantics; **queue backing is PostgreSQL-first** (owner decision 2026-11-21), behind an abstraction | **queue and worker not implemented.** `apps/worker/src/main.ts` remains a stub; no queue library, Redis client or scheduler is installed in the workspace, and no `jobs` table exists — `weather-core`'s transport is not a queue | The worker runtime, the six queues, the Postgres job table, the budget buckets, the maintenance sweep (§8.3) |
+| Background processing | `background-processing.md`; `Q-P5-1` | Six queues, run identity by `forecastRunId`, retry classes, budget guards, explicit failure semantics; **queue backing is PostgreSQL-first** (owner decision 2026-11-21), behind an abstraction | **queue, runner and run lifecycle implemented (5.3); no ingestion handler yet.** `app.jobs` exists, `apps/worker/src/{queue,runner,main}.ts` are real, and a zero-handler worker still reaps expired leases. No queue library, Redis client or scheduler is installed — the backing is SQL. `weather-core`'s transport is not a queue | Provider handlers (5.4+), the budget buckets, the maintenance sweep, and observation of a real ingestion. Dead-letter state stays on the job row; `sync_attempts` and a sweep watermark remain unbuilt (`Q-P5-2`) |
 
 ---
 
@@ -1421,11 +1425,11 @@ column — never by inventing the value.
 |---|---|
 | Objective | a job can be enqueued, claimed, retried, deduplicated, recovered after a crash, and recorded against `forecast_runs` / `ingestion_runs` — on PostgreSQL alone |
 | Prerequisites | 5.0 |
-| Scope | `apps/worker/src/queue/postgres.ts`, `apps/worker/src/ingest/run.ts`, `apps/worker/src/main.ts`, `packages/database/src/climate.ts` (`upsertForecastRun`, `upsertIngestionRun`, `markIngestionStatus`), the `jobs` migration |
+| Scope | `apps/worker/src/queue/{types,postgres}.ts`, `apps/worker/src/runner.ts`, `apps/worker/src/main.ts`, `packages/database/src/{climate,run-errors}.ts` (`upsertForecastRun`, `beginIngestionExecution`, `markIngestionStatus`), `packages/contracts/src/job.ts`, the `20261122000000_jobs` migration |
 | Contracts | the `Job` lifecycle from 5.0; `targetSelectorHash` (`sha256` over the sorted `(cellKey, variable)` set) |
 | Database impact | **one additive migration**: a `jobs` table (id, kind, payload, run_at, lease_expires_at, attempt, max_attempts, status, last_error, unique idempotency key). No Redis, no new dependency. `sync_attempts`, a separate dead-letter table, and a sweep watermark remain **unbuilt** and are not implied by this table |
 | Tests | §7.1 rows 6–7; two workers claim disjoint jobs under `FOR UPDATE SKIP LOCKED`; a lease expires and the job is reclaimed with `attempt` incremented in place; a duplicate enqueue is dropped by the unique idempotency key; `ingestion_runs_finished_check` holds on every transition |
-| Acceptance | ingesting the same fake payload twice leaves exactly one `ForecastRun`, one `IngestionRun`, and an unchanged row count; a killed worker's job is reclaimed after lease expiry without minting a second row or a second run; graceful shutdown releases the lease and leaves the job claimable; `SKIP LOCKED` alone is shown by test **not** to be sufficient (the lease and attempt assertions fail if it is removed) |
+| Acceptance | **implemented as built:** a duplicate enqueue returns the existing job (`jobs_identity_key`); two concurrent claims return two different rows; an expired lease is requeued without charging `attempt` twice and becomes `dead` with the run failed when no attempt remains; a stale lease token cannot renew or finish; `beginIngestionExecution` creates the run on first execution, increments `attempt` on a retry without touching `started_at`, rolls the increment back on a lease loss, and refuses a second running owner via `jobs_active_ingestion_idx`; `succeed`/`fail` require the caller's transaction. **Deliberately not built:** graceful shutdown does not release a lease once a handler has begun — the handler may still be writing, so the lease is allowed to expire and the reaper recovers it. `SKIP LOCKED` alone is still **not** sufficient; the lease and reaper are what recover a dead worker. |
 | Dependencies | 5.0 |
 | Risks | the queue choice becomes load-bearing — mitigate by keeping the interface narrow and the job semantics (atomic claim, lease, retry, dead-letter, idempotency) independent of the backing; a Postgres queue under load becomes a poller hotspot — measure before tuning, and treat a move to Redis as a backing swap behind the same interface |
 
@@ -1617,6 +1621,8 @@ What 5.0–5.2 have already changed, recorded here rather than proposed:
   production registry instance lives there (§8.2, 5.2.4).
 - Two database helpers: `upsertCell` and `selectFieldAnchor` (5.2.5–5.2.6).
 
-Phases 5.3–5.8 remain pending: their rows in §8 are plans, and no part of this
-reconciliation starts them. A future change to an authoritative document still goes
-through that document's own review, exactly as before.
+5.3 has since added `app.jobs`, the queue and runner modules, and the run-lifecycle
+helpers; its row in §8.3 is the record. Phases 5.4–5.8 remain pending: their rows in
+§8 are plans, and this reconciliation does not start them. A future change to an
+authoritative document still goes through that document's own review, exactly as
+before.

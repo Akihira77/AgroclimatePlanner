@@ -2,7 +2,7 @@
 
 Status: **implemented.** Phase 2.3 produced this specification, Phase 2.4 audited
 and classified every remaining decision, and Phase 3 created the nineteen tables
-it describes. The `app` schema now holds **22 domain tables**; the SQL in
+it describes. The `app` schema now holds **23 domain tables**; the SQL in
 `packages/database/prisma/migrations/` is authoritative and this directory
 documents it, not the other way round.
 

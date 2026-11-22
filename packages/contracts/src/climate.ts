@@ -91,6 +91,61 @@ export function ingestionVersionOf(input: {
 }
 
 /**
+ * One cell/variable pair the ingest asked for. The pair is the unit: two
+ * parallel arrays would lose which variable belongs to which cell, and a
+ * selector that cannot say that cannot be hashed faithfully.
+ */
+export const targetSelectorEntrySchema = z.strictObject({
+  cellKey: z.string().min(1),
+  variable: z.string().min(1),
+});
+export type TargetSelectorEntry = z.infer<typeof targetSelectorEntrySchema>;
+
+/**
+ * The canonical target selector — `{ cells: [{ cellKey, variable }] }`.
+ *
+ * `canonicalArrayRules.cells` sorts by the tuple `(cellKey, variable)` and
+ * dedupes an exactly repeated pair, so `targetSelectorHashOf` is a function of
+ * the set, not of the order a caller happened to build it in.
+ */
+export const targetSelectorSchema = z.strictObject({
+  cells: z.array(targetSelectorEntrySchema),
+});
+export type TargetSelector = z.infer<typeof targetSelectorSchema>;
+
+/** `targetSelectorHash = SHA256(canonicalJson({ cells }))`. */
+export function targetSelectorHashOf(selector: TargetSelector): string {
+  return sha256Hex(canonicalJson({ cells: selector.cells }));
+}
+
+/**
+ * The idempotency key of one ingestion job:
+ * `ingest:{queue}:{forecastRunId}:{ingestionVersion}`.
+ *
+ * `forecastRunId` is mandatory because `ingestionVersion` is not derived from
+ * it: two forecast runs fetched with the same adapter, normalizer and target
+ * selector share a version, and a key without the run id would make the second
+ * run unenqueueable.
+ *
+ * `ingestionVersion` — not `targetSelectorHash` — is what makes a normalizer or
+ * adapter bump produce a distinct job. `targetSelectorHash` is already inside
+ * the version, so naming it again would add nothing and could drift.
+ */
+export function ingestionJobIdentityOf(input: {
+  readonly queue: string;
+  readonly forecastRunId: string;
+  readonly adapterVersion: string;
+  readonly normalizerVersion: string;
+  readonly targetSelectorHash: string;
+}): { readonly ingestionVersion: string; readonly idempotencyKey: string } {
+  const ingestionVersion = ingestionVersionOf(input);
+  return {
+    ingestionVersion,
+    idempotencyKey: `ingest:${input.queue}:${input.forecastRunId}:${ingestionVersion}`,
+  };
+}
+
+/**
  * Identity of one logical ingest. `attempt` is deliberately absent: it is a
  * physical retry counter on the row, never a component of identity.
  */

@@ -1,19 +1,19 @@
 # Ownership and Row Level Security
 
-Tenant-owned: 10 tables. Global/reference: 12 tables. Identity: 1 table
+Tenant-owned: 10 tables. Global/reference: 13 tables. Identity: 1 table
 (`sessions`, added by S5). This document is the
 complete matrix, the policy text, and the two problems the matrix creates that
 are **not** solved here.
 
-This model is **implemented** for all 22 domain tables, plus `app.sessions`. Ten
+This model is **implemented** for all 23 domain tables, plus `app.sessions`. Ten
 tenant-owned tables
 carry `ENABLE` + `FORCE ROW LEVEL SECURITY` with a `FOR ALL TO app_api` policy and
-a `*_owner_full_access` policy for `migration_owner`. The twelve global/reference
+a `*_owner_full_access` policy for `migration_owner`. The thirteen global/reference
 tables have no RLS because they have no tenant ownership column to filter on.
 Runtime grants and privilege boundaries are applied and verified — `db:verify`
-(499 assertions on PostgreSQL 18.6 after S6), the tenant-isolation suite (39 tests,
+(508 assertions on PostgreSQL 18.6 after Phase 5.3), the tenant-isolation suite (39 tests,
 as the real `app_api` role through `withTenant`) plus the S6 `auth-boundary` suite
-(49 real-role tests), and the schema-conformance suite (22 tests). The authentication
+(49 real-role tests), and the schema-conformance suite (23 tests). The authentication
 credential `app_auth` holds column grants on
 `app.users` (`users_auth_lookup`, `users_auth_register`) applied by
 `prisma/migrations/20261118040000_auth_boundary/migration.sql` (`b9a27c6`), and on
@@ -87,6 +87,7 @@ grant. Measured in Phase 2.2.2.x: every operation `app_api` is refused,
 | 20 | `suitability_runs` | tenant-derived | FORCE | RW | none | RW |
 | 21 | `planting_windows` | tenant-derived | FORCE | RW | none | RW |
 | 22 | `ai_briefings` | tenant-derived | FORCE | RW | none | RW |
+| 23 | `jobs` | global | none | none | RW | RW |
 
 `app_auth` has no column in this matrix on purpose: it is permitted exactly one
 table, `users`, and the reason it needs even that is §5. Every other table above is

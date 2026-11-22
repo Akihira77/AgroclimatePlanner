@@ -1,8 +1,11 @@
 # Background Processing
 
-Status: design. Queue backing decided 2026-11-21 (PostgreSQL first, §2.1). No worker,
-no queue, and no job table exists; implementation is Phase 5.3. Phase 4 closed without
-a worker.
+Status: implemented for Phase 5.3. Queue backing decided 2026-11-21 (PostgreSQL first,
+§2.1) and built on 2026-11-22: `app.jobs` (`prisma/migrations/20261122000000_jobs`),
+`apps/worker/src/queue/{types,postgres}.ts`, `apps/worker/src/runner.ts`, and the run
+lifecycle in `packages/database/src/climate.ts`. Handlers are inert until Phase 5.4:
+the worker claims, leases, retries, reaps, and shuts down, but no ingestion handler is
+registered, so no provider is called and no weather row is written.
 
 ## 1. Why a separate worker
 
@@ -40,10 +43,10 @@ Concurrency is deliberately low. Open-Meteo's free tier is 10 000 calls/day and 
 
 ### 2.1 Backing store — PostgreSQL first (owner decision 2026-11-21)
 
-The queue **semantics** in this document are unchanged. The **backing** is decided:
-PostgreSQL, not Redis + BullMQ, for the first implementation. This is a decision, not
-a description — no `jobs` table exists, no worker code exists, and no dependency is
-added.
+The queue **semantics** in this document are unchanged. The **backing** is decided and
+built: PostgreSQL, not Redis + BullMQ, for the first implementation. `app.jobs` exists
+as of `20261122000000_jobs`; the runner and the queue module exist in `apps/worker`;
+no Redis dependency was added.
 
 Why: PostgreSQL is already required and already carries the run bookkeeping; Redis
 would be new infrastructure with no operational evidence yet; and the semantics below
@@ -57,11 +60,11 @@ What the backing must provide — `SELECT … FOR UPDATE SKIP LOCKED` alone does
 | Atomic claim | one statement claims one job and marks it leased; `SKIP LOCKED` only stops two workers taking the same row in the same instant |
 | Lease expiry | a claimed job carries `lease_expires_at`; a crashed worker's job becomes claimable again and `attempt` increments — `SKIP LOCKED` never recovers a job whose worker died |
 | Retry scheduling | `run_at` on the row; a failure writes the next attempt time instead of busy-looping |
-| Attempt counter | increments in place; never a new job, matching `ingestion_runs.attempt` |
+| Attempt counter | increments in place; never a new job. `jobs.attempt` counts successful claims and `ingestion_runs.attempt` counts handler starts — two counters over one execution, never artificially synchronised |
 | Idempotency | a unique key on `(kind, idempotency_key)` makes a duplicate enqueue a no-op |
 | Dead-letter | a terminal status on the same row (`status = 'dead'`), not a second table |
 | Transaction boundary | the claim commits before work starts; the job's writes are their own transaction, so a crash mid-write rolls back cleanly |
-| Shutdown | SIGTERM stops claiming, releases the in-flight lease, then exits |
+| Shutdown | SIGTERM stops claiming and aborts the in-flight handler. A job whose handler never began is released immediately; one that had begun is **not** released, because the handler may still be writing — its lease expires and the reaper recovers it |
 | Observability | depth, in-flight, oldest waiting, and dead count are queries over the table |
 
 Three bounds, so the decision is not read as a claim of completeness:
@@ -71,8 +74,9 @@ Three bounds, so the decision is not read as a claim of completeness:
 2. It does **not** create the operational tables this document names elsewhere
    (`sync_attempts`, a separate dead-letter table, a sweep watermark). Those remain
    unbuilt (`Q-P5-2`).
-3. No migration and no code are added by the decision. The `jobs` table is Phase 5.3's
-   deliverable.
+3. The `jobs` table, the queue module, and the runner are Phase 5.3's deliverable and
+   are listed above. A separate dead-letter table is still unbuilt; `status = 'dead'`
+   remains the record.
 
 **Conflict recorded, not silently overridden.** `ADR-002` D2 names "a separate BullMQ
 worker process" and D7 names "one Redis". Both predate this decision and remain the
@@ -85,7 +89,9 @@ records what was decided on 2026-11-21.
 
 - `ForecastRun.id` is **UUIDv7** — the only identifier persisted or exposed. The natural key `(provider, model, product, initializedAt)` is unique and used for lookup/upsert, and nothing else. A composite string like `{provider}:{model}:{product}:{initializedAt}` is **not** an id: it duplicates what the natural key already guarantees, it breaks when a provider adds a model version, and it would put a mutable-looking string into every derived row's provenance.
 - `ingestionRunId` → one row per **logical** ingest: unique on `(forecastRunId, ingestionVersion)` where `ingestionVersion = sha256(adapterVersion, normalizerVersion, targetSelectorHash)`. `attempt` is a physical retry counter on that row, not part of identity. Re-normalizing stored payloads bumps `normalizerVersion`, which changes `ingestionVersion` and creates a new `IngestionRun` under the **same** `ForecastRun` — a normalization fix must never surface to users as a new forecast. A retry increments `attempt` in place and creates nothing.
-- Job idempotency keys use ids: `ingest:{queue}:{forecastRunId}:{targetSelectorHash}`, where `forecastRunId` is the UUIDv7 resolved from the natural key at enqueue time.
+- Job idempotency keys use ids: `ingest:{queue}:{forecastRunId}:{ingestionVersion}`, where `forecastRunId` is the UUIDv7 resolved from the natural key at enqueue time and `ingestionVersion = sha256(adapterVersion, normalizerVersion, targetSelectorHash)`. `ingestionVersion` rather than the bare selector hash: an adapter or normalizer bump must produce a new job, and the hash is already inside the version. The key is enforced by `UNIQUE (kind, idempotency_key)` (`jobs_identity_key`); a `dead` job retains its key permanently, so a replay is an explicit operator action or a new `ingestionVersion`.
+- Atomic claim is one statement (`FOR UPDATE SKIP LOCKED` + `UPDATE … RETURNING`). A lease, not a held lock, protects the job: the claim commits before the handler runs, so a slow provider call never serialises other workers. `jobs_active_ingestion_idx` (unique partial on `ingestion_run_id` where `status = 'running'`) makes two running jobs owning one `IngestionRun` impossible to persist; its `23505` maps to `IngestionAlreadyOwnedError`, which is deliberately not a lease loss.
+- Only `running` may start or end an `IngestionRun`; `partial`, `succeeded` and `failed` have no outgoing transition. `succeed(job, tx)` and `fail(job, error, outcome, tx)` require the caller's transaction so a terminal job write and a terminal run write commit as one fact.
 - Every derived artifact stores `inputRefs[]` (discriminated: forecast run, baseline, observation set, dataset), `fieldSnapshot` where applicable, `inputSnapshotHash`, `derivationVersion`, `computedAt`.
 - SEAS5: run at day 5, 12:00 UTC. Ingest starts +30 min, jittered per cell to spread load.
 - EC46: daily, after ~20:30 UTC.
@@ -166,7 +172,7 @@ Alert thresholds (later, Phase 9): seasonal missing for > 40 days, forecast inge
 | Capability | Allowed |
 |---|---|
 | **Read** | ids and metadata only: field ids, owner ids, artifact ids, `inputRefs`, run ids, dead-letter entries, queue state. No soil values, no geometry, no observations, no briefing text. |
-| **Write** | weather-plane bookkeeping only — the queue's `jobs` row and, if `Q-P5-2` is ever built, `sync_attempts`, dead-letter state, sweep watermark. **None of those tables exists today**; dead-letter state is a status on the job row. None carries `user_id`, so none is covered by a tenant policy. |
+| **Write** | weather-plane bookkeeping only — the queue's `jobs` row (exists since Phase 5.3) and, if `Q-P5-2` is ever built, `sync_attempts`, a dead-letter table, sweep watermark. Dead-letter state is a status on the job row. None carries `user_id`, so none is covered by a tenant policy. `app.jobs` is `app_system`-only: `app_api` holds no grant on it. |
 | **Enqueue** | yes, and this is its main output: `recompute.windows` jobs keyed by `(ownerId, fieldBatch)`, with `ownerId` in the payload. |
 | **Never** | mark a tenant row stale, rewrite or delete a briefing, touch `farms`, `fields`, `suitability_runs`, `planting_windows`, or `ai_briefings`. |
 

@@ -167,7 +167,7 @@ Two different things were previously collapsed into the uniqueness key:
 
 | Event | Creates | Effect on `attempt` |
 |---|---|---|
-| BullMQ retries a failed job (network, 5xx, timeout) | nothing new | `attempt` increments **in place** |
+| The worker retries a failed job (network, 5xx, timeout) | nothing new | `attempt` increments **in place** |
 | Same job reprocessed after the process died mid-flight | nothing new | `attempt` increments in place |
 | A new `adapterVersion` or `normalizerVersion` ships | new `IngestionRun` | starts at 1 |
 | The target cell/variable set changes | new `IngestionRun` | starts at 1 |
@@ -185,7 +185,7 @@ So: `attempt` records *how many times we tried the same logical ingest*. `ingest
 1. Ingestion **upserts** `ForecastRun` by natural key. Fetching the same run twice never creates a second `ForecastRun`.
 2. Re-normalizing stored payloads creates a **new `IngestionRun`** with a bumped `normalizerVersion` and the **same `forecastRunId`**. This is the rule that prevents a normalization fix from appearing to the user as "a new forecast arrived".
 3. `WeatherRecord` uniqueness: `(forecastRunId, cellKey, variable, validAt, ensembleMember)` plus `normalizerVersion` in the supersede key — a changed normalizer supersedes rows rather than duplicating them.
-4. Job idempotency keys use `forecastRunId`, never wall-clock time: `ingest:{queue}:{forecastRunId}:{targetSelectorHash}`.
+4. Job idempotency keys use `forecastRunId` and `ingestionVersion`, never wall-clock time: `ingest:{queue}:{forecastRunId}:{ingestionVersion}`. Naming `ingestionVersion` rather than `targetSelectorHash` is what makes an adapter or normalizer bump produce a distinct job; the selector hash is already inside the version. A `dead` job keeps its key permanently (§3, `background-processing.md`), so replaying it is an explicit operator action or a new `ingestionVersion`, never an accidental duplicate enqueue.
 5. At-least-once delivery is assumed. Every consumer is safe to run twice.
 
 ### Why this matters

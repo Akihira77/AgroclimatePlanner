@@ -17,7 +17,7 @@ import { roleConnectionString } from "../../scripts/lib/connections.mjs";
 
 const owner = new Client({ connectionString: roleConnectionString("migration_owner") });
 
-/** The 23 domain tables, `docs/data-model/ownership-and-rls.md` §2. */
+/** The 24 domain tables, `docs/data-model/ownership-and-rls.md` §2. */
 const domainTables = [
   "users",
   "farms",
@@ -42,6 +42,7 @@ const domainTables = [
   "planting_windows",
   "ai_briefings",
   "sessions",
+  "jobs",
 ];
 
 /** Tenant-owned, and therefore ENABLE + FORCE RLS. */
@@ -99,7 +100,7 @@ after(async () => {
 });
 
 describe("table inventory", () => {
-  test("exactly the 23 domain tables exist in app, plus the migration ledger", async () => {
+  test("exactly the 24 domain tables exist in app, plus the migration ledger", async () => {
     const { rows } = await owner.query(
       "select tablename from pg_tables where schemaname = 'app' order by tablename",
     );
@@ -132,7 +133,7 @@ describe("table inventory", () => {
 });
 
 describe("row-level security flags", () => {
-  test("the ten tenant tables and one identity table are ENABLE + FORCE; the twelve reference tables are neither", async () => {
+  test("the ten tenant tables and one identity table are ENABLE + FORCE; the thirteen reference tables are neither", async () => {
     const { rows } = await owner.query(
       `select c.relname as table, c.relrowsecurity as rls, c.relforcerowsecurity as force
          from pg_class c
@@ -180,9 +181,9 @@ describe("row-level security flags", () => {
     assert.deepEqual(tenantGuc, [], "app.sessions must not carry a tenant GUC policy");
   });
 
-  test("tenant, identity and reference sets partition the 23 tables", () => {
+  test("tenant, identity and reference sets partition the 24 tables", () => {
     assert.equal(tenantTables.length, 10);
-    assert.equal(globalTables.length, 12);
+    assert.equal(globalTables.length, 13);
     assert.equal(identityTables.length, 1);
     assert.equal(
       tenantTables.length + globalTables.length + identityTables.length,
