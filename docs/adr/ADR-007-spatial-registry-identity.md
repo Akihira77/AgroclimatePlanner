@@ -1,16 +1,19 @@
 # ADR-007 — Spatial Registry Identity and the Field-Mapping Boundary
 
 - Status: **Accepted** — approved by **Akihira77 on 2026-11-21** as six decisions in the
-  Phase 5.2 corrective design pass. Acceptance is a **documentation gate, not
-  implementation**: no contract is changed, no registry instance exists, no centroid
-  read exists, no route exists, and no cell is persisted. Every property below is a
-  requirement on code that does not exist yet.
-- Current state, so no sentence here is read as a description: the resolver exists
-  (`packages/contracts/src/grid.ts`, eighteen synthetic vectors);
-  `createGridRegistry` is keyed by `model` alone; there is no literal `gridSpecHash`
-  fixture; there is no `SpatialResolution`; no provider grid is configured; and no
+  Phase 5.2 corrective design pass. Acceptance was a **documentation gate at the time**:
+  no contract was changed, no registry instance existed, no centroid read existed, no
+  route existed, and no cell was persisted.
+- Current state after `965f528` (2026-11-22): **D1, D2 and D5's structure are
+  implemented.** The registry is keyed by `(provider, model)` with declared
+  `GridEvidence`, `requireValidated` refuses a `synthetic` entry, `models()` is gone,
+  and four literal `gridSpecHash` fixtures pin the preimage. `CONTRACTS_VERSION` and the
+  package version are `0.2.0`. Still absent: `SpatialResolution` (5.2.3), the registry
+  instance (5.2.4), the centroid read (5.2.5), persistence (5.2.6), and the route
+  (5.2.7). No provider grid is configured, nothing is registered as `validated`, and no
   `field_outlook_cells` row is written by any code.
-- Date: 2026-11-21 (decision and acceptance), recorded here 2026-11-21
+- Date: 2026-11-21 (decision and acceptance), recorded here 2026-11-21, implementation
+  status updated 2026-11-22
 - Depends on: ADR-001 (D8, provider strategy and the per-model rounding rule),
   ADR-002 (monorepo and backend architecture),
   `docs/architecture/climate-data-foundation.md` §5.2 (resolver, cell identity,
@@ -25,7 +28,8 @@
   database impact (`field_outlook_cells`). Those sections are corrected in place;
   this ADR is the durable record of why.
 - Implemented by: Phase 5.2, steps 5.2.1–5.2.8 of
-  `climate-data-foundation.md` §8.2. Not started.
+  `climate-data-foundation.md` §8.2. 5.2.1 landed at `44b278c` and 5.2.2 at `965f528`;
+  5.2.3–5.2.8 are not started.
 - Register entry: `OPEN-18` — the generic half stays approved and unchanged; the
   provider/model half stays `BLOCKED_EXTERNAL_INPUT`.
 
@@ -55,9 +59,10 @@ Three facts drove these decisions.
    resolver that writes this row before that moment must fabricate the number.
 
 Two further findings shaped the result contract: no literal `gridSpecHash` fixture
-exists, so an edit to the hash preimage passes all 354 tests; and one measured
-request→served pair cannot establish a grid, because an interpolating endpoint says
-nothing about the lattice.
+existed, so an edit to the hash preimage passed all 354 tests of the time; and one
+measured request→served pair cannot establish a grid, because an interpolating endpoint
+says nothing about the lattice. The first was closed by 5.2.1; the second still governs
+provider admission.
 
 ## Decision
 
@@ -160,20 +165,24 @@ Phase 5.2 may mint an `outlook_cells` identity row — `app_api` is granted
   plus a measured protocol that separates snapping from interpolation.
 - No fallback grid, no cross-provider selection, no enabling a provider to make a test
   pass. All five real grids remain unavailable.
+- **The code cannot verify that evidence.** `validated` is a declared value: the runtime
+  guarantee is only that an entry declared `synthetic` is refused on an ingest path.
+  Admitting a provider to `validated` is a review decision against §5.2.6, made by a
+  person, not a check `requireValidated` performs.
 
 ### D6 — Compatibility is a deliberate breaking change
 
-`createGridRegistry` changes signature. This is a migration, not an extension:
+`createGridRegistry` changed signature. This was a migration, not an extension:
 
 | Option | Why it was not chosen |
 |---|---|
 | compatible extension (model-only overload retained) | the overload reintroduces lookup by model name alone, which D1 forbids |
 | separate registry interface alongside the current one | duplicates the resolver's consumer surface and forces two lookups for one identity |
-| **deliberate migration (chosen)** | zero production consumers today; `packages/contracts/src/grid.test.ts` and the 354-test suite are the entire blast radius |
+| **deliberate migration (chosen)** | zero production consumers; `packages/contracts/src/grid.test.ts` was the entire blast radius |
 
-`CONTRACTS_VERSION` (`0.1.0`) must move when the signature lands, because the export
-breaks. Golden vectors 1–18 stay valid: they exercise `resolveGridCell`, which does
-not change.
+It landed at `965f528`. `CONTRACTS_VERSION` and the package version moved `0.1.0` →
+`0.2.0` because the export broke. Golden vectors 1–18 stayed valid: they exercise
+`resolveGridCell`, which did not change.
 
 ## Consequences
 

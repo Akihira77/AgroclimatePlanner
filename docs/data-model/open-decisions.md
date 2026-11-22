@@ -73,7 +73,7 @@ part of it.
 | `OPEN-13` | P1 | authentication | after Phase 3 | **none** — resolved 2026-11-20 | nothing: PostgreSQL `app.sessions` was selected (`ADR-005`) and shipped in S5 | nothing on the storage question; the request path that uses the table arrived with `S8`, closing `OPEN-01` | everything — the table exists, is granted, and is verified on canonical |
 | `OPEN-17` | P1 | field snapshot | after Phase 3 | **hard**, for point-shaped fields only | what `areaHa` means for a `POINT`-shaped field | field snapshot creation for point-shaped fields, and every artifact derived from one | the DDL (a `POINT` row is still storable); `POLYGON`/`MULTIPOLYGON` fields end to end |
 | `OPEN-21` | P1 | field snapshot | after Phase 3 | **hard** | the `irrigationAvailable` boolean mapping and three field vocabularies | field → snapshot construction | the DDL — the columns stay unconstrained `text`; every non-snapshot path |
-| `OPEN-18` | P1 | cell resolution | after Phase 3 | **conditional** — generic resolver implemented and tested 2026-11-21; registry identity and result contract designed 2026-11-21 (ADR-007); per-`(provider, model)` grid configuration pending graded evidence | the per-provider/model grid origin, spacing, orientation, longitude convention, and revision | cell identity, and field → cell resolution, for a model whose grid configuration is unvalidated | the DDL (`cell_key` is `text` for exactly this reason), the catalog, every query that reads an already-keyed cell, and the now-approved generic resolver contract |
+| `OPEN-18` | P1 | cell resolution | after Phase 3 | **conditional** — generic resolver, literal hash fixtures, and the `(provider, model)` registry implemented 2026-11-22 (5.2.1–5.2.2); result contract designed 2026-11-21 (ADR-007); per-`(provider, model)` grid configuration pending graded evidence | the per-provider/model grid origin, spacing, orientation, longitude convention, and revision | cell identity, and field → cell resolution, for a model whose grid configuration is unvalidated | the DDL (`cell_key` is `text` for exactly this reason), the catalog, every query that reads an already-keyed cell, and the now-implemented generic resolver and registry contract |
 | `OPEN-26` | P1 | window write | after Phase 3 | **hard** | the six-check `EvidenceSegment` partition validator | persisting a `planting_windows` row | the table, its index, every read path, `suitability_runs`, `ai_briefings` |
 | `OPEN-27` | P1 | worker | after Phase 3 | **hard** | how the worker learns which fields a cell serves | `recompute.windows` — the job that delivers a new forecast to a dashboard | the DDL **and** the grants, which ship the documented default: no `app_system` grant on a tenant-owned table |
 | `OPEN-11` | P1 | AI slice | after Phase 3 | **hard** | the `ClimateBriefing` body shape | writing or validating an `ai_briefings` row | the `ai_briefings` DDL; the table is createable exactly as specified, it simply cannot yet hold a valid document |
@@ -258,20 +258,21 @@ change that alters identity requires a **new `model` string inside the same
 §5.2, with the registry identity and the resolution result in §5.2.9 and
 `docs/adr/ADR-007-spatial-registry-identity.md`.
 
-**Approved, not yet built — the design is a requirement, not an implementation.**
-Four pieces are missing, and until they land the statements above are intentions:
+**Implementation status 2026-11-22 — two of the four pieces landed.**
+5.2.1 (`44b278c`) and 5.2.2 (`965f528`) closed the registry key and the hash fixture:
 
-| Piece | Current fact (2026-11-21) | 5.2 step |
+| Piece | Current fact (2026-11-22) | Status |
 |---|---|---|
-| registry key | `createGridRegistry` is keyed by `model` alone (`grid.ts:491-518`); two providers cannot address the same model string independently | 5.2.2 |
-| literal hash fixture | **absent.** `assertGridSpecIntegrity` recomputes the hash and the suite proves it changes when a field changes, so an edit to the resolver's preimage passes every test | 5.2.1 |
-| result contract | no `SpatialResolution`. `ResolvedCell` (`provenance.ts:104-112`) is a field-snapshot cell that **requires** `servedLat`, `servedLon`, and `distanceKm`, so it cannot describe a pre-ingest resolution | 5.2.3 |
-| registry instance, provider constants | none exist | 5.2.4 |
+| registry key | `createGridRegistry` is keyed by `(provider, model)` through nested maps; duplicate pair → `duplicate_grid_spec`, unknown pair → `unknown_model` naming both components; no model-only overload | **Done** (5.2.2) |
+| literal hash fixture | four literals in `grid.test.ts` pin the preimage: 1° global, the same lattice under a second `gridId`, 0.25° global, 0.05° bounded | **Done** (5.2.1) |
+| result contract | still no `SpatialResolution`. `ResolvedCell` (`provenance.ts:104-112`) requires `servedLat`, `servedLon`, and `distanceKm`, so it cannot describe a pre-ingest resolution | **Pending** (5.2.3) |
+| registry instance, provider constants | none exist. `GridEvidence` is a field on a registry entry, and no entry is registered anywhere | **Pending** (5.2.4) |
 
-Earlier revisions of this entry, of §5.2.2, and of §5.2.5 stated the `(provider,
-model)` registry and the literal fixture as if they were in force. They are not; the
-correction is recorded here so the history stays visible instead of being silently
-rewritten.
+`CONTRACTS_VERSION` and the package version are `0.2.0`; the registry migration was
+the deliberate breaking change ADR-007 D6 approved. Earlier revisions of this entry,
+of §5.2.2, and of §5.2.5 stated the `(provider, model)` registry and the literal
+fixture as if they were already in force. They were not; that history is recorded here
+instead of being silently rewritten, and both items are now actually implemented.
 
 **Owner decision 2026-11-21 — the field-mapping boundary is resolved.**
 `field_outlook_cells.distance_km` is `NOT NULL` and is a distance from the anchor to
@@ -317,15 +318,16 @@ same research calls it an interpolated point.
 `gridId` stays in the hash preimage; the hash algorithm does not change.
 
 **Built:** `packages/contracts/src/grid.ts` — `defineGridSpec`, `resolveGridCell`,
-`createGridRegistry`, `gridSpecHash`, integer micro-degree arithmetic, `south-west`
-orientation only. Eighteen synthetic golden vectors executed in
-`packages/contracts/src/grid.test.ts`, including the F-01 origin-precision cases and
-the F-02 orientation rejection. The resolver is real; the identity layer above it is
-design.
+`gridSpecHash`, integer micro-degree arithmetic, `south-west` orientation only,
+`GridKey`, `GridEvidence`, and a registry keyed by `(provider, model)` with
+`specFor` / `resolve` / `evidenceFor` / `requireValidated`. Eighteen synthetic golden
+vectors and four literal `gridSpecHash` fixtures execute in
+`packages/contracts/src/grid.test.ts`.
 
-**Still unbuilt:** the `(provider, model)` registry, `SpatialResolution`, every
+**Still unbuilt:** `SpatialResolution`, the production registry instance, every
 field→cell write, and every real provider grid. A model cannot ingest until its
-configuration reaches grade A + B.
+configuration reaches grade A + B, and `validated` is a review decision the code does
+not make.
 
 **Revised would-be-settled-by:** a validated `GridSpec` per `(provider, model)` with
 grade A + B evidence, not a resolution figure and not one measured pair.
