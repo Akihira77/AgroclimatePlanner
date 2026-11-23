@@ -3,10 +3,13 @@ import type { Transport, TransportResult } from "../http.js";
 import type { AdapterRuntime } from "../runtime.js";
 import {
   SEAS5_MONTHLY_FORECAST_DAYS,
+  buildEc46DailyUrl,
   buildSeas5MonthlyUrl,
+  fetchEc46Daily,
   fetchSeas5Monthly,
   type Seas5MonthlyConfig,
 } from "./open-meteo-seasonal.js";
+import type { DailyAdapterConfig } from "./open-meteo-daily.js";
 
 /**
  * Every payload below is **synthetic**. None is a recording of a live provider
@@ -45,11 +48,14 @@ const CONFIG: Seas5MonthlyConfig = {
   attribution: "ECMWF / Open-Meteo, CC BY 4.0",
 };
 
-function runtimeReturning(result: TransportResult): AdapterRuntime {
+function runtimeReturning(
+  result: TransportResult,
+  nowIso = "2026-11-21T00:00:00Z",
+): AdapterRuntime {
   const transport: Transport = { get: async () => result };
   return {
     transport,
-    now: () => new Date("2026-11-21T00:00:00Z"),
+    now: () => new Date(nowIso),
     timeoutMs: 1_000,
     maxBytes: 1_000_000,
   };
@@ -361,5 +367,287 @@ describe("SEAS5 failure classification", () => {
     );
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.kind).toBe("transport");
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * EC46 daily — Phase 5.6
+ * ------------------------------------------------------------------ */
+
+const EC46_START = Date.UTC(2026, 10, 23);
+const EC46_DATES = Array.from({ length: 46 }, (_, index) =>
+  new Date(EC46_START + index * 86_400_000).toISOString().slice(0, 10),
+);
+const EC46_MEMBER_NAMES = Array.from(
+  { length: 50 },
+  (_, index) => `precipitation_sum_member${String(index + 1).padStart(2, "0")}`,
+);
+
+const EC46_CONFIG: DailyAdapterConfig = {
+  latitude: -6.2,
+  longitude: 106.8,
+  attribution: "ECMWF / Open-Meteo, CC BY 4.0",
+};
+
+/** `now` is pinned to the request date the pinned `time[0]` anchor requires. */
+function ec46Runtime(result: TransportResult): AdapterRuntime {
+  return runtimeReturning(result, "2026-11-23T06:00:00Z");
+}
+
+function ec46Body(
+  options: {
+    dates?: readonly string[];
+    members?: readonly string[];
+    memberValues?: readonly (number | null)[];
+    mean?: readonly (number | null)[];
+    unit?: string;
+    omitMean?: boolean;
+    extraColumn?: string;
+  } = {},
+): string {
+  const dates = options.dates ?? EC46_DATES;
+  const daily: Record<string, unknown> = { time: dates };
+  if (options.omitMean !== true) {
+    daily["precipitation_sum"] = options.mean ?? dates.map((_, index) => index / 2);
+  }
+  for (const name of options.members ?? EC46_MEMBER_NAMES) {
+    daily[name] = options.memberValues ?? dates.map((_, index) => index / 10);
+  }
+  if (options.extraColumn !== undefined) daily[options.extraColumn] = dates.map(() => 1);
+  return JSON.stringify({
+    latitude: -6.323185,
+    longitude: 106.68874,
+    daily_units: { precipitation_sum: options.unit ?? "mm" },
+    daily,
+  });
+}
+
+describe("EC46 daily request", () => {
+  it("pins the parameters that decide the horizon", () => {
+    const url = new URL(buildEc46DailyUrl(EC46_CONFIG));
+    expect(url.origin).toBe("https://seasonal-api.open-meteo.com");
+    expect(url.pathname).toBe("/v1/seasonal");
+    expect(url.searchParams.get("models")).toBe("ecmwf_ec46");
+    expect(url.searchParams.get("daily")).toBe("precipitation_sum");
+    expect(url.searchParams.get("forecast_days")).toBe("46");
+    // The probed request carried no timezone parameter; the default is GMT.
+    expect(url.searchParams.get("timezone")).toBeNull();
+  });
+
+  it("builds the same URL twice from the same config", () => {
+    expect(buildEc46DailyUrl(EC46_CONFIG)).toBe(buildEc46DailyUrl(EC46_CONFIG));
+  });
+
+  it("makes no request when the configuration is invalid", async () => {
+    const get = vi.fn<Transport["get"]>();
+    const runtime: AdapterRuntime = {
+      transport: { get },
+      now: () => new Date("2026-11-23T06:00:00Z"),
+      timeoutMs: 1_000,
+      maxBytes: 1_000,
+    };
+    const http = await fetchEc46Daily({ ...EC46_CONFIG, baseUrl: "http://example.test" }, runtime);
+    expect(http.ok).toBe(false);
+    if (!http.ok) expect(http.kind).toBe("invalid_config");
+
+    const latitude = await fetchEc46Daily({ ...EC46_CONFIG, latitude: Number.NaN }, runtime);
+    expect(latitude.ok).toBe(false);
+    if (!latitude.ok) expect(latitude.kind).toBe("invalid_config");
+
+    expect(get).not.toHaveBeenCalled();
+  });
+});
+
+describe("EC46 daily response", () => {
+  it("returns 50 members × 46 days and never the mean as a member", async () => {
+    const outcome = await fetchEc46Daily(
+      EC46_CONFIG,
+      ec46Runtime(ok(ec46Body({ memberValues: EC46_DATES.map(() => 1) }))),
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+
+    expect(outcome.value.model).toBe("ecmwf_ec46");
+    expect(outcome.value.product).toBe("seasonal");
+    expect(outcome.value.variable).toBe("precipitation_sum");
+    expect(outcome.value.unit).toBe("mm");
+    expect(outcome.value.ensembleSize).toBe(50);
+    expect(outcome.value.days).toHaveLength(46 * 50);
+
+    // `member` is null for a deterministic product; EC46 is never one.
+    const members = new Set(outcome.value.days.map((day) => day.member));
+    expect(members.has(null)).toBe(false);
+    const ids = [...members].map((member) => member ?? -1);
+    expect(ids.length).toBe(50);
+    expect(Math.min(...ids)).toBe(0);
+    expect(Math.max(...ids)).toBe(49);
+
+    // The mean column equals `index / 2`; every member here is 1, so a mean
+    // leaking in as a member would show up as a value that is not 1.
+    expect(outcome.value.days.every((day) => day.value === 1)).toBe(true);
+    expect(outcome.value.days[0]?.date).toBe("2026-11-23");
+    expect(outcome.value.days.at(-1)?.date).toBe("2027-01-07");
+  });
+
+  it("keeps member nulls as nulls", async () => {
+    const memberValues = EC46_DATES.map((_, index) => (index === 45 ? null : 0.5));
+    const outcome = await fetchEc46Daily(EC46_CONFIG, ec46Runtime(ok(ec46Body({ memberValues }))));
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      const lastDay = outcome.value.days.filter((day) => day.date === "2027-01-07");
+      expect(lastDay).toHaveLength(50);
+      expect(lastDay.every((day) => day.value === null)).toBe(true);
+    }
+  });
+
+  it("rejects an axis that does not start at the request day", async () => {
+    const shifted = EC46_DATES.map((_, index) =>
+      new Date(EC46_START + (index + 1) * 86_400_000).toISOString().slice(0, 10),
+    );
+    const outcome = await fetchEc46Daily(
+      EC46_CONFIG,
+      ec46Runtime(ok(ec46Body({ dates: shifted }))),
+    );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.kind).toBe("provider_changed");
+      expect(outcome.message).toContain("lead-day indexing");
+    }
+  });
+
+  it("rejects a short and a long axis", async () => {
+    const short = await fetchEc46Daily(
+      EC46_CONFIG,
+      ec46Runtime(ok(ec46Body({ dates: EC46_DATES.slice(0, 45) }))),
+    );
+    expect(short.ok).toBe(false);
+    if (!short.ok) expect(short.kind).toBe("incomplete_horizon");
+
+    const long = await fetchEc46Daily(
+      EC46_CONFIG,
+      ec46Runtime(
+        ok(
+          ec46Body({
+            dates: [...EC46_DATES, "2027-01-08"],
+          }),
+        ),
+      ),
+    );
+    expect(long.ok).toBe(false);
+    if (!long.ok) expect(long.kind).toBe("incomplete_horizon");
+  });
+
+  it("rejects an axis with a skipped day", async () => {
+    const dates = [...EC46_DATES.slice(0, 20), ...EC46_DATES.slice(21), "2027-01-08"];
+    const outcome = await fetchEc46Daily(EC46_CONFIG, ec46Runtime(ok(ec46Body({ dates }))));
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.kind).toBe("provider_changed");
+      expect(outcome.message).toContain("not the day after");
+    }
+  });
+
+  it("rejects a duplicated member identifier", async () => {
+    // `_member9` and `_member09` are the same member with two spellings.
+    const members = EC46_MEMBER_NAMES.map((name, index) =>
+      index === 10 ? "precipitation_sum_member9" : name,
+    );
+    const outcome = await fetchEc46Daily(EC46_CONFIG, ec46Runtime(ok(ec46Body({ members }))));
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.message).toContain("duplicated");
+  });
+
+  it("rejects a missing member", async () => {
+    const outcome = await fetchEc46Daily(
+      EC46_CONFIG,
+      ec46Runtime(ok(ec46Body({ members: EC46_MEMBER_NAMES.slice(0, 49) }))),
+    );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.kind).toBe("provider_changed");
+      expect(outcome.message).toContain("missing 50");
+    }
+  });
+
+  it("rejects a 51st member column", async () => {
+    const outcome = await fetchEc46Daily(
+      EC46_CONFIG,
+      ec46Runtime(
+        ok(
+          ec46Body({
+            members: [...EC46_MEMBER_NAMES, "precipitation_sum_member51"],
+          }),
+        ),
+      ),
+    );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.message).toContain("outside 1..50");
+  });
+
+  it("rejects an unexpected column", async () => {
+    const outcome = await fetchEc46Daily(
+      EC46_CONFIG,
+      ec46Runtime(ok(ec46Body({ extraColumn: "temperature_2m" }))),
+    );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.message).toContain("unexpected column");
+  });
+
+  it("rejects a response without the mean column", async () => {
+    const outcome = await fetchEc46Daily(
+      EC46_CONFIG,
+      ec46Runtime(ok(ec46Body({ omitMean: true }))),
+    );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.message).toContain("mean column");
+  });
+
+  it("rejects a changed shape, a non-JSON body, and a non-numeric column", async () => {
+    const shape = await fetchEc46Daily(
+      EC46_CONFIG,
+      ec46Runtime(ok(JSON.stringify({ latitude: -6.3, longitude: 106.7 }))),
+    );
+    expect(shape.ok).toBe(false);
+    if (!shape.ok) expect(shape.kind).toBe("provider_changed");
+
+    const html = await fetchEc46Daily(EC46_CONFIG, ec46Runtime(ok("<html>oops</html>")));
+    expect(html.ok).toBe(false);
+    if (!html.ok) expect(html.kind).toBe("provider_changed");
+
+    const body = JSON.parse(ec46Body()) as { daily: Record<string, unknown> };
+    body.daily["precipitation_sum_member01"] = ["a"];
+    const nonNumeric = await fetchEc46Daily(EC46_CONFIG, ec46Runtime(ok(JSON.stringify(body))));
+    expect(nonNumeric.ok).toBe(false);
+    if (!nonNumeric.ok) expect(nonNumeric.kind).toBe("provider_changed");
+  });
+
+  it("maps 429, 4xx, 5xx, an unexpected status and a transport error", async () => {
+    const limited = await fetchEc46Daily(EC46_CONFIG, {
+      ...ec46Runtime(ok("", 429)),
+    });
+    expect(limited.ok).toBe(false);
+    if (!limited.ok) expect(limited.kind).toBe("rate_limited");
+
+    const bad = await fetchEc46Daily(EC46_CONFIG, ec46Runtime(ok("", 400)));
+    expect(bad.ok).toBe(false);
+    if (!bad.ok) expect(bad.kind).toBe("request_invalid");
+
+    const down = await fetchEc46Daily(EC46_CONFIG, ec46Runtime(ok("", 503)));
+    expect(down.ok).toBe(false);
+    if (!down.ok) expect(down.kind).toBe("transport");
+
+    const redirect = await fetchEc46Daily(EC46_CONFIG, ec46Runtime(ok("", 302)));
+    expect(redirect.ok).toBe(false);
+    if (!redirect.ok) expect(redirect.kind).toBe("provider_changed");
+
+    const network = await fetchEc46Daily(EC46_CONFIG, {
+      ...ec46Runtime({
+        ok: false,
+        kind: "transport",
+        message: "network request failed (TypeError)",
+      }),
+    });
+    expect(network.ok).toBe(false);
+    if (!network.ok) expect(network.kind).toBe("transport");
   });
 });

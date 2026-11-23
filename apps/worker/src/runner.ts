@@ -71,8 +71,13 @@ export interface JobHandler {
   /**
    * `true` = the job executes one logical ingestion, so the runner opens the
    * IngestionRun before calling `handle`. `false` for maintenance-style kinds.
+   *
+   * A predicate is allowed because one queue can carry more than one job type —
+   * `ingest.climate` carries both climatology (a baseline, no run) and the
+   * seasonal ingests (one run), and the decision belongs to the payload, not to
+   * the queue (`background-processing.md` §2.1).
    */
-  readonly opensIngestionRun: boolean;
+  readonly opensIngestionRun: boolean | ((payload: unknown) => boolean);
   handle(job: ClaimedJob, context: HandlerContext): Promise<HandlerResult>;
 }
 
@@ -302,7 +307,11 @@ export function createRunner(options: RunnerOptions): Runner {
     let execution: IngestionExecution | null = null;
 
     try {
-      if (handler.opensIngestionRun) {
+      const opensRun =
+        typeof handler.opensIngestionRun === "function"
+          ? handler.opensIngestionRun(job.payload)
+          : handler.opensIngestionRun;
+      if (opensRun) {
         const parsed = ingestionJobPayloadSchema.safeParse(job.payload);
         if (!parsed.success) {
           await settle(

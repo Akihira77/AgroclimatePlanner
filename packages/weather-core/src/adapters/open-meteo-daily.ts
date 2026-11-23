@@ -64,7 +64,8 @@ export interface ProviderDay {
 export interface DailyProviderPayload {
   readonly provider: "open-meteo";
   readonly model: string;
-  readonly product: "forecast" | "ensemble";
+  /** `seasonal` is EC46's daily series on the seasonal endpoint (§5.6). */
+  readonly product: "forecast" | "ensemble" | "seasonal";
   readonly variable: typeof DAILY_VARIABLE;
   readonly unit: string;
   readonly adapterVersion: string;
@@ -122,8 +123,6 @@ export function buildDailyEnsembleUrl(config: DailyAdapterConfig): string {
 }
 
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-/** `precipitation_sum_member01` … A missing leading zero is still an identifier. */
-const memberColumnPattern = new RegExp(`^${DAILY_VARIABLE}_member(\\d+)$`);
 const dailyBodySchema = z.looseObject({
   latitude: z.number(),
   longitude: z.number(),
@@ -131,7 +130,7 @@ const dailyBodySchema = z.looseObject({
   daily: z.looseObject({ time: z.array(dateSchema) }),
 });
 
-interface DailyBody {
+export interface DailyBody {
   readonly latitude: number;
   readonly longitude: number;
   readonly unit: string;
@@ -142,7 +141,14 @@ interface DailyBody {
   }[];
 }
 
-async function getDaily(
+/**
+ * The shared GET → status → JSON → daily-block path.
+ *
+ * Exported because the seasonal endpoint answers in the same shape (§5.6); one
+ * implementation of the HTTP failure contract is the point, and a second copy
+ * would let a 5xx be retryable in one adapter and terminal in the other.
+ */
+export async function fetchDailyBlock(
   label: string,
   url: string,
   config: DailyAdapterConfig,
@@ -223,6 +229,67 @@ async function getDaily(
   };
 }
 
+/**
+ * Verify an ensemble's member set rather than counting it.
+ *
+ * A count-only check accepts 49 members plus two copies of one identifier,
+ * which silently narrows the spread a later consumer computes; so every
+ * identifier must be present, unique, and inside `1..expected`, and the mean
+ * column must be excluded by the caller before this is called. Shared by the
+ * short-range ensemble (§5.4) and EC46 (§5.6) for exactly that reason.
+ */
+export function collectMembers(
+  label: string,
+  variable: string,
+  columns: readonly {
+    readonly name: string;
+    readonly values: readonly (number | null)[];
+  }[],
+  expected: number,
+): AdapterOutcome<Map<number, readonly (number | null)[]>> {
+  const itself = new RegExp(`^${variable}_member(\\d+)$`);
+  const members = new Map<number, readonly (number | null)[]>();
+
+  for (const column of columns) {
+    if (column.name === variable) continue; // the mean, never a member
+
+    const match = itself.exec(column.name);
+    if (match?.[1] === undefined) {
+      return failure(
+        "provider_changed",
+        column.name.startsWith(`${variable}_member`)
+          ? `${label} member column "${column.name}" has no numeric identifier`
+          : `${label} returned unexpected column "${column.name}"`,
+      );
+    }
+    const memberId = Number(match[1]);
+    if (!Number.isSafeInteger(memberId) || memberId < 1 || memberId > expected) {
+      return failure(
+        "provider_changed",
+        `${label} member "${column.name}" is outside 1..${expected}`,
+      );
+    }
+    const index = memberId - 1;
+    if (members.has(index)) {
+      return failure("provider_changed", `${label} member identifier ${memberId} is duplicated`);
+    }
+    members.set(index, column.values);
+  }
+
+  const missing: number[] = [];
+  for (let memberId = 1; memberId <= expected; memberId += 1) {
+    if (!members.has(memberId - 1)) missing.push(memberId);
+  }
+  if (missing.length > 0) {
+    return failure(
+      "provider_changed",
+      `${label} returned ${members.size} of ${expected} members; missing ${missing.join(", ")}`,
+    );
+  }
+
+  return { ok: true, value: members };
+}
+
 function toPayload(
   input: {
     readonly model: string;
@@ -262,7 +329,7 @@ export async function fetchDailyForecast(
   runtime: AdapterRuntime,
 ): Promise<AdapterOutcome<DailyProviderPayload>> {
   const url = buildDailyForecastUrl(config);
-  const body = await getDaily("forecast", url, config, runtime);
+  const body = await fetchDailyBlock("forecast", url, config, runtime);
   if (!body.ok) return body;
 
   const column = body.value.columns.find((entry) => entry.name === DAILY_VARIABLE);
@@ -320,7 +387,7 @@ export async function fetchDailyEnsemble(
   runtime: AdapterRuntime,
 ): Promise<AdapterOutcome<DailyProviderPayload>> {
   const url = buildDailyEnsembleUrl(config);
-  const body = await getDaily("ensemble", url, config, runtime);
+  const body = await fetchDailyBlock("ensemble", url, config, runtime);
   if (!body.ok) return body;
 
   if (body.value.time.length !== DAILY_FORECAST_DAYS) {
@@ -330,43 +397,14 @@ export async function fetchDailyEnsemble(
     );
   }
 
-  const members = new Map<number, readonly (number | null)[]>();
-  for (const column of body.value.columns) {
-    if (column.name === DAILY_VARIABLE) continue; // the mean, never a member
-
-    const match = memberColumnPattern.exec(column.name);
-    if (match?.[1] === undefined) {
-      return failure(
-        "provider_changed",
-        column.name.startsWith(`${DAILY_VARIABLE}_member`)
-          ? `ensemble member column "${column.name}" has no numeric identifier`
-          : `ensemble returned unexpected column "${column.name}"`,
-      );
-    }
-    const memberId = Number(match[1]);
-    if (!Number.isSafeInteger(memberId) || memberId < 1 || memberId > DAILY_ENSEMBLE_MEMBERS) {
-      return failure(
-        "provider_changed",
-        `ensemble member "${column.name}" is outside 1..${DAILY_ENSEMBLE_MEMBERS}`,
-      );
-    }
-    const index = memberId - 1;
-    if (members.has(index)) {
-      return failure("provider_changed", `ensemble member identifier ${memberId} is duplicated`);
-    }
-    members.set(index, column.values);
-  }
-
-  const missing: number[] = [];
-  for (let memberId = 1; memberId <= DAILY_ENSEMBLE_MEMBERS; memberId += 1) {
-    if (!members.has(memberId - 1)) missing.push(memberId);
-  }
-  if (missing.length > 0) {
-    return failure(
-      "provider_changed",
-      `ensemble returned ${members.size} of ${DAILY_ENSEMBLE_MEMBERS} members; missing ${missing.join(", ")}`,
-    );
-  }
+  const collected = collectMembers(
+    "ensemble",
+    DAILY_VARIABLE,
+    body.value.columns,
+    DAILY_ENSEMBLE_MEMBERS,
+  );
+  if (!collected.ok) return collected;
+  const members = collected.value;
 
   const days: ProviderDay[] = [];
   for (const [index, values] of [...members.entries()].sort((a, b) => a[0] - b[0])) {

@@ -303,8 +303,17 @@ export interface PersistForecastRunInput {
   readonly ingestionRunId: string;
   readonly provider: string;
   readonly model: string;
-  readonly product: "forecast" | "ensemble";
-  readonly dataClass: "weather_forecast";
+  /**
+   * Storage vocabulary (`forecast_runs_product_check`), not a provider's.
+   * `seasonal` covers both EC46 and SEAS5: the model, not the product, is what
+   * distinguishes them.
+   */
+  readonly product: "forecast" | "ensemble" | "seasonal";
+  /**
+   * Only the classes `weather_records_data_class_check` permits for a forecast
+   * plane write. Climatology is not one of them: it is a baseline.
+   */
+  readonly dataClass: "weather_forecast" | "subseasonal_forecast" | "seasonal_forecast";
   readonly initializedAt: Date;
   /** The ingestion's own start instant: the tiebreak when the run is the same. */
   readonly ingestionCreatedAt: Date;

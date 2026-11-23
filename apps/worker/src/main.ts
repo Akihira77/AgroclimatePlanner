@@ -4,8 +4,9 @@ import { syntheticGridRegistry } from "@agroclimate/weather-core";
 
 import { createClimatologyHandler } from "./ingest/climatology.js";
 import { createForecastHandler } from "./ingest/forecast.js";
+import { createSeasonalHandler, isSeasonalJobPayload } from "./ingest/seasonal.js";
 import { createPostgresQueue } from "./queue/postgres.js";
-import { createRunner, jsonLogger, RUNNER_DEFAULTS } from "./runner.js";
+import { createRunner, jsonLogger, RUNNER_DEFAULTS, type JobHandler } from "./runner.js";
 
 /**
  * The worker process — `climate-data-foundation.md` §8.3.
@@ -33,18 +34,40 @@ if (connectionString === undefined || connectionString.length === 0) {
 
 const db = createPrismaClient({ connectionString });
 const queue = createPostgresQueue({ db, defaultMaxAttempts: 5 });
+const climatology = createClimatologyHandler({
+  registry: syntheticGridRegistry,
+  // Copernicus Licence wording; the build must never invent an attribution.
+  attribution:
+    process.env["ERA5_ATTRIBUTION"] ??
+    "Contains modified Copernicus Climate Change Service information (2026)",
+});
+
+const seasonal = createSeasonalHandler({
+  registry: syntheticGridRegistry,
+  // Transport is Open-Meteo, the data is ECMWF: both attributions are required.
+  attribution: process.env["ECMWF_ATTRIBUTION"] ?? "Open-Meteo.com (CC BY 4.0); ECMWF (CC BY 4.0)",
+});
+
+/**
+ * One queue, two job types (`background-processing.md` §2.1). `ingest.climate`
+ * carries climatology — a baseline with no run — and the seasonal ingests,
+ * which open one. The payload decides, not a second queue.
+ */
+const climate: JobHandler = {
+  kind: "ingest.climate",
+  opensIngestionRun: isSeasonalJobPayload,
+  handle: (job, context) =>
+    isSeasonalJobPayload(job.payload)
+      ? seasonal.handle(job, context)
+      : climatology.handle(job, context),
+};
+
 const handlers = [
   createForecastHandler({
     registry: syntheticGridRegistry,
     attribution: process.env["OPEN_METEO_ATTRIBUTION"] ?? "Open-Meteo.com (CC BY 4.0)",
   }),
-  createClimatologyHandler({
-    registry: syntheticGridRegistry,
-    // Copernicus Licence wording; the build must never invent an attribution.
-    attribution:
-      process.env["ERA5_ATTRIBUTION"] ??
-      "Contains modified Copernicus Climate Change Service information (2026)",
-  }),
+  climate,
 ];
 const runner = createRunner({
   db,

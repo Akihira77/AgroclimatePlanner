@@ -2,6 +2,13 @@ import { z } from "zod";
 import { failure, type AdapterOutcome } from "../failures.js";
 import type { AdapterRuntime } from "../runtime.js";
 import { formatMonthKey, isConsecutiveMonth, parseCalendarMonth } from "../calendar-month.js";
+import {
+  collectMembers,
+  fetchDailyBlock,
+  type DailyAdapterConfig,
+  type DailyProviderPayload,
+  type ProviderDay,
+} from "./open-meteo-daily.js";
 
 /**
  * SEAS5 monthly adapter, via the Open-Meteo seasonal API.
@@ -30,6 +37,33 @@ export const SEAS5_MONTHLY_FORECAST_DAYS = 217;
 export const SEAS5_EXPECTED_MONTHS = 7;
 export const SEAS5_MONTHLY_VARIABLE = "precipitation_mean";
 export const SEAS5_DEFAULT_BASE_URL = "https://seasonal-api.open-meteo.com";
+
+/**
+ * EC46 daily, via the same seasonal endpoint — Phase 5.6.
+ *
+ * Verified live on 2026-11-23 at `-6.2,106.8`:
+ *
+ * - `models=ecmwf_ec46&daily=precipitation_sum&forecast_days=46` → `200`, **46
+ *   daily rows** (`2026-11-23 … 2027-01-07`), unit `mm`.
+ * - The payload carries `precipitation_sum` (the ensemble mean) plus
+ *   `precipitation_sum_member01 … _member50`: **50 members**, not 51. The mean
+ *   is never a member.
+ * - The last row (`lead day 45`) can be null in every column; 45 valued days
+ *   were observed. A null stays null.
+ * - Without a `timezone` parameter the endpoint answers in GMT
+ *   (`utc_offset_seconds: 0`), which is what the pinned request relies on: the
+ *   daily axis starts at the request's UTC day, so index == lead day.
+ * - `monthly=` for this model returns **0 rows**; there is no EC46 monthly
+ *   product and none is requested.
+ */
+export const EC46_ADAPTER_VERSION = "open-meteo-seasonal-ec46@1.0.0";
+export const EC46_MODEL = "ecmwf_ec46";
+/** `forecast_days=46` → lead day 0 … 45. The provider's daily EC46 horizon. */
+export const EC46_FORECAST_DAYS = 46;
+export const EC46_LAST_LEAD_DAY = EC46_FORECAST_DAYS - 1;
+/** The payload delivers exactly 50 members (doc claims 51 including the mean). */
+export const EC46_ENSEMBLE_MEMBERS = 50;
+export const EC46_DAILY_VARIABLE = "precipitation_sum";
 
 export interface Seas5MonthlyConfig {
   readonly latitude: number;
@@ -239,6 +273,124 @@ export async function fetchSeas5Monthly(
       receivedAt: runtime.now().toISOString(),
       rawPayloadRef: null,
       months: Object.freeze(months),
+    }),
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * EC46 — subseasonal daily (§5.6)
+ * ------------------------------------------------------------------ */
+
+/** Deterministic: fixed parameter order, no environment defaults, no timezone override. */
+export function buildEc46DailyUrl(config: DailyAdapterConfig): string {
+  const baseUrl = config.baseUrl ?? SEAS5_DEFAULT_BASE_URL;
+  const params = new URLSearchParams();
+  params.set("latitude", String(config.latitude));
+  params.set("longitude", String(config.longitude));
+  params.set("models", EC46_MODEL);
+  params.set("daily", EC46_DAILY_VARIABLE);
+  params.set("forecast_days", String(EC46_FORECAST_DAYS));
+  return `${baseUrl.replace(/\/$/, "")}/v1/seasonal?${params.toString()}`;
+}
+
+const DAY_MS = 86_400_000;
+
+/**
+ * EC46 daily precipitation: one entry per (lead day, member), provider-native.
+ *
+ * Three things are refused rather than repaired:
+ *
+ * 1. A row count other than 46 — a truncated answer is not a 45-day horizon.
+ * 2. An axis that does not start at the request's UTC day. The handler trims
+ *    lead days 0–14, and that trim is only correct while index == lead day; a
+ *    shifted axis would silently mislabel every stored day.
+ * 3. A non-consecutive axis. 46 ordered dates can still skip one.
+ *
+ * The ensemble mean (`precipitation_sum`) is withheld from `days` on purpose:
+ * it is not a member, and persisting it beside members would make a derived
+ * statistic look like an observation.
+ */
+export async function fetchEc46Daily(
+  config: DailyAdapterConfig,
+  runtime: AdapterRuntime,
+): Promise<AdapterOutcome<DailyProviderPayload>> {
+  const url = buildEc46DailyUrl(config);
+  const body = await fetchDailyBlock("ec46", url, config, runtime);
+  if (!body.ok) return body;
+
+  const time = body.value.time;
+  if (time.length !== EC46_FORECAST_DAYS) {
+    return failure(
+      "incomplete_horizon",
+      `expected ${EC46_FORECAST_DAYS} daily rows (lead day 0-${EC46_LAST_LEAD_DAY}), received ${time.length}`,
+    );
+  }
+
+  const requestDay = runtime.now().toISOString().slice(0, 10);
+  const first = time[0];
+  if (first !== requestDay) {
+    return failure(
+      "provider_changed",
+      `ec46 daily axis starts at ${String(first)}, expected the request day ${requestDay}; lead-day indexing would be off`,
+    );
+  }
+
+  let previous: number | null = null;
+  for (const [index, date] of time.entries()) {
+    const parsed = Date.parse(`${date}T00:00:00.000Z`);
+    if (Number.isNaN(parsed)) {
+      return failure("provider_changed", `ec46 daily.time[${index}] is not a calendar day`);
+    }
+    if (previous !== null && parsed - previous !== DAY_MS) {
+      return failure(
+        "provider_changed",
+        `ec46 daily.time[${index}] is ${date}, not the day after ${String(time[index - 1])}`,
+      );
+    }
+    previous = parsed;
+  }
+
+  if (!body.value.columns.some((column) => column.name === EC46_DAILY_VARIABLE)) {
+    return failure("provider_changed", `ec46 returned no ${EC46_DAILY_VARIABLE} mean column`);
+  }
+
+  const collected = collectMembers(
+    "ec46",
+    EC46_DAILY_VARIABLE,
+    body.value.columns,
+    EC46_ENSEMBLE_MEMBERS,
+  );
+  if (!collected.ok) return collected;
+  const members = collected.value;
+
+  const days: ProviderDay[] = [];
+  for (const [index, values] of [...members.entries()].sort((a, b) => a[0] - b[0])) {
+    for (let day = 0; day < time.length; day += 1) {
+      const date = time[day];
+      if (date === undefined) continue;
+      days.push({ date, value: values[day] ?? null, member: index });
+    }
+  }
+
+  return {
+    ok: true,
+    value: Object.freeze({
+      provider: "open-meteo",
+      model: EC46_MODEL,
+      product: "seasonal",
+      variable: EC46_DAILY_VARIABLE,
+      unit: body.value.unit,
+      adapterVersion: EC46_ADAPTER_VERSION,
+      attribution: config.attribution,
+      requestedLatitude: config.latitude,
+      requestedLongitude: config.longitude,
+      servedLatitude: body.value.latitude,
+      servedLongitude: body.value.longitude,
+      sourceUrl: url,
+      receivedAt: runtime.now().toISOString(),
+      rawPayloadRef: null,
+      ensembleSize: members.size,
+      days: Object.freeze(days),
     }),
   };
 }

@@ -20,12 +20,20 @@ export {
 export type { AdapterRuntime } from "./runtime.js";
 
 export {
+  EC46_ADAPTER_VERSION,
+  EC46_DAILY_VARIABLE,
+  EC46_ENSEMBLE_MEMBERS,
+  EC46_FORECAST_DAYS,
+  EC46_LAST_LEAD_DAY,
+  EC46_MODEL,
   SEAS5_ADAPTER_VERSION,
   SEAS5_DEFAULT_BASE_URL,
   SEAS5_EXPECTED_MONTHS,
   SEAS5_MONTHLY_FORECAST_DAYS,
   SEAS5_MONTHLY_VARIABLE,
+  buildEc46DailyUrl,
   buildSeas5MonthlyUrl,
+  fetchEc46Daily,
   fetchSeas5Monthly,
   type ProviderMonth,
   type Seas5MonthlyConfig,
