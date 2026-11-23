@@ -216,7 +216,7 @@ Notes:
 | `aggregation_level` | `text` | yes | — | `instant` \| `daily_sum` \| `daily_mean` \| `monthly_sum` \| `monthly_mean` — `OPEN-14` |
 | `source_url` | `text` | yes | — | exact request URL, for attribution and debugging |
 | `attribution` | `text` | yes | — | required attribution string (`data-licensing-and-attribution.md`) |
-| `normalizer_version` | `text` | no | — | copied from the ingest; part of the supersession key |
+| `normalizer_version` | `text` | no | — | the transformation that produced the row: the ingest's normalizer by default, or a row-level derived step (e.g. `monthly-member-aggregation@1.0.0` for a SEAS5 member total). Provenance only — not part of the live key or the supersession match |
 | `supersedes_id` | `uuid` | yes | — | the row this one replaced |
 | `superseded_by_id` | `uuid` | yes | — | set when a later normalization replaced this row |
 | `superseded_at` | `timestamptz(6)` | yes | — | `NULL` = live |

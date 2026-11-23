@@ -296,6 +296,17 @@ export interface ForecastRecordInput {
   readonly spatialResolutionKm: number | null;
   readonly sourceUrl: string | null;
   readonly attribution: string | null;
+  /**
+   * Overrides `PersistForecastRunInput.normalizerVersion` for this row only.
+   *
+   * A row's `normalizer_version` names the transformation that produced it. Most
+   * records come straight out of the ingestion's normalizer, so the run-level
+   * value is right; a row produced by a separate, versioned derived step (the
+   * SEAS5 per-member monthly aggregate) names that step instead, so a stored
+   * aggregate remains traceable to the algorithm that computed it. Omitted means
+   * "use the run's value".
+   */
+  readonly normalizerVersion?: string;
 }
 
 export interface PersistForecastRunInput {
@@ -454,6 +465,7 @@ export async function persistForecastRun(
       spatial_resolution_km: record.spatialResolutionKm,
       source_url: record.sourceUrl,
       attribution: record.attribution,
+      normalizer_version: record.normalizerVersion ?? input.normalizerVersion,
       superseded: supersededBy !== undefined,
       superseded_by_id: supersededBy ?? null,
     };
@@ -520,7 +532,7 @@ export async function persistForecastRun(
            ${input.initializedAt}, r.requested_lat, r.requested_lon, r.served_lat,
            r.served_lon, r.served_value_is_interpolated, r.spatial_resolution_km,
            r.temporal_resolution, r.ensemble_member, r.ensemble_size,
-           r.aggregation_level, r.source_url, r.attribution, ${input.normalizerVersion},
+           r.aggregation_level, r.source_url, r.attribution, r.normalizer_version,
            NULL,
            CASE WHEN r.superseded THEN r.superseded_by_id::uuid ELSE NULL END,
            CASE WHEN r.superseded THEN now() ELSE NULL END
@@ -532,6 +544,7 @@ export async function persistForecastRun(
              served_value_is_interpolated boolean, spatial_resolution_km double precision,
              temporal_resolution text, ensemble_member int, ensemble_size int,
              aggregation_level text, source_url text, attribution text,
+             normalizer_version text,
              superseded boolean, superseded_by_id text)
     RETURNING id::text AS "id"
   `;

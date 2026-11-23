@@ -476,6 +476,12 @@ export function createSeasonalHandler(options: SeasonalHandlerOptions): JobHandl
             ensembleMember: value.ensembleMember,
             ensembleSize: value.ensembleSize,
             aggregationLevel: value.aggregationLevel,
+            // The row's provenance names the algorithm that produced it, not the
+            // ingestion's normalizer: an aggregate must stay traceable to
+            // `monthly-member-aggregation@…` even when the run's payload names
+            // the monthly normalizer. Run identity is unchanged — it still comes
+            // from the payload, as `background-processing.md` §2 requires.
+            normalizerVersion: aggregated.value.aggregationVersion,
             requestedLat: memberDaily.requestedLatitude,
             requestedLon: memberDaily.requestedLongitude,
             servedLat: memberDaily.servedLatitude,

@@ -168,6 +168,23 @@ export const MONTHLY_MEMBER_AGGREGATION_VERSION = "monthly-member-aggregation@1.
 /** `monthly_sum` is already in the OPEN-14 vocabulary: a sum over a calendar month. */
 export const MONTHLY_MEMBER_AGGREGATION_LEVEL = "monthly_sum";
 
+/**
+ * Why a member-month has no total. This is a **normalizer-level** result, the
+ * same shape `NormalizedMonth.missingReason` already uses: `weather_records`
+ * has no reason column, so the reason is carried in memory and the stored row
+ * keeps `value = null`. It is never `0`, and it never stands in for a partial
+ * sum.
+ *
+ * - `axis_incomplete` — the daily axis itself lacks a calendar day of the
+ *   month, so no member can be complete. The SEAS5 member adapter refuses this
+ *   before aggregation; the reason exists for any other caller of this function.
+ * - `member_incomplete` — the axis covers the month but this member has no entry
+ *   for one or more of its days.
+ * - `provider_null` — every day of the month is present for this member and at
+ *   least one of those days is a provider null.
+ */
+export type MonthlyMemberMissingReason = "axis_incomplete" | "member_incomplete" | "provider_null";
+
 export interface NormalizedMonthlyMemberValue {
   readonly cellKey: string;
   /**
@@ -183,6 +200,8 @@ export interface NormalizedMonthlyMemberValue {
   readonly validAt: string;
   /** The member's monthly total in `mm`, or `null` when the month is incomplete. */
   readonly value: number | null;
+  /** Why `value` is null; `null` exactly when the total is present. */
+  readonly missingReason: MonthlyMemberMissingReason | null;
   readonly temporalResolution: "monthly";
   readonly ensembleMember: number;
   readonly ensembleSize: number;
@@ -213,6 +232,8 @@ export function aggregateMonthlyMemberTotals(
   const memberIds = new Set<number>();
   /** `month` → `member` → `day` → value. A duplicate day is refused, not summed twice. */
   const byMonth = new Map<string, Map<number, Map<string, number | null>>>();
+  /** The union of every member's days, per month: the axis the payload actually covers. */
+  const axisDays = new Map<string, Set<string>>();
   const months: string[] = [];
 
   for (const day of payload.days) {
@@ -242,8 +263,10 @@ export function aggregateMonthlyMemberTotals(
     if (month === undefined) {
       month = new Map();
       byMonth.set(monthKey, month);
+      axisDays.set(monthKey, new Set());
       months.push(monthKey);
     }
+    (axisDays.get(monthKey) as Set<string>).add(day.date);
     let member = month.get(day.member);
     if (member === undefined) {
       member = new Map();
@@ -266,23 +289,33 @@ export function aggregateMonthlyMemberTotals(
     }
     const expectedDays = daysInMonth(calendarMonth);
     const month = byMonth.get(monthKey) as Map<number, Map<string, number | null>>;
+    const axisCoversMonth = (axisDays.get(monthKey) as Set<string>).size === expectedDays;
 
     for (const memberId of [...memberIds].sort((a, b) => a - b)) {
       const days = month.get(memberId);
       // A month the axis never reached is incomplete, not dry.
-      const complete = days !== undefined && days.size === expectedDays;
+      const memberCoversMonth = days !== undefined && days.size === expectedDays;
       let total: number | null = null;
-      if (complete) {
+      let missingReason: MonthlyMemberMissingReason | null = null;
+      if (!axisCoversMonth) {
+        missingReason = "axis_incomplete";
+      } else if (!memberCoversMonth) {
+        missingReason = "member_incomplete";
+      } else {
         let sum = 0;
         let allValued = true;
-        for (const value of days.values()) {
+        for (const value of (days as Map<string, number | null>).values()) {
           if (value === null) {
             allValued = false;
             break;
           }
           sum += value;
         }
-        total = allValued ? sum : null;
+        if (allValued) {
+          total = sum;
+        } else {
+          missingReason = "provider_null";
+        }
       }
       values.push({
         cellKey,
@@ -290,6 +323,7 @@ export function aggregateMonthlyMemberTotals(
         unit: SUPPORTED_PRECIPITATION_UNIT,
         validAt: `${monthKey}T00:00:00.000Z`,
         value: total,
+        missingReason,
         temporalResolution: "monthly",
         ensembleMember: memberId,
         ensembleSize,

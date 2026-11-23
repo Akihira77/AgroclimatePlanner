@@ -22,6 +22,7 @@ import {
   targetSelectorHashOf,
 } from "@agroclimate/contracts";
 import { createPrismaClient, upsertForecastRun } from "@agroclimate/database";
+import { MONTHLY_MEMBER_AGGREGATION_VERSION } from "@agroclimate/weather-core";
 
 import { createClimatologyHandler } from "../../dist/ingest/climatology.js";
 import { createSeasonalHandler, isSeasonalJobPayload } from "../../dist/ingest/seasonal.js";
@@ -274,6 +275,7 @@ async function rowsFor(run) {
            temporal_resolution AS "temporalResolution",
            aggregation_level AS "aggregationLevel",
            ensemble_member AS "ensembleMember", ensemble_size AS "ensembleSize",
+           normalizer_version AS "normalizerVersion",
            requested_lat AS "requestedLat", served_lat AS "servedLat",
            bias_corrected AS "biasCorrected", superseded_at AS "supersededAt"
       FROM app.weather_records
@@ -522,6 +524,19 @@ describe("ingest.climate — SEAS5 seasonal", () => {
     assert.ok(members.every((row) => row.aggregationLevel === "monthly_sum"));
     assert.ok(members.every((row) => row.ensembleSize === 50));
     assert.ok(members.every((row) => row.ensembleMember !== null && row.ensembleMember < 50));
+    // The algorithm's own version travels with the rows it produced, so a stored
+    // aggregate is traceable without re-reading the ingestion run. The provider
+    // mean rows keep the payload's normalizer instead.
+    assert.ok(members.every((row) => row.normalizerVersion === MONTHLY_MEMBER_AGGREGATION_VERSION));
+    const means = all.filter((row) => row.variable === "precipitation_mean");
+    assert.ok(means.every((row) => row.normalizerVersion === NORMALIZER_VERSION));
+    // The row-level provenance does not rewrite the ingest's identity inputs.
+    const ingestRuns = await owner.$queryRaw`
+      SELECT normalizer_version AS "normalizerVersion"
+        FROM app.ingestion_runs WHERE forecast_run_id = ${run.id}::uuid
+    `;
+    assert.equal(ingestRuns.length, 1);
+    assert.equal(ingestRuns[0].normalizerVersion, NORMALIZER_VERSION);
 
     // One value per member per month, and every member total equals the number
     // of days in that calendar month: 31/31/28/31/30/31/30, never a 30-day block.

@@ -345,6 +345,8 @@ describe("SEAS5 per-member monthly aggregation", () => {
     expect(january.every((value) => value.cellKey === "-6.00,106.00")).toBe(true);
     // Member 7 at 0.7 mm/day over 31 days.
     expect(january[7]?.value).toBeCloseTo(21.7, 10);
+    // A present total carries no reason.
+    expect(january.every((value) => value.missingReason === null)).toBe(true);
   });
 
   it("nulls only the member-month with a missing day, never zero-filling it", () => {
@@ -361,6 +363,7 @@ describe("SEAS5 per-member monthly aggregation", () => {
       (value) => value.ensembleMember === 3 && value.validAt === "2027-01-01T00:00:00.000Z",
     );
     expect(broken?.value).toBeNull();
+    expect(broken?.missingReason).toBe("provider_null");
 
     const intact = series.values.filter(
       (value) => value.validAt === "2027-01-01T00:00:00.000Z" && value.ensembleMember !== 3,
@@ -384,6 +387,31 @@ describe("SEAS5 per-member monthly aggregation", () => {
     const february = series.values.filter((value) => value.validAt === "2027-02-01T00:00:00.000Z");
     expect(february).toHaveLength(50);
     expect(february.every((value) => value.value === null)).toBe(true);
+    expect(february.every((value) => value.missingReason === "axis_incomplete")).toBe(true);
+  });
+
+  it("distinguishes a member missing a day from an axis missing a day", () => {
+    // Remove one member's entry for one day while every other member still
+    // carries it, so the axis covers the month and only that member is short.
+    const payload = memberPayload();
+    const shortMember = {
+      ...payload,
+      days: payload.days.filter((day) => !(day.member === 5 && day.date === "2027-01-10")),
+    } as DailyProviderPayload;
+    const series = aggregated(aggregateMonthlyMemberTotals(shortMember, "c"));
+
+    const member5 = series.values.find(
+      (value) => value.ensembleMember === 5 && value.validAt === "2027-01-01T00:00:00.000Z",
+    );
+    expect(member5?.value).toBeNull();
+    expect(member5?.missingReason).toBe("member_incomplete");
+
+    const others = series.values.filter(
+      (value) => value.validAt === "2027-01-01T00:00:00.000Z" && value.ensembleMember !== 5,
+    );
+    expect(others).toHaveLength(49);
+    expect(others.every((value) => value.value === 31)).toBe(true);
+    expect(others.every((value) => value.missingReason === null)).toBe(true);
   });
 
   it("refuses a duplicate day rather than summing it twice", () => {

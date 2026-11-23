@@ -54,6 +54,7 @@ export {
   SUPPORTED_PRECIPITATION_UNIT,
   aggregateMonthlyMemberTotals,
   normalizeMonthlySeries,
+  type MonthlyMemberMissingReason,
   type NormalizedMonth,
   type NormalizedMonthlyMemberSeries,
   type NormalizedMonthlyMemberValue,

@@ -191,6 +191,7 @@ different mechanisms on purpose.
 |---|---|
 | provider published a value | `value` set |
 | provider published `null` for an instant inside the run's horizon | row present, `value IS NULL` |
+| member-month incomplete (provider null day, or the member/axis lacks a day) | row present, `value IS NULL`; **no** partial sum and never `0`. The normalizer's result names the cause (`provider_null` / `member_incomplete` / `axis_incomplete`), but `weather_records` has no reason column, so only the null is stored |
 | instant outside the run's horizon | **no row** |
 | run never ingested | **no run**, and `ingestion_runs.status` says why |
 | ingest partially failed | `ingestion_runs.status = 'partial'`; the rounded `coverage_percent` may read 100, so the status is the authority |

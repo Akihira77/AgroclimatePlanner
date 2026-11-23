@@ -85,7 +85,7 @@ Cache key: `(provider, model, initTime, cellKey, variableSet, aggregationLevel)`
 
 **D8b. Members are ephemeral; aggregates are the system of record.**
 
-Open-Meteo retains individual ensemble members for about one month. The ingest job therefore: (a) sweeps every known cell on/just after the SEAS5 run date; (b) aggregates to per-member monthly means at ingest (~350 rows/cell/run instead of ~10 000 member-days) and keeps them; (c) accepts that a cell first registered mid-cycle cannot be backfilled and reports `spreadUnavailable` rather than substituting a mean.
+Open-Meteo retains individual ensemble members for about one month. The ingest job therefore: (a) sweeps every known cell on/just after the SEAS5 run date; (b) aggregates to per-member monthly **totals** at ingest (~350 rows/cell/run instead of ~10 000 member-days) and keeps them; (c) accepts that a cell first registered mid-cycle cannot be backfilled and reports `spreadUnavailable` rather than substituting a mean.
 
 *Resolved 2026-11-23.* The daily-member endpoint exists and was verified at `-6.2/106.8`: `models=ecmwf_seas5&daily=precipitation_sum&start_date=…&end_date=…` returns `200`, the 212 days of the run's seven calendar months, and exactly 50 member columns (plus a separate mean that is not the member mean). Mean of the 50 per-member monthly sums reproduced the provider's `precipitation_mean` to within its 0.1 mm rounding (ratios 0.989–1.011), so the aggregation below is the same quantity the monthly product reports, not a reinterpretation.
 
@@ -96,6 +96,8 @@ As implemented, the aggregate is a **per-member monthly total** (`sum` of that m
 3. The stored variable is `precipitation_sum` with `aggregation_level = 'monthly_sum'`, `temporal_resolution = 'monthly'`, `ensemble_member = 0..49`, `ensemble_size = 50`, `unit = 'mm'`. It is deliberately neither `precipitation` nor `precipitation_mean`: `persistForecastRun` supersedes on `(cell_key, variable, valid_at, ensemble_member)` across runs and products, so a monthly total must not share a key with a daily subseasonal member value on the first of a month.
 4. The provider's `precipitation_mean` remains its own row, and the handler requires the monthly axis and the member window to name the same months; a disagreement is terminal `provider_changed`.
 5. Nothing derives spread here. The rows exist so a later phase can compute it from real members; no probability, confidence, or `spreadUnavailable` value is written yet.
+
+Three quantities stay distinct and are never conflated: the provider's `precipitation_mean` (the monthly product's own mean, stored as its own row under that name), a member's monthly **total** (the sum of that member's daily `precipitation_sum`, stored as `precipitation_sum`/`monthly_sum`), and the **mean of the 50 member totals**. The third is a reconciliation check run once against live data (ratios 0.989–1.011, above); it is never stored and never written into a `precipitation_mean` row.
 
 **D9. Data classes are finer than "forecast vs observation", and the UI must not claim an observation it does not have.**
 

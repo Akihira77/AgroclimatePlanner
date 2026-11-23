@@ -39,6 +39,10 @@ const laneB = createPrismaClient({
 const token = randomUUID().slice(0, 8);
 const provider = "open-meteo";
 const model = `phase54_persist_${token}`;
+/** Two more suite-private runs for the cross-product key regression (finding 3). */
+const EC46_MODEL = `phase56_persist_ec46_${token}`;
+const SEAS5_MODEL = `phase56_persist_seas5_${token}`;
+const CLEANUP_MODELS = [model, EC46_MODEL, SEAS5_MODEL];
 /** Suite-private coordinates and instants: no other suite can share a slot. */
 const CELL = `p54-${token}-a`;
 const OTHER_CELL = `p54-${token}-b`;
@@ -73,11 +77,17 @@ function recordsFor(values, { cellKey = CELL, member = null, startIndex = 0 } = 
 let runCounter = 0;
 
 /** A forecast run plus one running ingestion row, ready for `persistForecastRun`. */
-async function seedIngestion({ initializedAt }) {
+async function seedIngestion({
+  initializedAt,
+  runModel = model,
+  product = "forecast",
+  ingestionCreatedAt,
+  normalizerVersion = "test-normalizer@1",
+}) {
   const run = await upsertForecastRun(system, {
     provider,
-    model,
-    product: "forecast",
+    model: runModel,
+    product,
     initializedAt,
     horizonEnd: new Date(initializedAt.getTime() + 3_600_000),
     receivedAt: new Date(initializedAt.getTime() + 60_000),
@@ -88,17 +98,18 @@ async function seedIngestion({ initializedAt }) {
   const rows = await system.$queryRaw`
     INSERT INTO app.ingestion_runs (
       forecast_run_id, adapter_version, normalizer_version, target_selector_hash,
-      ingestion_version, status
+      ingestion_version, status, created_at
     )
-    VALUES (${run.id}::uuid, 'test-adapter@1', 'test-normalizer@1',
-            ${hash("selector")}, ${hash("version")}, 'running')
+    VALUES (${run.id}::uuid, 'test-adapter@1', ${normalizerVersion},
+            ${hash("selector")}, ${hash("version")}, 'running',
+            COALESCE(${ingestionCreatedAt ?? null}::timestamptz, now()))
     RETURNING id::text AS "id", created_at AS "createdAt"
   `;
   assert.ok(rows[0]);
   return { run, ingestionRunId: rows[0].id, ingestionCreatedAt: rows[0].createdAt };
 }
 
-function persistInput(seed, records) {
+function persistInput(seed, records, overrides = {}) {
   return {
     forecastRunId: seed.run.id,
     ingestionRunId: seed.ingestionRunId,
@@ -110,6 +121,7 @@ function persistInput(seed, records) {
     ingestionCreatedAt: seed.ingestionCreatedAt,
     normalizerVersion: "test-normalizer@1",
     records,
+    ...overrides,
   };
 }
 
@@ -162,19 +174,21 @@ before(async () => {
 });
 
 after(async () => {
-  await owner.query("DELETE FROM app.weather_records WHERE model = $1", [model]);
-  await owner.query(
-    "DELETE FROM app.ingestion_runs WHERE forecast_run_id IN (SELECT id FROM app.forecast_runs WHERE provider = $1 AND model = $2)",
-    [provider, model],
-  );
-  await owner.query("DELETE FROM app.forecast_runs WHERE provider = $1 AND model = $2", [
-    provider,
-    model,
-  ]);
-  await owner.query("DELETE FROM app.outlook_cells WHERE provider = $1 AND model = $2", [
-    provider,
-    model,
-  ]);
+  for (const runModel of CLEANUP_MODELS) {
+    await owner.query("DELETE FROM app.weather_records WHERE model = $1", [runModel]);
+    await owner.query(
+      "DELETE FROM app.ingestion_runs WHERE forecast_run_id IN (SELECT id FROM app.forecast_runs WHERE provider = $1 AND model = $2)",
+      [provider, runModel],
+    );
+    await owner.query("DELETE FROM app.forecast_runs WHERE provider = $1 AND model = $2", [
+      provider,
+      runModel,
+    ]);
+    await owner.query("DELETE FROM app.outlook_cells WHERE provider = $1 AND model = $2", [
+      provider,
+      runModel,
+    ]);
+  }
   await owner.end();
   await Promise.all([system.$disconnect(), laneA.$disconnect(), laneB.$disconnect()]);
 });
@@ -460,5 +474,261 @@ describe("lockForecastWriteScope — overlapping footprints serialise (F-03)", (
       [seed.run.id],
     );
     assert.equal(dangling.rows[0].n, 0, "every superseded row points at a live row");
+  });
+});
+
+/**
+ * The live natural key is `(forecast_run_id, cell_key, variable, valid_at,
+ * ensemble_member)` and supersession matches on `(cell_key, variable, valid_at,
+ * ensemble_member)` across runs, models and products. EC46 stores a daily member
+ * value as `precipitation`; the SEAS5 aggregate stores its monthly total as
+ * `precipitation_sum`. This block pins that the two coexist on the same instant
+ * and member index, and that a re-normalisation of one never touches the other.
+ */
+describe("cross-product member identity — the variable is part of the key", () => {
+  const CELL_A = `p56-${token}-a`;
+  const CELL_B = `p56-${token}-b`;
+  const AT = new Date("2027-03-01T00:00:00.000Z");
+
+  function ec46MemberRecord(cellKey, validAt, overrides = {}) {
+    return {
+      cellKey,
+      variable: "precipitation",
+      unit: "mm",
+      validAt,
+      value: 3.2,
+      temporalResolution: "daily",
+      ensembleMember: 7,
+      ensembleSize: 50,
+      aggregationLevel: "daily_sum",
+      requestedLat: -6.25,
+      requestedLon: 106.75,
+      servedLat: -6.27,
+      servedLon: 106.77,
+      servedValueIsInterpolated: false,
+      spatialResolutionKm: 36,
+      sourceUrl: "https://seasonal-api.open-meteo.com/v1/seasonal?models=ecmwf_ec46",
+      attribution: "ECMWF / Open-Meteo, CC BY 4.0",
+      normalizerVersion: "daily-precipitation@1.0.0",
+      ...overrides,
+    };
+  }
+
+  function seas5AggregateRecord(cellKey, validAt, overrides = {}) {
+    return {
+      cellKey,
+      variable: "precipitation_sum",
+      unit: "mm",
+      validAt,
+      value: 21.7,
+      temporalResolution: "monthly",
+      ensembleMember: 7,
+      ensembleSize: 50,
+      aggregationLevel: "monthly_sum",
+      requestedLat: -6.25,
+      requestedLon: 106.75,
+      servedLat: -6.125,
+      servedLon: 106.875,
+      servedValueIsInterpolated: false,
+      spatialResolutionKm: 36,
+      sourceUrl: "https://seasonal-api.open-meteo.com/v1/seasonal?models=ecmwf_seas5",
+      attribution: "ECMWF / Open-Meteo, CC BY 4.0",
+      normalizerVersion: "monthly-member-aggregation@1.0.0",
+      ...overrides,
+    };
+  }
+
+  async function provenanceOf(runId) {
+    const rows = await owner.query(
+      `SELECT id::text AS id, variable, model, data_class, temporal_resolution,
+              aggregation_level, ensemble_member, value, normalizer_version,
+              superseded_at IS NULL AS live, superseded_by_id::text AS "supersededById"
+         FROM app.weather_records
+        WHERE forecast_run_id = $1::uuid
+        ORDER BY created_at, id`,
+      [runId],
+    );
+    return rows.rows;
+  }
+
+  async function persistInto(seed, records, overrides) {
+    return system.$transaction((tx) =>
+      persistForecastRun(tx, persistInput(seed, records, overrides)),
+    );
+  }
+
+  it("keeps an EC46 member row and a SEAS5 aggregate live on the same instant", async () => {
+    const ec46 = await seedIngestion({
+      initializedAt: new Date(AT.getTime() - 2 * DAY_MS),
+      runModel: EC46_MODEL,
+      product: "seasonal",
+      normalizerVersion: "daily-precipitation@1.0.0",
+    });
+    const seas5 = await seedIngestion({
+      initializedAt: new Date(AT.getTime() - DAY_MS),
+      runModel: SEAS5_MODEL,
+      product: "seasonal",
+      normalizerVersion: "monthly-normalizer@1.0.0",
+    });
+
+    await persistInto(ec46, [ec46MemberRecord(CELL_A, AT)], {
+      model: EC46_MODEL,
+      product: "seasonal",
+      dataClass: "subseasonal_forecast",
+    });
+    await persistInto(seas5, [seas5AggregateRecord(CELL_A, AT)], {
+      model: SEAS5_MODEL,
+      product: "seasonal",
+      dataClass: "seasonal_forecast",
+    });
+
+    const ec46Rows = await provenanceOf(ec46.run.id);
+    const seas5Rows = await provenanceOf(seas5.run.id);
+    assert.equal(ec46Rows.length, 1);
+    assert.equal(seas5Rows.length, 1);
+
+    // Neither row was superseded by the other: the variables differ, so the key
+    // does not collide even though cell, instant and member index are identical.
+    assert.equal(ec46Rows[0].live, true, "EC46 row must stay live");
+    assert.equal(seas5Rows[0].live, true, "SEAS5 aggregate must stay live");
+
+    // Every provenance field survived the write.
+    assert.deepEqual(
+      {
+        variable: ec46Rows[0].variable,
+        model: ec46Rows[0].model,
+        dataClass: ec46Rows[0].data_class,
+        temporalResolution: ec46Rows[0].temporal_resolution,
+        aggregationLevel: ec46Rows[0].aggregation_level,
+        member: ec46Rows[0].ensemble_member,
+        normalizerVersion: ec46Rows[0].normalizer_version,
+      },
+      {
+        variable: "precipitation",
+        model: EC46_MODEL,
+        dataClass: "subseasonal_forecast",
+        temporalResolution: "daily",
+        aggregationLevel: "daily_sum",
+        member: 7,
+        normalizerVersion: "daily-precipitation@1.0.0",
+      },
+    );
+    assert.deepEqual(
+      {
+        variable: seas5Rows[0].variable,
+        model: seas5Rows[0].model,
+        dataClass: seas5Rows[0].data_class,
+        temporalResolution: seas5Rows[0].temporal_resolution,
+        aggregationLevel: seas5Rows[0].aggregation_level,
+        member: seas5Rows[0].ensemble_member,
+        normalizerVersion: seas5Rows[0].normalizer_version,
+      },
+      {
+        variable: "precipitation_sum",
+        model: SEAS5_MODEL,
+        dataClass: "seasonal_forecast",
+        temporalResolution: "monthly",
+        aggregationLevel: "monthly_sum",
+        member: 7,
+        normalizerVersion: "monthly-member-aggregation@1.0.0",
+      },
+    );
+    // The row-level version overrides the ingestion's default for that row only.
+    const runs = await owner.query(
+      "SELECT normalizer_version FROM app.ingestion_runs WHERE id = $1::uuid",
+      [seas5.ingestionRunId],
+    );
+    assert.equal(runs.rows[0].normalizer_version, "monthly-normalizer@1.0.0");
+  });
+
+  it("re-normalises each product without touching the other's live row", async () => {
+    const ec46 = await seedIngestion({
+      initializedAt: new Date(AT.getTime() - 4 * DAY_MS),
+      runModel: EC46_MODEL,
+      product: "seasonal",
+      normalizerVersion: "daily-precipitation@1.0.0",
+    });
+    const seas5 = await seedIngestion({
+      initializedAt: new Date(AT.getTime() - 3 * DAY_MS),
+      runModel: SEAS5_MODEL,
+      product: "seasonal",
+      normalizerVersion: "monthly-normalizer@1.0.0",
+    });
+
+    await persistInto(ec46, [ec46MemberRecord(CELL_B, AT, { value: 1.1 })], {
+      model: EC46_MODEL,
+      product: "seasonal",
+      dataClass: "subseasonal_forecast",
+    });
+    await persistInto(seas5, [seas5AggregateRecord(CELL_B, AT, { value: 10.5 })], {
+      model: SEAS5_MODEL,
+      product: "seasonal",
+      dataClass: "seasonal_forecast",
+    });
+
+    const ec46First = (await provenanceOf(ec46.run.id))[0];
+    const seas5First = (await provenanceOf(seas5.run.id))[0];
+    assert.ok(ec46First.id);
+    assert.ok(seas5First.id);
+
+    // Same forecast run, new ingestion run: this is how a normalizer bump
+    // arrives. The newer ingestion outranks the older one of *its own* variable.
+    const seas5Renorm = await seedIngestion({
+      initializedAt: seas5.run.initializedAt,
+      runModel: SEAS5_MODEL,
+      product: "seasonal",
+      normalizerVersion: "monthly-normalizer@1.0.1",
+      ingestionCreatedAt: new Date(seas5.ingestionCreatedAt.getTime() + 60_000),
+    });
+    await persistInto(seas5Renorm, [seas5AggregateRecord(CELL_B, AT, { value: 11.5 })], {
+      model: SEAS5_MODEL,
+      product: "seasonal",
+      dataClass: "seasonal_forecast",
+    });
+
+    const seas5After = await provenanceOf(seas5.run.id);
+    assert.equal(seas5After.length, 2, "the predecessor is kept, not deleted");
+    assert.equal(seas5After.filter((row) => row.live).length, 1);
+    const seas5Live = seas5After.find((row) => row.live);
+    assert.equal(seas5Live.value, 11.5);
+    // The row names the aggregation algorithm, not the ingestion's normalizer.
+    assert.equal(seas5Live.normalizer_version, "monthly-member-aggregation@1.0.0");
+    assert.equal(seas5After.find((row) => !row.live).id, seas5First.id);
+    assert.equal(
+      seas5After.find((row) => !row.live).supersededById,
+      seas5Live.id,
+      "the old aggregate points at the new one",
+    );
+
+    const ec46Untouched = await provenanceOf(ec46.run.id);
+    assert.equal(ec46Untouched.length, 1, "SEAS5 re-normalisation wrote no EC46 row");
+    assert.equal(ec46Untouched[0].id, ec46First.id);
+    assert.equal(ec46Untouched[0].live, true);
+    assert.equal(ec46Untouched[0].value, 1.1);
+
+    // And the reverse direction: re-normalising EC46 leaves the SEAS5 row alone.
+    const ec46Renorm = await seedIngestion({
+      initializedAt: ec46.run.initializedAt,
+      runModel: EC46_MODEL,
+      product: "seasonal",
+      normalizerVersion: "daily-precipitation@1.0.1",
+      ingestionCreatedAt: new Date(ec46.ingestionCreatedAt.getTime() + 60_000),
+    });
+    await persistInto(ec46Renorm, [ec46MemberRecord(CELL_B, AT, { value: 1.3 })], {
+      model: EC46_MODEL,
+      product: "seasonal",
+      dataClass: "subseasonal_forecast",
+    });
+
+    const ec46After = await provenanceOf(ec46.run.id);
+    assert.equal(ec46After.length, 2);
+    assert.equal(ec46After.filter((row) => row.live).length, 1);
+    assert.equal(ec46After.find((row) => row.live).value, 1.3);
+    assert.equal(ec46After.find((row) => !row.live).id, ec46First.id);
+
+    const seas5Still = await provenanceOf(seas5.run.id);
+    assert.equal(seas5Still.filter((row) => row.live).length, 1);
+    assert.equal(seas5Still.find((row) => row.live).id, seas5Live.id);
+    assert.equal(seas5Still.find((row) => row.live).value, 11.5);
   });
 });

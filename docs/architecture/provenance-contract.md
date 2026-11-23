@@ -178,13 +178,13 @@ So: `attempt` records *how many times we tried the same logical ingest*. `ingest
 
 - `ForecastRun` unique on `(provider, model, product, initializedAt)`. `modelVersion` participates in identity only where the provider publishes one that can change mid-run; otherwise it is descriptive metadata.
 - `IngestionRun` unique on `(forecastRunId, ingestionVersion)`. **`attempt` is not in the key** — if it were, every transient retry would mint a row, the record count would multiply, and "how many times did we ingest this run" would have no answer.
-- `WeatherRecord` supersession key includes `normalizerVersion`, so a reprocess replaces rows in place rather than accumulating parallel copies.
+- `WeatherRecord`'s live key is `(forecastRunId, cellKey, variable, validAt, ensembleMember)`, and supersession matches the same four columns across runs. `normalizerVersion` is **provenance, not part of the key**: a reprocess still replaces rows in place because the newer ingestion outranks the older one by run `initializedAt` and then ingestion `createdAt`. A row may name a derived step instead of the ingest's normalizer (the SEAS5 member aggregate names `monthly-member-aggregation@…`), so the column is a per-row fact, not a copy of the run.
 
 ### Idempotency and reprocessing
 
 1. Ingestion **upserts** `ForecastRun` by natural key. Fetching the same run twice never creates a second `ForecastRun`.
 2. Re-normalizing stored payloads creates a **new `IngestionRun`** with a bumped `normalizerVersion` and the **same `forecastRunId`**. This is the rule that prevents a normalization fix from appearing to the user as "a new forecast arrived".
-3. `WeatherRecord` uniqueness: `(forecastRunId, cellKey, variable, validAt, ensembleMember)` plus `normalizerVersion` in the supersede key — a changed normalizer supersedes rows rather than duplicating them.
+3. `WeatherRecord` uniqueness: `(forecastRunId, cellKey, variable, validAt, ensembleMember)`; supersession matches the same four columns across runs, and a changed normalizer supersedes rows rather than duplicating them because the newer ingestion outranks the older one — the version string is not compared.
 4. Job idempotency keys use `forecastRunId` and `ingestionVersion`, never wall-clock time: `ingest:{queue}:{forecastRunId}:{ingestionVersion}`. Naming `ingestionVersion` rather than `targetSelectorHash` is what makes an adapter or normalizer bump produce a distinct job; the selector hash is already inside the version. A `dead` job keeps its key permanently (§3, `background-processing.md`), so replaying it is an explicit operator action or a new `ingestionVersion`, never an accidental duplicate enqueue.
 5. At-least-once delivery is assumed. Every consumer is safe to run twice.
 
