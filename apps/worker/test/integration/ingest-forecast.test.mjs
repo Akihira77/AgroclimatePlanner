@@ -55,7 +55,8 @@ const GRID = createGridRegistry([
 
 const CELL_KEY = "-6.25,106.75";
 
-const FORECAST_DAYS = 16;
+/** The product horizon: lead day 0-14 inclusive. */
+const FORECAST_DAYS = 15;
 
 function dayStrings() {
   const start = Date.UTC(2026, 10, 24);
@@ -122,7 +123,7 @@ async function forecastRun({ initializedAt, model = "best_match" }) {
   });
 }
 
-async function enqueueAndRun(run, normalizerVersion = NORMALIZER_VERSION) {
+async function enqueueFor(run, normalizerVersion = NORMALIZER_VERSION) {
   const identity = ingestionJobIdentityOf({
     queue: "ingest.forecast",
     forecastRunId: run.id,
@@ -142,9 +143,54 @@ async function enqueueAndRun(run, normalizerVersion = NORMALIZER_VERSION) {
       targetSelector: { cells: SELECTOR },
     },
   });
+}
 
+async function enqueueAndRun(run, normalizerVersion = NORMALIZER_VERSION) {
+  await enqueueFor(run, normalizerVersion);
   const outcome = await runner.runOnce();
   assert.equal(outcome, "handled");
+}
+
+/** A transport that answers the pinned shape with caller-chosen values. */
+function transportWith(values) {
+  return {
+    async get({ url }) {
+      const requested = new URL(url);
+      const latitude = Number(requested.searchParams.get("latitude"));
+      const longitude = Number(requested.searchParams.get("longitude"));
+      return {
+        ok: true,
+        response: {
+          status: 200,
+          bodyText: JSON.stringify({
+            latitude: latitude - 0.02,
+            longitude: longitude - 0.02,
+            daily_units: { precipitation_sum: "mm" },
+            daily: { time: DAYS, precipitation_sum: values },
+          }),
+        },
+      };
+    },
+  };
+}
+
+function runnerFor(transport) {
+  return createRunner({
+    db: system,
+    queue: createPostgresQueue({ db: system, defaultMaxAttempts: 3 }),
+    handlers: [
+      createForecastHandler({
+        registry: GRID,
+        attribution: "test fixture",
+        transport,
+        now: () => new Date("2026-11-24T00:00:00.000Z"),
+      }),
+    ],
+    leaseMs: 60_000,
+    heartbeatMs: 60_000,
+    reaperIntervalMs: 600_000,
+    pollIntervalMs: 60_000,
+  });
 }
 
 async function jobRowsFor(run) {
@@ -308,6 +354,54 @@ describe("ingest.forecast", () => {
     const jobs = await jobRowsFor(run);
     assert.equal(jobs.length, 2);
     assert.ok(jobs.every((row) => row.status === "succeeded"));
+  });
+
+  it("dies with no_values when every daily value is null", async () => {
+    const run = await forecastRun({ initializedAt: new Date("2026-11-26T00:00:00.000Z") });
+    const nullRunner = runnerFor(transportWith(DAYS.map(() => null)));
+
+    await enqueueFor(run, "all-null@1");
+    assert.equal(await nullRunner.runOnce(), "handled");
+
+    const rows = await owner.$queryRaw`
+      SELECT j.status, j.last_error->>'code' AS code,
+             r.status AS "runStatus", r.coverage_percent AS "coveragePercent"
+        FROM app.jobs j
+        JOIN app.ingestion_runs r ON r.id = j.ingestion_run_id
+       WHERE r.forecast_run_id = ${run.id}::uuid
+    `;
+    assert.equal(rows[0].status, "dead");
+    assert.equal(rows[0].code, "no_values");
+    assert.equal(rows[0].runStatus, "failed");
+    assert.equal(await liveCount(run), 0);
+
+    const horizon = await owner.$queryRaw`
+      SELECT horizon_end = initialized_at + interval '1 hour' AS "untouched"
+        FROM app.forecast_runs WHERE id = ${run.id}::uuid
+    `;
+    assert.equal(horizon[0].untouched, true, "an all-null ingestion claims no horizon");
+  });
+
+  it("reports partial coverage when the tail is null", async () => {
+    const run = await forecastRun({ initializedAt: new Date("2026-11-26T03:00:00.000Z") });
+    const values = DAYS.map((_, index) => (index < 8 ? index / 10 : null));
+    const partialRunner = runnerFor(transportWith(values));
+
+    await enqueueFor(run, "partial@1");
+    assert.equal(await partialRunner.runOnce(), "handled");
+
+    const rows = await jobRowsFor(run);
+    assert.equal(rows[0].status, "succeeded");
+    assert.equal(rows[0].runStatus, "partial");
+    assert.equal(rows[0].recordCount, FORECAST_DAYS, "null rows are still persisted");
+    assert.equal(rows[0].coveragePercent, 53.33);
+    assert.equal(await liveCount(run), FORECAST_DAYS);
+
+    const horizon = await owner.$queryRaw`
+      SELECT to_char(horizon_end AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day
+        FROM app.forecast_runs WHERE id = ${run.id}::uuid
+    `;
+    assert.equal(horizon[0].day, DAYS[7], "the horizon stops on the last valued day");
   });
 
   it("refuses a payload whose selector does not hash to the stored hash", async () => {

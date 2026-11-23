@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { Transport, TransportResult } from "../http.js";
 import type { AdapterRuntime } from "../runtime.js";
 import {
+  DAILY_ENSEMBLE_MEMBERS,
   DAILY_FORECAST_DAYS,
+  DAILY_LAST_LEAD_DAY,
   buildDailyEnsembleUrl,
   buildDailyForecastUrl,
   fetchDailyEnsemble,
@@ -53,15 +55,18 @@ function deterministicBody(values: readonly (number | null)[]) {
   };
 }
 
-function ensembleBody() {
+function ensembleBody(mutate?: (daily: Record<string, unknown>) => void) {
   const daily: Record<string, unknown> = {
     time: DAYS,
-    precipitation_sum: DAYS.map(() => 1),
+    // The mean is a real column, and it is not a member: it is set to a value no
+    // member column carries, so a test can prove it was excluded.
+    precipitation_sum: DAYS.map(() => 999),
   };
-  for (let member = 1; member <= 50; member += 1) {
+  for (let member = 1; member <= DAILY_ENSEMBLE_MEMBERS; member += 1) {
     const key = `precipitation_sum_member${String(member).padStart(2, "0")}`;
-    daily[key] = DAYS.map((_, index) => (index === member ? null : member / 10));
+    daily[key] = DAYS.map(() => member / 10);
   }
+  mutate?.(daily);
   return {
     latitude: -6.125,
     longitude: 106.875,
@@ -71,10 +76,12 @@ function ensembleBody() {
 }
 
 describe("buildDailyForecastUrl", () => {
-  it("pins the parameters the horizon depends on", () => {
+  it("requests the 15-day product horizon, not the server's 16-day ceiling", () => {
     const url = new URL(buildDailyForecastUrl(CONFIG));
     expect(url.searchParams.get("daily")).toBe("precipitation_sum");
-    expect(url.searchParams.get("forecast_days")).toBe("16");
+    expect(url.searchParams.get("forecast_days")).toBe("15");
+    expect(DAILY_FORECAST_DAYS).toBe(15);
+    expect(DAILY_LAST_LEAD_DAY).toBe(14);
     expect(url.searchParams.get("timezone")).toBe("UTC");
   });
 
@@ -84,7 +91,7 @@ describe("buildDailyForecastUrl", () => {
 });
 
 describe("fetchDailyForecast", () => {
-  it("returns one value per day with no member", async () => {
+  it("accepts exactly 15 daily values and ends on lead day 14", async () => {
     const values = DAYS.map((_, index) => index);
     const outcome = await fetchDailyForecast(
       CONFIG,
@@ -95,11 +102,12 @@ describe("fetchDailyForecast", () => {
     expect(outcome.value.product).toBe("forecast");
     expect(outcome.value.days).toHaveLength(DAILY_FORECAST_DAYS);
     expect(outcome.value.days[0]).toEqual({ date: DAYS[0], value: 0, member: null });
+    expect(outcome.value.days[DAILY_LAST_LEAD_DAY]?.date).toBe(DAYS[DAILY_LAST_LEAD_DAY]);
     expect(outcome.value.ensembleSize).toBeNull();
   });
 
   it("keeps a null instead of zero-filling it", async () => {
-    const values = DAYS.map(() => 0.5);
+    const values: (number | null)[] = DAYS.map(() => 0.5);
     values[2] = null;
     const outcome = await fetchDailyForecast(
       CONFIG,
@@ -119,17 +127,158 @@ describe("fetchDailyForecast", () => {
     if (outcome.ok) return;
     expect(outcome.kind).toBe("incomplete_horizon");
   });
+
+  it("refuses a longer axis: the server's ceiling is not the contract", async () => {
+    const body = deterministicBody(DAYS.map(() => 1));
+    body.daily.time = [...DAYS, "2026-11-16"];
+    body.daily.precipitation_sum = Array.from({ length: DAYS.length + 1 }, () => 1);
+    const outcome = await fetchDailyForecast(CONFIG, runtimeReturning(ok(body)));
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.kind).toBe("incomplete_horizon");
+  });
 });
 
 describe("fetchDailyEnsemble", () => {
-  it("emits one entry per (day, member) and skips the mean column", async () => {
+  it("accepts exactly 50 members and excludes the mean column", async () => {
     const outcome = await fetchDailyEnsemble(CONFIG, runtimeReturning(ok(ensembleBody())));
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
-    expect(outcome.value.ensembleSize).toBe(50);
-    expect(outcome.value.days).toHaveLength(50 * DAILY_FORECAST_DAYS);
-    expect(new Set(outcome.value.days.map((day) => day.member)).size).toBe(50);
-    expect(outcome.value.days.every((day) => day.member !== null)).toBe(true);
+    expect(outcome.value.ensembleSize).toBe(DAILY_ENSEMBLE_MEMBERS);
+    expect(outcome.value.days).toHaveLength(DAILY_ENSEMBLE_MEMBERS * DAILY_FORECAST_DAYS);
+    expect(new Set(outcome.value.days.map((day) => day.member)).size).toBe(DAILY_ENSEMBLE_MEMBERS);
+    const members = [...new Set(outcome.value.days.map((day) => day.member))]
+      .filter((member): member is number => member !== null)
+      .sort((a, b) => a - b);
+    expect(members).toEqual(Array.from({ length: DAILY_ENSEMBLE_MEMBERS }, (_, index) => index));
+    // The mean is 999; no member value may be 999.
+    expect(outcome.value.days.some((day) => day.value === 999)).toBe(false);
+  });
+
+  it("rejects a missing member", async () => {
+    const outcome = await fetchDailyEnsemble(
+      CONFIG,
+      runtimeReturning(
+        ok(
+          ensembleBody((daily) => {
+            delete daily["precipitation_sum_member07"];
+          }),
+        ),
+      ),
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.kind).toBe("provider_changed");
+    expect(outcome.message).toContain("missing 7");
+  });
+
+  it("rejects a duplicate member identifier", async () => {
+    const outcome = await fetchDailyEnsemble(
+      CONFIG,
+      runtimeReturning(
+        ok(
+          ensembleBody((daily) => {
+            // `member7` and `member07` are the same identifier.
+            daily["precipitation_sum_member7"] = DAYS.map(() => 0.7);
+          }),
+        ),
+      ),
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.kind).toBe("provider_changed");
+    expect(outcome.message).toContain("duplicated");
+  });
+
+  it("rejects an identifier outside the provider's numbering", async () => {
+    const outcome = await fetchDailyEnsemble(
+      CONFIG,
+      runtimeReturning(
+        ok(
+          ensembleBody((daily) => {
+            daily["precipitation_sum_member51"] = DAYS.map(() => 0.5);
+          }),
+        ),
+      ),
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.kind).toBe("provider_changed");
+    expect(outcome.message).toContain("outside 1..50");
+  });
+
+  it("rejects a malformed member column", async () => {
+    const outcome = await fetchDailyEnsemble(
+      CONFIG,
+      runtimeReturning(
+        ok(
+          ensembleBody((daily) => {
+            delete daily["precipitation_sum_member05"];
+            daily["precipitation_sum_member"] = DAYS.map(() => 0.5);
+          }),
+        ),
+      ),
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.kind).toBe("provider_changed");
+    expect(outcome.message).toContain("no numeric identifier");
+  });
+
+  it("rejects an unexpected non-member column", async () => {
+    const outcome = await fetchDailyEnsemble(
+      CONFIG,
+      runtimeReturning(
+        ok(
+          ensembleBody((daily) => {
+            daily["temperature_2m_max"] = DAYS.map(() => 30);
+          }),
+        ),
+      ),
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.kind).toBe("provider_changed");
+    expect(outcome.message).toContain("unexpected column");
+  });
+
+  it("retains an individual null member-day", async () => {
+    const outcome = await fetchDailyEnsemble(
+      CONFIG,
+      runtimeReturning(
+        ok(
+          ensembleBody((daily) => {
+            const series = daily["precipitation_sum_member03"];
+            if (Array.isArray(series)) series[4] = null;
+          }),
+        ),
+      ),
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const entry = outcome.value.days.find((day) => day.member === 2 && day.date === DAYS[4]);
+    expect(entry?.value).toBeNull();
+    expect(outcome.value.ensembleSize).toBe(DAILY_ENSEMBLE_MEMBERS);
+  });
+
+  it("refuses an ensemble axis that is not the 15-day horizon", async () => {
+    const outcome = await fetchDailyEnsemble(
+      CONFIG,
+      runtimeReturning(
+        ok(
+          ensembleBody((daily) => {
+            daily["time"] = DAYS.slice(0, 14);
+            for (const [key, value] of Object.entries(daily)) {
+              if (key === "time") continue;
+              if (Array.isArray(value)) daily[key] = value.slice(0, 14);
+            }
+          }),
+        ),
+      ),
+    );
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.kind).toBe("incomplete_horizon");
   });
 
   it("classifies a 429 as rate limited and carries Retry-After", async () => {

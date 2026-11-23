@@ -170,7 +170,16 @@ export function createRunner(options: RunnerOptions): Runner {
     });
   }
 
-  async function settle(job: ClaimedJob, result: HandlerResult): Promise<void> {
+  async function settle(
+    job: ClaimedJob,
+    result: HandlerResult,
+    stopHeartbeat: () => Promise<void>,
+  ): Promise<void> {
+    // No renewal may start, and none may still be running, once a terminal write
+    // begins: a renewal that lands after the commit either renews a job that is
+    // already finished or reports a lease loss that never happened.
+    await stopHeartbeat();
+
     if (result.outcome === "settled") {
       // The handler owned T3: data and terminal state committed together. There
       // is nothing left to write, and re-writing it would be a second authority.
@@ -253,18 +262,25 @@ export function createRunner(options: RunnerOptions): Runner {
     // The heartbeat renews while the handler works. A failed renewal means the
     // lease is gone: abort, and let the settle path discover the loss rather
     // than writing a result nobody owns. Renewals never stack: one in flight at
-    // a time, and the last one is awaited before settlement so a renewal that
-    // lands after the terminal write cannot resurrect a lease.
+    // a time, and `stopHeartbeat` awaits the last one *before* settlement, so a
+    // renewal can never land on a finished job.
     let renewing: Promise<void> | null = null;
+    let heartbeatStopped = false;
+    let leaseLost = false;
+
+    function reportLeaseLost(): void {
+      if (leaseLost) return;
+      leaseLost = true;
+      log("lease_lost", { jobId: job.id });
+      controller.abort();
+    }
+
     const beat = setInterval(() => {
-      if (renewing !== null) return;
+      if (heartbeatStopped || renewing !== null) return;
       renewing = queue
         .renew(job, leaseMs)
         .then((owned) => {
-          if (!owned) {
-            log("lease_lost", { jobId: job.id });
-            controller.abort();
-          }
+          if (!owned) reportLeaseLost();
         })
         .catch((error: unknown) => {
           log("heartbeat_error", { jobId: job.id, message: toJobError(error).message });
@@ -274,18 +290,33 @@ export function createRunner(options: RunnerOptions): Runner {
         });
     }, heartbeatMs);
 
+    /** Idempotent: stop scheduling, then await the renewal already in flight. */
+    async function stopHeartbeat(): Promise<void> {
+      if (!heartbeatStopped) {
+        heartbeatStopped = true;
+        clearInterval(beat);
+      }
+      if (renewing !== null) await renewing;
+    }
+
     let execution: IngestionExecution | null = null;
 
     try {
       if (handler.opensIngestionRun) {
         const parsed = ingestionJobPayloadSchema.safeParse(job.payload);
         if (!parsed.success) {
-          await failTerminal(job, {
-            code: "payload_invalid",
-            message: "the job payload does not satisfy ingestionJobPayloadSchema",
-            retryable: false,
-          });
-          log("job_dead", { jobId: job.id, kind: job.kind, code: "payload_invalid" });
+          await settle(
+            job,
+            {
+              outcome: "terminal",
+              error: {
+                code: "payload_invalid",
+                message: "the job payload does not satisfy ingestionJobPayloadSchema",
+                retryable: false,
+              },
+            },
+            stopHeartbeat,
+          );
           return;
         }
         execution = await beginIngestionExecution(db, {
@@ -301,10 +332,13 @@ export function createRunner(options: RunnerOptions): Runner {
         log,
         execution,
       });
-      await settle(job, result);
+      await settle(job, result, stopHeartbeat);
     } catch (error) {
       if (error instanceof LeaseLostError) {
-        log("lease_lost", { jobId: job.id });
+        // The lease was already reported by the renewal that lost it, or is
+        // reported here; either way the job is not ours to finish.
+        await stopHeartbeat();
+        reportLeaseLost();
         return;
       }
       if (error instanceof IngestionAlreadyOwnedError) {
@@ -318,17 +352,22 @@ export function createRunner(options: RunnerOptions): Runner {
         return;
       }
       if (error instanceof InvariantViolationError || isCheckViolation(error)) {
-        await failTerminal(job, { ...toJobError(error, "invariant_violation"), retryable: false });
-        log("job_dead", { jobId: job.id, kind: job.kind, code: "invariant_violation" });
+        await settle(
+          job,
+          {
+            outcome: "terminal",
+            error: { ...toJobError(error, "invariant_violation"), retryable: false },
+          },
+          stopHeartbeat,
+        );
         return;
       }
       // Unknown failure: retryable, but never beyond the attempt budget — the
       // settle path turns the last attempt into a dead job and a failed run.
       log("handler_error", { jobId: job.id, message: toJobError(error).message });
-      await settle(job, { outcome: "retryable", error: toJobError(error) });
+      await settle(job, { outcome: "retryable", error: toJobError(error) }, stopHeartbeat);
     } finally {
-      clearInterval(beat);
-      if (renewing !== null) await renewing;
+      await stopHeartbeat();
       controllers.delete(job.id);
       if (currentJobId === job.id) currentJobId = null;
     }

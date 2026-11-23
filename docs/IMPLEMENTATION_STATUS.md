@@ -1166,9 +1166,10 @@ field anchor, cell identity persistence, the resolution route, and the status
 reconciliation. 5.3 is complete: the `app.jobs` migration, the PostgreSQL queue, the
 worker runner, and the `IngestionRun` lifecycle. 5.4 is implemented: the Open-Meteo
 daily forecast and ensemble adapters, a daily precipitation normalizer, the
-`ingest.forecast` handler, the single settlement primitive, the per-run advisory lock
-and the T3 write transaction, and one additive migration (deferred
-`weather_records.superseded_by_id` + a self-supersession CHECK). It is **not a live
+`ingest.forecast` handler, the single settlement primitive, the per-run and
+per-footprint advisory locks, and the T3 write transaction, and one additive
+migration (deferred `weather_records.superseded_by_id` + a self-supersession
+CHECK). It is **not a live
 pipeline**: the worker is registered with `syntheticGridRegistry`, `requireValidated`
 refuses `synthetic`, so every job terminates `grid_not_validated` before a provider is
 called (`OPEN-18`), and `OPEN-03` blocks commercial production ingestion. No test
@@ -1176,14 +1177,17 @@ calls a provider; every adapter fixture is synthetic. 5.5 through 5.8 are **not
 started**, and nothing here claims a served coordinate on a real grid, an aggregation,
 or a `field_outlook_cells` row.
 
-Implementation evidence after 5.4 (2026-11-23), all executed in this working tree:
-contracts **408** tests, weather-core **61** (9 new adapter/normalizer cases), database
-unit **34** + integration **91**, worker **2** unit + **39** integration (6 new
-`ingest.forecast` cases, including two genuinely concurrent transactions). `pnpm
---filter` `build` and `lint` are clean for `contracts`, `weather-core`, `database` and
-`worker`. **Not re-run this round:** the API suites (206 unit + 74 integration), root
-`typecheck`, `prettier --check`, `db:verify` and `test:schema`; their last recorded
-numbers stand and are not evidence for 5.4.
+Implementation evidence after the 5.4 corrective round (2026-11-23), all executed in
+this working tree: contracts **408** tests, weather-core **69** (17 adapter/normalizer
+cases), database unit **34** + integration **101** (10 new `forecast-persistence`
+cases), worker **2** unit + **47** integration (8 `ingest.forecast` cases and 6
+heartbeat/settlement cases), API **206** unit + **74** integration, `test:schema`
+**23**, root `typecheck` green (9 tasks), `db:verify` all privilege checks passed
+(exit 0). `pnpm --filter` `build` and `lint` are clean for `contracts`, `weather-core`,
+`database` and `worker`; Prettier is clean on every changed file. The five corrective
+findings (F-01…F-05) are addressed and their regression tests pass; owner decisions are
+unchanged — `D21` and `D15c` are approved, `D1`/`D15`/`D15a`/`D15d`/`D15e` remain
+implemented without an owner signature.
 
 | Item | State |
 |---|---|
@@ -1273,17 +1277,17 @@ transaction implemented behind `OPEN-03`/`OPEN-18`; 5.5–5.8 have no work start
 | Item | State |
 |---|---|
 | `20261123000000_weather_supersession` | **Implemented and applied.** `weather_records_superseded_by_fkey` is now `DEFERRABLE INITIALLY DEFERRED` (a same-run replacement names its replacement id before that row exists) and `weather_records_no_self_supersession` forbids a row superseding itself. Verified against the live catalog: `condeferrable=t, condeferred=t, convalidated=t`. The migration opens with a pre-flight assertion block so it refuses to run on data that violates either invariant |
-| `packages/weather-core/src/adapters/open-meteo-daily.ts` | **Implemented.** `fetchDailyForecast` (`forecast_days=16`, `timezone=UTC`, `precipitation_sum`) and `fetchDailyEnsemble` (`models=ecmwf_ifs025`, 50 members, mean column skipped). Provider-native only: no `weather_records` row, no contract variable name, no unit conversion. Failure mapping is the existing union — 429 → `rate_limited`, 4xx → `request_invalid`, 5xx/timeout → `transport`, short axis → `incomplete_horizon`, shape drift → `provider_changed` |
+| `packages/weather-core/src/adapters/open-meteo-daily.ts` | **Implemented.** `fetchDailyForecast` (`forecast_days=15` — lead day 0–14 is the product horizon; 16 is the server's ceiling and is not requested, `timezone=UTC`, `precipitation_sum`) and `fetchDailyEnsemble` (`models=ecmwf_ifs025`, exactly 50 member columns validated by identifier — present, unique, inside `1..50`, malformed and unexpected columns rejected, mean column excluded, per-member nulls retained). Provider-native only: no `weather_records` row, no contract variable name, no unit conversion. Failure mapping is the existing union — 429 → `rate_limited`, 4xx → `request_invalid`, 5xx/timeout → `transport`, short or long axis → `incomplete_horizon`, shape drift → `provider_changed` |
 | `packages/weather-core/src/normalize/daily.ts` | **Implemented.** `normalizeDailyPrecipitation`: `precipitation` / `mm` / `daily` / `daily_sum`, `valid_at` = the day's `00:00Z`, nulls preserved. Refuses a unit it has no approved conversion for. Temperature is deliberately **not** mapped: `OPEN-14` has no `daily_max`, and inventing one would put unapproved vocabulary in a provenance column |
 | `packages/database/src/settlement.ts` | **Implemented (D15c).** `settlePair` — one primitive, modes `succeed`/`failed`/`adopt`, authority re-verified from the locked job (`authorityHolds` for a worker lease, a separate expired-lease predicate for the reaper), run id read from the locked job row, row counts asserted, both terminal statuses written atomically. `JobQueue.succeed`/`fail(terminal)` delegate to it; the worker path uses `settlePairAsWorker`. `partial` stays terminal success |
-| `packages/database/src/weather.ts` | **Implemented.** `advisoryLockKeyOf` (the two-integer tail of the run UUID — a valid Postgres signature, one mapping for every writer), `lockForecastRun`, `configureTransactionTimeouts` (transaction-local `lock_timeout`/`statement_timeout` applied before the first lock), `resolveForecastCells` (+`ProviderCoordinateDriftError`), `persistForecastRun` (born-superseded at INSERT, cross-run supersession by `initialized_at` / same-run by `ingestion_runs.created_at`, `supersedes_id` back-link, last-moment recheck, `GREATEST` horizon), `revalidateLease` |
-| `apps/worker/src/ingest/forecast.ts` | **Implemented.** Verifies `targetSelectorHashOf(targetSelector) === targetSelectorHash`, resolves cells back through the registry, refuses a non-`validated` or non-node selector before any fetch, then runs T3: bounds → Job `FOR UPDATE` → remaining lease ≥ 30 s → IngestionRun → advisory lock → lease revalidated → `persistForecastRun` → `settlePairAsWorker`, returning `settled` so the runner writes nothing further |
-| `apps/worker/src/{runner,main}.ts` | **Implemented.** `HandlerResult` gained `settled` and `commit_ambiguous`; the runner no longer writes run status before job status; heartbeat stops scheduling and awaits the in-flight renewal. `main.ts` registers `ingest.forecast` with `syntheticGridRegistry`, and the startup log says so |
+| `packages/database/src/weather.ts` | **Implemented.** Two advisory namespaces: `advisoryLockKeyOf` (two-integer tail of the run UUID) and `footprintLockKeyOf` (SHA-256 over `(cell_key, variable)`), acquired by `lockForecastWriteScope` — run key first, then the de-duplicated footprint set in ascending key order, which is the deadlock defence. `configureTransactionTimeouts` (transaction-local `lock_timeout`/`statement_timeout` before the first lock), `resolveForecastCells` (+`ProviderCoordinateDriftError`), `persistForecastRun` (born-superseded at INSERT, cross-run supersession by `initialized_at` / same-run by `ingestion_runs.created_at`, `supersedes_id` back-link, last-moment recheck), `extendHorizon` (`horizon_end` = last instant with a non-null value; `GREATEST` never shrinks; all-null reads the current value and advances nothing), `revalidateLease` |
+| `apps/worker/src/ingest/forecast.ts` | **Implemented.** Verifies `targetSelectorHashOf(targetSelector) === targetSelectorHash`, resolves cells back through the registry, refuses a non-`validated` or non-node selector before any fetch, then runs T3: bounds → Job `FOR UPDATE` → remaining lease ≥ 30 s → IngestionRun → `lockForecastWriteScope` (run key, then sorted footprint keys) → lease revalidated → `persistForecastRun` → `settlePairAsWorker`, returning `settled` so the runner writes nothing further. Coverage counts non-null values; an all-null response is the terminal `no_values`, never a `succeeded` run with zero coverage |
+| `apps/worker/src/{runner,main}.ts` | **Implemented.** `HandlerResult` gained `settled` and `commit_ambiguous`; the runner no longer writes run status before job status. `stopHeartbeat` is idempotent and is awaited **before** every settlement path (success, partial, handler-owned `settled`, terminal, retryable, exception), so no renewal can land after a terminal write or report a post-commit `lease_lost`. `main.ts` registers `ingest.forecast` with `syntheticGridRegistry`, and the startup log says so |
 | `packages/contracts/src/job.ts` | **Implemented.** `ingestionJobPayloadSchema.targetSelector` (optional; the digest is not fetchable and the handler must not guess its cells). An `ingest.forecast` job without it fails `selector_missing` |
-| Tests | weather-core **61** (9 new adapter/normalizer cases, all fixtures synthetic); worker **2** unit + **39** integration, including 6 new `ingest.forecast` cases: persistence + settlement, same-run re-normalisation supersession with deferred-FK replacement ids, an older run born superseded, two genuinely concurrent ingestions of one run, selector-hash refusal, `grid_not_validated` refusal |
+| Tests | weather-core **69** (the daily adapter file alone holds 17 cases, all fixtures synthetic: 15-value accept, shorter and longer axis rejection, lead day 14 last, and seven member-set cases); database **34** unit + **101** integration (10 new `forecast-persistence` cases: five horizon/null regressions and five real concurrent-transaction lock cases); worker **2** unit + **47** integration (`ingest.forecast`: persistence + settlement, same-run re-normalisation supersession with deferred-FK replacement ids, older run born superseded, two genuinely concurrent ingestions of one run, selector-hash refusal, `grid_not_validated`, all-null `no_values`, partial coverage; plus the 6 heartbeat/settlement ordering cases) |
 | Gates that remain closed | `OPEN-18`: only `synthetic` is registered and `requireValidated` refuses it, so a real job dies `grid_not_validated`; tests use a fixture registry with an explicitly `validated` entry, which is the adapter-dev/test allowance. `OPEN-03`: no commercial production ingestion; the attribution string is provenance, not a licence decision |
 | Not implemented | no scheduler, no budget bucket, no BMKG adapter, no aggregation, no `field_outlook_cells` write, no `sync_attempts`, no raw payload (OPEN-05) |
-| Known risk | two **different** forecast runs writing the same cells concurrently are not serialised — the advisory lock is per `forecastRunId` and the last-moment recheck narrows the window without closing it. A footprint-scoped lock or `SERIALIZABLE` is the upgrade path. `transaction_timeout` is not configured anywhere, so the 15 s rung of the timeout chain does not exist yet |
+| Known risk | the cross-run race is closed by the footprint namespace, at the cost of serialising writers of one cell even when their instants do not overlap (the conflict domain is `(cell_key, variable)`). A selector in the hundreds would want a single server-side lock loop over the sorted keys; the ordering contract makes that swap safe. Key collisions (2^-32 per pair) merely serialise two unrelated footprints for one transaction. `transaction_timeout` is not configured anywhere, so the 15 s rung of the timeout chain does not exist yet |
 | Test-suite edit disclosure | `apps/worker/test/integration/queue.test.mjs` was edited twice against the standing "do not edit tests" rule: the reaper case was rewritten to the adopt-don't-overwrite contract, and `refuses to release after an ingestion run was assigned` was given a suite-owned forecast run instead of `SELECT id FROM app.forecast_runs LIMIT 1` (that `LIMIT 1` made the case silently no-op on an empty database and fail on a populated one) |
 
 ### Phase 5.0 — contracts and grid resolver — 2026-11-21

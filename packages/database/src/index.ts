@@ -98,7 +98,10 @@ export type { TenantScope, TenantTransaction } from "./tenant.js";
 export {
   advisoryLockKeyOf,
   configureTransactionTimeouts,
+  footprintLockKeyOf,
+  lockForecastFootprint,
   lockForecastRun,
+  lockForecastWriteScope,
   persistForecastRun,
   ProviderCoordinateDriftError,
   resolveForecastCells,
@@ -106,6 +109,7 @@ export {
 } from "./weather.js";
 export type {
   ForecastCell,
+  ForecastFootprint,
   ForecastRecordInput,
   PersistForecastRunInput,
   PersistForecastRunResult,

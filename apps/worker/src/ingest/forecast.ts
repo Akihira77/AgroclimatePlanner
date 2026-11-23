@@ -6,12 +6,13 @@ import {
   IngestionTerminalError,
   InvariantViolationError,
   LeaseLostError,
-  lockForecastRun,
+  lockForecastWriteScope,
   lockJobForSettlement,
   persistForecastRun,
   ProviderCoordinateDriftError,
   revalidateLease,
   settlePairAsWorker,
+  type ForecastFootprint,
 } from "@agroclimate/database";
 import {
   createFetchTransport,
@@ -41,9 +42,15 @@ import type { HandlerResult, JobHandler } from "../runner.js";
  *   queue row is not a trusted authority for which cells were approved.
  *
  * The write half is one transaction (T3): transaction-local bounds first, then
- * Job → IngestionRun → advisory lock, a lease re-check after the advisory wait,
- * the data writes, and the settlement — in that order, in one transaction. A
- * lost lease after the advisory wait rolls the whole thing back.
+ * Job → IngestionRun row locks, then the advisory write scope (run key, then
+ * every footprint key in sorted order), a lease re-check after those waits, the
+ * data writes, and the settlement — in that order, in one transaction. A lost
+ * lease after the waits rolls the whole thing back.
+ *
+ * The horizon is not "the last row". A provider can answer with rows and no
+ * values; those rows are stored as evidence and never extend `horizon_end`, and
+ * an ingestion with no value at all is a terminal failure rather than a
+ * `succeeded` run with a coverage of zero.
  */
 
 export interface ForecastHandlerOptions {
@@ -144,6 +151,19 @@ function cellsFromSelector(
     });
   }
   return cells;
+}
+
+/**
+ * One footprint per `(cellKey, variable)`. Records repeat a pair once per day
+ * and once per ensemble member, and the lock set must not.
+ */
+function dedupeFootprints(records: readonly ForecastRecordInput[]): ForecastFootprint[] {
+  const seen = new Map<string, ForecastFootprint>();
+  for (const record of records) {
+    const key = `${record.cellKey}\u0000${record.variable}`;
+    if (!seen.has(key)) seen.set(key, { cellKey: record.cellKey, variable: record.variable });
+  }
+  return [...seen.values()];
 }
 
 export function createForecastHandler(options: ForecastHandlerOptions): JobHandler {
@@ -279,13 +299,23 @@ export function createForecastHandler(options: ForecastHandlerOptions): JobHandl
         return terminal("empty_result", "the provider answered with no daily values");
       }
 
-      const covered = new Set(
-        records
-          .filter((record) => record.value !== null)
-          .map((record) => `${record.variable}\u0000${record.cellKey}`),
-      );
-      const coveragePercent =
-        cells.length === 0 ? 0 : Math.round((covered.size / cells.length) * 10_000) / 100;
+      // An ingestion whose every value is null carried no forecast. Persisting
+      // it as a success would put a `succeeded` run behind a horizon that never
+      // moved and a coverage of zero; it is a terminal failure with a code an
+      // operator can act on, and nothing is written.
+      const valued = records.filter((record) => record.value !== null);
+      if (valued.length === 0) {
+        return terminal(
+          "no_values",
+          `the provider returned ${records.length} daily values and every one is null`,
+        );
+      }
+
+      // Coverage is per stored value, not per cell: one non-null day out of a
+      // fifteen-day horizon is not full coverage, and the terminal state has to
+      // agree with the number a reader sees.
+      const coveragePercent = Math.round((valued.length / records.length) * 10_000) / 100;
+      const footprints = dedupeFootprints(records);
 
       try {
         return await context.db.$transaction(
@@ -326,7 +356,13 @@ export function createForecastHandler(options: ForecastHandlerOptions): JobHandl
               throw new IngestionTerminalError(runRow.status);
             }
 
-            await lockForecastRun(tx, payload.forecastRunId);
+            // The one write scope: run key, then every footprint key in sorted
+            // order. A different forecast run writing the same cells blocks here,
+            // which is what makes the supersession reads below reliable.
+            await lockForecastWriteScope(tx, {
+              forecastRunId: payload.forecastRunId,
+              footprints,
+            });
 
             // The advisory wait can be seconds. Ownership is re-proved against
             // the locked row, not against the claim that started the handler.

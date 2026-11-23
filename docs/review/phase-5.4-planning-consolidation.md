@@ -573,22 +573,26 @@ cannot be satisfied by waiting:
   exactly what `D15c` exists to prevent.
 - **The reaper adopts.** Writing `dead` over a `succeeded` run reports a failure that
   did not happen; one existing queue test was rewritten to the new contract.
-- **`advisoryLockKeyOf`** maps a run UUID to a two-`integer` key (the tail 8 bytes).
-  A text key would not match any `pg_advisory_xact_lock` signature.
+- **Advisory keys.** `advisoryLockKeyOf` maps a run UUID to a two-`integer` key (the
+  tail 8 bytes); `footprintLockKeyOf` maps `(cell_key, variable)` into a second
+  namespace. The footprint set is acquired sorted, after the run key — see §15.6.
 
 ### 15.3 Executed evidence
 
 | Suite | Command | Result |
 |---|---|---|
 | contracts | `pnpm --filter @agroclimate/contracts test` | 12 files, **408 pass**, 0 fail |
-| weather-core | `pnpm --filter @agroclimate/weather-core test` | 4 files, **61 pass**, 0 fail (9 new) |
+| weather-core | `pnpm --filter @agroclimate/weather-core test` | 4 files, **69 pass**, 0 fail (daily adapter file: 17 cases) |
 | database unit | `pnpm --filter @agroclimate/database test` | **34 pass**, 0 fail |
-| database integration | `pnpm --filter @agroclimate/database test:integration` | **91 pass**, 0 fail |
+| database integration | `pnpm --filter @agroclimate/database test:integration` | **101 pass**, 0 fail (10 new `forecast-persistence` cases) |
 | worker unit | `pnpm --filter @agroclimate/worker test` | **2 pass**, 0 fail |
-| worker integration | `pnpm --filter @agroclimate/worker test:integration` | **39 pass**, 0 fail (6 new `ingest.forecast` cases) |
+| worker integration | `pnpm --filter @agroclimate/worker test:integration` | **47 pass**, 0 fail (8 `ingest.forecast` cases, 6 heartbeat/settlement cases) |
+| API | `pnpm --filter @agroclimate/api test` / `test:integration` | **206 pass** / **74 pass**, 0 fail |
+| schema | `pnpm --filter @agroclimate/database test:schema` | **23 pass**, 0 fail |
 
-Not executed in this round: the API suites, root `typecheck`, `prettier --check`,
-`db:verify`, `test:schema`. No test calls a provider.
+Also executed: root `typecheck` (9 tasks, green), `db:verify` (all privilege checks
+passed, exit 0), `build` + `lint` for `contracts`, `weather-core`, `database` and
+`worker`, and `prettier --check` on every changed file. No test calls a provider.
 
 ### 15.4 Still blocked
 
@@ -597,8 +601,8 @@ Not executed in this round: the API suites, root `typecheck`, `prettier --check`
   between this code and live ingestion.
 - `OPEN-18`: no grid is `validated`. The worker is given `syntheticGridRegistry`, so
   every real job dies `grid_not_validated` before a provider call.
-- `peer-run writes`: two different forecast runs writing the same cells are not
-  serialised; the per-run advisory lock does not cover that pair.
+- ~~`peer-run writes`: two different forecast runs writing the same cells are not
+  serialised~~ — **closed** by the footprint advisory namespace (§15.6, F-03).
 
 ### 15.5 Corrections to earlier claims in this document
 
@@ -609,3 +613,26 @@ Not executed in this round: the API suites, root `typecheck`, `prettier --check`
 - The job identity at `climate-data-foundation.md` §5.3 was corrected from
   `ingest:{queue}:{forecastRunId}:{targetSelectorHash}` to
   `…:{ingestionVersion}`, which is what `ingestionJobIdentityOf` has always built.
+
+### 15.6 Corrective round — findings F-01…F-05 (2026-11-23)
+
+An independent review of the implementation above found five defects. All five are
+addressed; the assertions that would have hidden them were not weakened.
+
+| Finding | Root cause | Correction |
+|---|---|---|
+| **F-01** horizon claimed null days | `maxValidAt(records)` ignored `value === null`, so a null tail extended `horizon_end` past the last real value | `extendHorizon` uses the last instant with a non-null value; `GREATEST` still never shrinks; an all-null ingestion reads the current horizon and advances nothing. The handler classifies an all-null response as terminal `no_values` instead of a `succeeded` run with zero coverage, and coverage is computed per stored value, not per cell |
+| **F-02** wrong daily horizon | `DAILY_FORECAST_DAYS = 16` conflated the provider's maximum request length with the product horizon | `DAILY_FORECAST_DAYS = 15` (lead day 0–14); `DAILY_LAST_LEAD_DAY = 14`; adapter versions bumped to `@1.1.0`; UTC date semantics unchanged; longer and shorter axes both rejected as `incomplete_horizon` |
+| **F-03** cross-run supersession race | the advisory lock was per `forecastRunId`, so two different runs writing the same slots could each pass reconciliation | second namespace `footprintLockKeyOf(cell_key, variable)`; `lockForecastWriteScope` takes the run key then the de-duplicated footprint keys in ascending order (deadlock defence); the lease is revalidated after those waits; the per-run key is kept because it still serialises re-normalisations of one run |
+| **F-04** heartbeat could land after settlement | `settle(...)` ran before the `finally` cleanup, so an in-flight renewal could commit after the terminal write | idempotent `stopHeartbeat()` clears the interval and awaits the one in-flight renewal, and every settlement path (success, partial, handler-owned `settled`, terminal, retryable, exception) awaits it first; `reportLeaseLost` is once-only, so no post-commit `lease_lost` |
+| **F-05** ensemble member set unchecked | members were counted, so 49 members plus a duplicate identifier passed | the set is validated by identifier: all 50 present, unique, inside `1..50`; malformed and unexpected columns rejected; the mean column is excluded by name; individual member-day nulls are kept |
+
+New regression coverage: five horizon/null cases and five real concurrent-transaction
+lock cases in `packages/database/test/integration/forecast-persistence.test.mjs`; two
+handler outcome cases (`no_values`, partial coverage) in
+`apps/worker/test/integration/ingest-forecast.test.mjs`; six heartbeat/settlement
+ordering cases in `apps/worker/test/integration/runner-heartbeat.test.mjs`; and the
+adapter's 15-day and seven member-set cases in
+`packages/weather-core/src/adapters/open-meteo-daily.test.ts`. Approval status is
+unchanged: `D21` and `D15c` are owner-approved; `D1`, `D15`, `D15a`, `D15d` and `D15e`
+remain implemented without an owner signature.

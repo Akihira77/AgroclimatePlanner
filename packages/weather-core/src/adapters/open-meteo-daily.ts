@@ -6,14 +6,19 @@ import type { AdapterRuntime } from "../runtime.js";
  * Open-Meteo daily forecast adapters: the deterministic forecast API and the
  * ensemble API.
  *
- * Every pinned parameter below is what
+ * Two numbers are deliberately different and must not be conflated: the
+ * **product horizon** is lead day 0–14 inclusive, 15 calendar days, and the
+ * **server limit** observed on 2026-11-18 is 16 (`forecast_days=17` is a 400).
+ * The plan's contract is the product horizon, so `DAILY_FORECAST_DAYS = 15` is
+ * what is requested; the server's ceiling is a capability, not a request.
+ *
+ * The remaining pinned facts are what
  * `docs/research/forecast-horizon-capabilities.md` observed on 2026-11-18:
  *
- * - Deterministic `forecast_days` is capped at **16** by the server; 400 above.
- * - The ensemble (`models=ecmwf_ifs025`) returns **50 members** plus a mean and
- *   truncates to **14 days**: rows past day 14 exist but every value is null. A
- *   row count is therefore not a horizon, and the member columns are what get
- *   asserted.
+ * - The ensemble (`models=ecmwf_ifs025`) returns **exactly 50 members** plus a
+ *   mean column, and truncates to **day 14**: at 35 days the extra rows exist
+ *   with every value null. Requesting 15 days therefore stays inside the
+ *   provider's own horizon, and an individual member-day may still be null.
  * - Only `precipitation_sum` is pinned here. The API's `temperature_2m_max`
  *   exists, but `aggregation_level` has no approved `daily_max` member (OPEN-14),
  *   so storing it would require inventing vocabulary. One variable is honest;
@@ -25,10 +30,18 @@ import type { AdapterRuntime } from "../runtime.js";
  * variable name, and no unit conversion happens here.
  */
 
-export const DAILY_FORECAST_ADAPTER_VERSION = "open-meteo-forecast-daily@1.0.0";
-export const DAILY_ENSEMBLE_ADAPTER_VERSION = "open-meteo-ensemble-daily@1.0.0";
-export const DAILY_FORECAST_DAYS = 16;
+export const DAILY_FORECAST_ADAPTER_VERSION = "open-meteo-forecast-daily@1.1.0";
+export const DAILY_ENSEMBLE_ADAPTER_VERSION = "open-meteo-ensemble-daily@1.1.0";
+/**
+ * The product horizon: lead day 0 … 14 inclusive. Not the provider's maximum
+ * request length — see the module comment.
+ */
+export const DAILY_FORECAST_DAYS = 15;
+/** Last requested lead day; `DAILY_FORECAST_DAYS - 1`. */
+export const DAILY_LAST_LEAD_DAY = DAILY_FORECAST_DAYS - 1;
 export const DAILY_ENSEMBLE_MODEL = "ecmwf_ifs025";
+/** The IFS 0.25° ensemble publishes exactly 50 members. */
+export const DAILY_ENSEMBLE_MEMBERS = 50;
 export const DAILY_VARIABLE = "precipitation_sum";
 export const FORECAST_DEFAULT_BASE_URL = "https://api.open-meteo.com";
 export const ENSEMBLE_DEFAULT_BASE_URL = "https://ensemble-api.open-meteo.com";
@@ -109,6 +122,8 @@ export function buildDailyEnsembleUrl(config: DailyAdapterConfig): string {
 }
 
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+/** `precipitation_sum_member01` … A missing leading zero is still an identifier. */
+const memberColumnPattern = new RegExp(`^${DAILY_VARIABLE}_member(\\d+)$`);
 const dailyBodySchema = z.looseObject({
   latitude: z.number(),
   longitude: z.number(),
@@ -260,7 +275,7 @@ export async function fetchDailyForecast(
   if (body.value.time.length !== DAILY_FORECAST_DAYS) {
     return failure(
       "incomplete_horizon",
-      `expected ${DAILY_FORECAST_DAYS} daily rows, received ${body.value.time.length}`,
+      `expected ${DAILY_FORECAST_DAYS} daily rows (lead day 0-${DAILY_LAST_LEAD_DAY}), received ${body.value.time.length}`,
     );
   }
 
@@ -291,8 +306,14 @@ export async function fetchDailyForecast(
  *
  * The response carries `precipitation_sum` (the mean), then
  * `precipitation_sum_member01` … `_member50`. The mean is **not** a member and
- * is skipped: storing it as member 0 would publish 51 members where the provider
+ * is excluded: counting it would publish 51 members where the provider
  * delivered 50.
+ *
+ * The member set is verified rather than counted. A count-only check accepts 49
+ * members plus two copies of one identifier, which silently narrows the spread
+ * a later consumer computes; so every identifier must be present, unique, and
+ * inside `1..50`, and the mean column must not be mistaken for one. Individual
+ * member-days stay nullable — a null is the provider's answer, not drift.
  */
 export async function fetchDailyEnsemble(
   config: DailyAdapterConfig,
@@ -302,38 +323,57 @@ export async function fetchDailyEnsemble(
   const body = await getDaily("ensemble", url, config, runtime);
   if (!body.ok) return body;
 
-  const memberPattern = new RegExp(`^${DAILY_VARIABLE}_member(\\d{2})$`);
-  const members: { member: number; values: readonly (number | null)[] }[] = [];
-  for (const column of body.value.columns) {
-    const match = memberPattern.exec(column.name);
-    if (match?.[1] === undefined) continue;
-    members.push({ member: Number(match[1]) - 1, values: column.values });
-  }
-  members.sort((a, b) => a.member - b.member);
-
-  if (members.length === 0) {
-    return failure("provider_changed", "ensemble response carried no member columns");
-  }
-  if (body.value.time.length <= DAILY_FORECAST_DAYS - 2) {
+  if (body.value.time.length !== DAILY_FORECAST_DAYS) {
     return failure(
       "incomplete_horizon",
-      `ensemble returned ${body.value.time.length} days; the observed horizon is ${DAILY_FORECAST_DAYS - 2}`,
+      `ensemble returned ${body.value.time.length} days; expected ${DAILY_FORECAST_DAYS} (lead day 0-${DAILY_LAST_LEAD_DAY})`,
+    );
+  }
+
+  const members = new Map<number, readonly (number | null)[]>();
+  for (const column of body.value.columns) {
+    if (column.name === DAILY_VARIABLE) continue; // the mean, never a member
+
+    const match = memberColumnPattern.exec(column.name);
+    if (match?.[1] === undefined) {
+      return failure(
+        "provider_changed",
+        column.name.startsWith(`${DAILY_VARIABLE}_member`)
+          ? `ensemble member column "${column.name}" has no numeric identifier`
+          : `ensemble returned unexpected column "${column.name}"`,
+      );
+    }
+    const memberId = Number(match[1]);
+    if (!Number.isSafeInteger(memberId) || memberId < 1 || memberId > DAILY_ENSEMBLE_MEMBERS) {
+      return failure(
+        "provider_changed",
+        `ensemble member "${column.name}" is outside 1..${DAILY_ENSEMBLE_MEMBERS}`,
+      );
+    }
+    const index = memberId - 1;
+    if (members.has(index)) {
+      return failure("provider_changed", `ensemble member identifier ${memberId} is duplicated`);
+    }
+    members.set(index, column.values);
+  }
+
+  const missing: number[] = [];
+  for (let memberId = 1; memberId <= DAILY_ENSEMBLE_MEMBERS; memberId += 1) {
+    if (!members.has(memberId - 1)) missing.push(memberId);
+  }
+  if (missing.length > 0) {
+    return failure(
+      "provider_changed",
+      `ensemble returned ${members.size} of ${DAILY_ENSEMBLE_MEMBERS} members; missing ${missing.join(", ")}`,
     );
   }
 
   const days: ProviderDay[] = [];
-  for (const entry of members) {
-    for (let index = 0; index < body.value.time.length; index += 1) {
-      const date = body.value.time[index];
+  for (const [index, values] of [...members.entries()].sort((a, b) => a[0] - b[0])) {
+    for (let day = 0; day < body.value.time.length; day += 1) {
+      const date = body.value.time[day];
       if (date === undefined) continue;
-      days.push({ date, value: entry.values[index] ?? null, member: entry.member });
-    }
-  }
-  // A member column with no value on any day is a provider change, not a
-  // member with a bad day: the ensemble would silently shrink.
-  for (const entry of members) {
-    if (entry.values.every((value) => value === null)) {
-      return failure("provider_changed", `ensemble member ${entry.member} is entirely null`);
+      days.push({ date, value: values[day] ?? null, member: index });
     }
   }
 
@@ -344,7 +384,7 @@ export async function fetchDailyEnsemble(
         model: DAILY_ENSEMBLE_MODEL,
         product: "ensemble",
         adapterVersion: DAILY_ENSEMBLE_ADAPTER_VERSION,
-        ensembleSize: members.length,
+        ensembleSize: members.size,
         days,
       },
       body.value,

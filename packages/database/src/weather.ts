@@ -2,18 +2,24 @@
  * Forecast persistence — Phase 5.4.
  *
  * Everything here runs on a caller's transaction, and every caller is the
- * handler's T3. Three properties are load-bearing:
+ * handler's T3. Four properties are load-bearing:
  *
- * 1. **One lock order.** The advisory lock is taken after the job and run row
- *    locks (`settlement.lockJobForSettlement`), never before them.
- * 2. **One advisory-key derivation.** `advisoryLockKeyOf` is the only function
- *    that turns a forecast run into a lock key. Two-int form, because
- *    `pg_advisory_xact_lock(text)` does not exist.
+ * 1. **One lock order.** Job → IngestionRun → forecast-run advisory → footprint
+ *    advisory keys, sorted. The row locks come from
+ *    `settlement.lockJobForSettlement` and never move; the advisory keys are
+ *    taken afterwards, by `lockForecastWriteScope`.
+ * 2. **Two advisory namespaces.** `advisoryLockKeyOf` (one key per forecast run)
+ *    and `footprintLockKeyOf` (one key per `(cell_key, variable)`). They are
+ *    derived differently so a footprint cannot accidentally be trusted to
+ *    serialise a run.
  * 3. **One supersession order.** A row may only be superseded by a row from a
  *    newer ingestion. When the incoming ingestion is the older one, its own
  *    rows are born superseded instead — the newer persisted data stays live.
+ * 4. **A horizon made of values.** `horizon_end` is the last instant that
+ *    carries a non-null value; a null day is preserved as a row and never
+ *    extends the horizon.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { upsertCell } from "./climate.js";
 import { InvariantViolationError } from "./run-errors.js";
@@ -27,10 +33,10 @@ import type { TenantTransaction } from "./tenant.js";
  * runs created in the same millisecond do not collide.
  *
  * Collision property: a collision serialises two unrelated forecast runs. It
- * never corrupts data and never deadlocks, because a transaction holds at most
- * one forecast lock. Widening to `bigint` would not remove the possibility —
- * any finite key collides — so the narrower type is chosen for a signature that
- * exists in every supported PostgreSQL version.
+ * never corrupts data and never deadlocks: the run key is acquired before the
+ * footprint set, in that order, by every writer. Widening to `bigint` would not
+ * remove the possibility — any finite key collides — so the narrower type is
+ * chosen for a signature that exists in every supported PostgreSQL version.
  */
 export function advisoryLockKeyOf(forecastRunId: string): readonly [number, number] {
   const hex = forecastRunId.replaceAll("-", "").toLowerCase();
@@ -52,6 +58,94 @@ export async function lockForecastRun(tx: TenantTransaction, forecastRunId: stri
     SELECT 1 AS locked
       FROM (SELECT pg_advisory_xact_lock(${first}::int, ${second}::int)) AS acquired
   `;
+}
+
+/**
+ * The conflict domain of supersession: one logical value slot.
+ *
+ * Two writers disagree about a slot exactly when they write the same `cell_key`
+ * and `variable` — `valid_at` and `ensemble_member` narrow which rows are
+ * replaced, but they are decided *inside* the domain, so a lock keyed on the
+ * wider pair cannot miss a conflict and must not be keyed narrower. Keying on
+ * `(cell_key, variable, valid_at, member)` would serialise less and would have
+ * to acquire one lock per value, which grows with horizon × members instead of
+ * with the selector.
+ *
+ * Granularity consequence: writers of disjoint cells never block each other;
+ * writers of the same cell serialise even when their instants do not overlap.
+ * That is the intended direction — the cost of over-serialising one cell is a
+ * short wait, the cost of under-serialising it is two live rows for one slot.
+ */
+export function footprintLockKeyOf(cellKey: string, variable: string): readonly [number, number] {
+  // A namespace prefix inside the hash preimage keeps the footprint space
+  // distinct from `advisoryLockKeyOf`, whose key is a raw UUID tail.
+  const digest = createHash("sha256")
+    .update(`agroclimate:forecast-footprint:v1\u0000${cellKey}\u0000${variable}`)
+    .digest();
+  return [digest.readInt32BE(0), digest.readInt32BE(4)];
+}
+
+export interface ForecastFootprint {
+  readonly cellKey: string;
+  readonly variable: string;
+}
+
+function compareLockKeys(a: readonly [number, number], b: readonly [number, number]): number {
+  return a[0] === b[0] ? a[1] - b[1] : a[0] - b[0];
+}
+
+/**
+ * Serialise every writer of the given footprints.
+ *
+ * Keys are de-duplicated, then acquired in ascending numeric order, one
+ * statement each. The order is the deadlock defence: a writer holding key 3 and
+ * waiting for key 7 can only meet a writer holding 7 and waiting for 3 if one of
+ * them acquired out of order, and neither can. `lockForecastRun` is always taken
+ * before this set, in every caller, so the run key never participates in a cycle
+ * either.
+ *
+ * Cost: one round trip per distinct `(cellKey, variable)` pair. Selectors are
+ * per-cell today (single digits to low tens), so this is a handful of local
+ * statements inside a transaction that already has a 10 s statement bound. A
+ * selector in the hundreds would want a single server-side loop over the sorted
+ * set; the ordering contract above is what makes that swap safe.
+ *
+ * Collisions are possible (2^-32 per pair) and harmless: two unrelated
+ * footprints sharing a key serialise each other for the duration of one
+ * transaction. They never let two writers of the *same* footprint through,
+ * because the derivation is a pure function of the same two strings.
+ */
+export async function lockForecastFootprint(
+  tx: TenantTransaction,
+  footprints: readonly ForecastFootprint[],
+): Promise<void> {
+  const keys = new Map<string, readonly [number, number]>();
+  for (const footprint of footprints) {
+    const key = footprintLockKeyOf(footprint.cellKey, footprint.variable);
+    keys.set(`${key[0]}:${key[1]}`, key);
+  }
+
+  for (const [first, second] of [...keys.values()].sort(compareLockKeys)) {
+    await tx.$queryRaw`
+      SELECT 1 AS locked
+        FROM (SELECT pg_advisory_xact_lock(${first}::int, ${second}::int)) AS acquired
+    `;
+  }
+}
+
+/**
+ * The one way to take the write locks for a forecast ingest.
+ *
+ * Order: run key, then the footprint set. `revalidateLease` belongs *after*
+ * this call and before `persistForecastRun`: these waits can be long, and the
+ * lease that looked healthy before them is not evidence afterwards.
+ */
+export async function lockForecastWriteScope(
+  tx: TenantTransaction,
+  input: { readonly forecastRunId: string; readonly footprints: readonly ForecastFootprint[] },
+): Promise<void> {
+  await lockForecastRun(tx, input.forecastRunId);
+  await lockForecastFootprint(tx, input.footprints);
 }
 
 /**
@@ -239,14 +333,16 @@ function recordKeyOf(
  * Persist one ingestion's records, extending the horizon and reconciling
  * supersession in both directions.
  *
- * The caller has already locked the job, the run, and the forecast advisory
- * lock, so no other writer for this forecast run is inside.
+ * **Precondition:** the caller holds `lockForecastWriteScope` for
+ * `forecastRunId` and this ingestion's footprints, and has revalidated its
+ * lease after that acquisition. The locks are what make the reads below
+ * meaningful: a writer of an overlapping footprint from a *different* forecast
+ * run is excluded, so the pre-read and the last-moment recheck see committed
+ * truth rather than racing uncommitted rows.
  *
- * Residual limitation: two *different* forecast runs writing the same cells
- * concurrently are not serialised (the advisory lock is per run). A row of the
- * older run inserted after the newer run's reconciliation can stay live until
- * the next ingestion of either run. Closing that needs a footprint-scoped lock
- * or SERIALIZABLE isolation; both are wider than this phase.
+ * The horizon is computed from records that carry a value. A null day is still
+ * persisted — it is evidence that the provider has no value there — but it is
+ * not evidence of coverage, so it must not extend `horizon_end`.
  */
 export async function persistForecastRun(
   tx: TenantTransaction,
@@ -480,17 +576,10 @@ export async function persistForecastRun(
     RETURNING w.id::text AS "id"
   `;
 
-  // 5. Extend the horizon, never shrink it.
-  const horizon = await tx.$queryRaw<{ horizonEnd: Date }[]>`
-    UPDATE app.forecast_runs
-       SET horizon_end = GREATEST(horizon_end, ${maxValidAt(input.records)}::timestamptz)
-     WHERE id = ${input.forecastRunId}::uuid
-    RETURNING horizon_end AS "horizonEnd"
-  `;
-  const horizonEnd = horizon[0]?.horizonEnd;
-  if (horizonEnd === undefined) {
-    throw new InvariantViolationError(`forecast run ${input.forecastRunId} does not exist`);
-  }
+  // 5. Extend the horizon with the last instant that actually carries a value.
+  //    Never shrink it: `GREATEST` keeps an older ingestion from pulling it back,
+  //    and an all-null ingestion does not touch it at all.
+  const horizonEnd = await extendHorizon(tx, input);
 
   return {
     inserted: inserted.length,
@@ -501,13 +590,54 @@ export async function persistForecastRun(
   };
 }
 
-function maxValidAt(records: readonly ForecastRecordInput[]): Date {
-  let max = records[0]?.validAt;
-  if (max === undefined) throw new InvariantViolationError("empty record set");
-  for (const record of records) {
-    if (record.validAt.getTime() > max.getTime()) max = record.validAt;
+/**
+ * Advance `horizon_end` to the last non-null instant, or leave it alone.
+ *
+ * The single statement is safe against a missing run: it raises the invariant
+ * instead of returning a partial write. When every record is null there is
+ * nothing to advance, so the current value is read and returned — an all-null
+ * ingestion still persists its rows, it just claims no horizon.
+ */
+async function extendHorizon(tx: TenantTransaction, input: PersistForecastRunInput): Promise<Date> {
+  const latest = latestNonNullValidAt(input.records);
+
+  if (latest === null) {
+    const current = await tx.$queryRaw<{ horizonEnd: Date }[]>`
+      SELECT horizon_end AS "horizonEnd"
+        FROM app.forecast_runs
+       WHERE id = ${input.forecastRunId}::uuid
+    `;
+    const horizonEnd = current[0]?.horizonEnd;
+    if (horizonEnd === undefined) {
+      throw new InvariantViolationError(`forecast run ${input.forecastRunId} does not exist`);
+    }
+    return horizonEnd;
   }
-  return max;
+
+  const horizon = await tx.$queryRaw<{ horizonEnd: Date }[]>`
+    UPDATE app.forecast_runs
+       SET horizon_end = GREATEST(horizon_end, ${latest}::timestamptz)
+     WHERE id = ${input.forecastRunId}::uuid
+    RETURNING horizon_end AS "horizonEnd"
+  `;
+  const horizonEnd = horizon[0]?.horizonEnd;
+  if (horizonEnd === undefined) {
+    throw new InvariantViolationError(`forecast run ${input.forecastRunId} does not exist`);
+  }
+  return horizonEnd;
+}
+
+/**
+ * The last instant a record actually describes. `null` means the ingestion
+ * carried no values at all — not that it carried nothing.
+ */
+function latestNonNullValidAt(records: readonly ForecastRecordInput[]): Date | null {
+  let latest: Date | null = null;
+  for (const record of records) {
+    if (record.value === null) continue;
+    if (latest === null || record.validAt.getTime() > latest.getTime()) latest = record.validAt;
+  }
+  return latest;
 }
 
 /** One identity row per `(cellKey, served coordinate)`; records repeat cells. */
