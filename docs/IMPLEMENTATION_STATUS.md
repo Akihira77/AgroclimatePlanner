@@ -1148,14 +1148,15 @@ Phases 4.5 and 4.6 remain **not started**.
 
 ---
 
-## Phase 5 — Climate Data Foundation — **5.0 complete; 5.1 partially implemented; 5.2 complete (5.2.1–5.2.8); 5.3 complete; 5.4–5.8 not started**
+## Phase 5 — Climate Data Foundation — **5.0 complete; 5.1 partially implemented; 5.2 complete (5.2.1–5.2.8); 5.3 complete; 5.4 implemented behind its gates; 5.5–5.8 not started**
 
 Status: **5.0 complete; 5.1 partially implemented; 5.2 complete, all eight steps;
-5.3 complete; 5.4–5.8 not started.** 5.0 delivered the contract and resolver code in
-`packages/contracts` with tests, and added no migration, Prisma model, route, grant,
-policy, worker, queue, or persistence. It is complete as delivered: the `OPEN-14`
-vocabulary freeze remains a deferred open decision rather than a missing deliverable,
-and the job-lifecycle interface moved to 5.3 by design.
+5.3 complete; 5.4 implemented behind `OPEN-03` and `OPEN-18`; 5.5–5.8 not started.**
+5.0 delivered the contract and resolver code in `packages/contracts` with tests, and
+added no migration, Prisma model, route, grant, policy, worker, queue, or persistence.
+It is complete as delivered: the `OPEN-14` vocabulary freeze remains a deferred open
+decision rather than a missing deliverable, and the job-lifecycle interface moved to
+5.3 by design.
 
 5.1 is partial: `@agroclimate/weather-core` exists with a transport, a failure union,
 one real provider adapter (SEAS5 monthly), and a monthly normalizer. 5.2 is complete:
@@ -1163,29 +1164,37 @@ literal hash fixtures, a registry keyed by `(provider, model)`, the `SpatialReso
 result contract, a weather-core registry holding one synthetic entry, a tenant-scoped
 field anchor, cell identity persistence, the resolution route, and the status
 reconciliation. 5.3 is complete: the `app.jobs` migration, the PostgreSQL queue, the
-worker runner, and the `IngestionRun` lifecycle, with no handler registered. 5.4
-through 5.8 are **not started**. Nothing here claims an executed ingestion, a
-persisted weather record, an aggregation, a served coordinate, or a
-`field_outlook_cells` row. The route still resolves nothing for a real model: no provider
-grid is configured, so only a `synthetic` pair reaches the database, where the provider
-CHECK refuses it.
+worker runner, and the `IngestionRun` lifecycle. 5.4 is implemented: the Open-Meteo
+daily forecast and ensemble adapters, a daily precipitation normalizer, the
+`ingest.forecast` handler, the single settlement primitive, the per-run advisory lock
+and the T3 write transaction, and one additive migration (deferred
+`weather_records.superseded_by_id` + a self-supersession CHECK). It is **not a live
+pipeline**: the worker is registered with `syntheticGridRegistry`, `requireValidated`
+refuses `synthetic`, so every job terminates `grid_not_validated` before a provider is
+called (`OPEN-18`), and `OPEN-03` blocks commercial production ingestion. No test
+calls a provider; every adapter fixture is synthetic. 5.5 through 5.8 are **not
+started**, and nothing here claims a served coordinate on a real grid, an aggregation,
+or a `field_outlook_cells` row.
 
-Implementation evidence after 5.3 (2026-11-22): contracts **408** tests, weather-core
-**52**, database unit **34** + integration **91**, API **206** unit + **74**
-integration, worker **2** unit + **18** integration; root `typecheck` and `lint`
-clean, `prettier --check` clean, `db:verify` **508** assertions, `test:schema` **23**.
-No test calls a provider.
+Implementation evidence after 5.4 (2026-11-23), all executed in this working tree:
+contracts **408** tests, weather-core **61** (9 new adapter/normalizer cases), database
+unit **34** + integration **91**, worker **2** unit + **39** integration (6 new
+`ingest.forecast` cases, including two genuinely concurrent transactions). `pnpm
+--filter` `build` and `lint` are clean for `contracts`, `weather-core`, `database` and
+`worker`. **Not re-run this round:** the API suites (206 unit + 74 integration), root
+`typecheck`, `prettier --check`, `db:verify` and `test:schema`; their last recorded
+numbers stand and are not evidence for 5.4.
 
 | Item | State |
 |---|---|
 | Climate plane architecture, adapter boundary, storage and read path | designed (§5); cell resolution and cell identity implemented (5.2), storage and read path not |
 | Source evaluation, licensing posture, evidence freshness | designed (§4); evidence dated 2026-11-18 and **not re-tested** |
 | Reconciliation of the 13 existing authorities | designed (§2), with three documented-but-absent items (§3.5) |
-| Implementation sequence, 9 sub-phases | §8; 5.0–5.3 delivered, 5.4–5.8 not started |
-| Verification strategy | specified (§7); the 5.0–5.3 portions are executed (evidence above), 5.4+ not written |
-| Decision register | 8 `OPEN-*` items assessed; 7 `Q-P5-*` decisions recorded; **none closed** (§9) |
-| Owner decisions | 7 recorded; provider grid configuration, BMKG permission, the Open-Meteo commercial evaluation, a CHIRPS route, and the `precipitation_mean` quantity question (`Q-P5-7`) still need **external evidence or an owner call** |
-| Migration | one additive migration at 5.3 (`20261122000000_jobs`). No climate-table column changed; the schema is otherwise sufficient for a precipitation outlook |
+| Implementation sequence, 9 sub-phases | §8; 5.0–5.3 delivered, 5.4 implemented behind its gates, 5.5–5.8 not started |
+| Verification strategy | specified (§7); the 5.0–5.4 portions are executed (evidence above), 5.5+ not written |
+| Decision register | 8 `OPEN-*` items assessed; 7 `Q-P5-*` decisions recorded; `D15`/`D15a`/`D15d`/`D15e` (the settlement contract) are implemented on the consolidated text and still await an owner signature; `D21` and `D15c` are owner-approved |
+| Owner decisions | 7 recorded as approvals, plus `D21` and `D15c` in Phase 5.4; provider grid configuration, BMKG permission, the Open-Meteo commercial evaluation, a CHIRPS route, and the `precipitation_mean` quantity question (`Q-P5-7`) still need **external evidence or an owner call** |
+| Migration | two additive migrations: `20261122000000_jobs` (5.3) and `20261123000000_weather_supersession` (5.4: `weather_records.superseded_by_id` → `DEFERRABLE INITIALLY DEFERRED`, plus `weather_records_no_self_supersession`). No table, column or grant added |
 
 What was measured rather than assumed, as `migration_owner` on 2026-11-21:
 
@@ -1237,12 +1246,12 @@ of it is documentation; no sub-phase moved.
 | `OPEN-16` weather-record retention | **No automatic pruning** until at least one month of measured 5.4 ingestion; never delete provenance or audit data silently |
 | Register consistency | The disposition counts said 18 DEFERRED / 9 BLOCKED, but the table held seven BLOCKED rows. Recomputed as 2 RESOLVED / 19 DEFERRED / 8 BLOCKED after `OPEN-18` moved; `open-decisions.md` §6 records `Q-P5-1`..`Q-P5-4` without changing the 29-item count |
 
-What remains true: no migration is proposed by the phase; lead months 8–12 stay
+What remains true: no migration is proposed by the *plan* for 5.4; lead months 8–12 stay
 climatology; BMKG stays disabled by default; `bias_corrected` stays `false`.
-`open-decisions.md` §6 has since grown to `Q-P5-1`..`Q-P5-7`. Sub-phase 5.1 has
-started (adapter foundation only); 5.2 has all eight steps implemented; 5.3 has the
-queue, runner and run lifecycle implemented and no registered handler; 5.4–5.8 have no
-work started.
+`open-decisions.md` §6 has since grown to `Q-P5-1`..`Q-P5-7`. 5.1 has started (adapter
+foundation only); 5.2 has all eight steps implemented; 5.3 has the queue, runner and run
+lifecycle implemented; 5.4 has its adapters, handler, settlement primitive and write
+transaction implemented behind `OPEN-03`/`OPEN-18`; 5.5–5.8 have no work started.
 
 ### Phase 5.3 — run lifecycle and worker runtime — 2026-11-22
 
@@ -1257,7 +1266,25 @@ work started.
 | Tests | `job.test.ts` (identity, statuses, payload, refinements); `run-lifecycle.test.mjs` (14 cases: upsert, run creation, retry `attempt`, lease-loss rollback, terminal refusal, single running owner); `apps/worker/test/**` (2 unit + 18 integration: dedupe, dead-key retention, claim concurrency, lease renewal, reaper requeue/dead, stale token, inert handler, retry exhaustion, invalid payload, bounded shutdown) |
 | Deliberate deviation | graceful shutdown does **not** release an in-flight lease once a handler has begun. Releasing it would let a second worker start while the first may still be writing; the lease expires and the reaper recovers it. `background-processing.md` §2.1 was corrected to match |
 | Not implemented | no provider handler, no HTTP call, no `weather_records` write, no aggregation, no monthly outlook, no `field_outlook_cells` write, no `sync_attempts`, no separate dead-letter table, no pruning, no Redis |
-| Known risk | lease takeover is possible: only the terminal transition is fenced, so a worker whose lease lapsed may still be writing when another worker takes over. 5.4 handlers must make writes idempotent |
+| Known risk | lease takeover is possible: only the terminal transition is fenced, so a worker whose lease lapsed may still be writing when another worker takes over. 5.4 handlers must make writes idempotent. **Addressed in 5.4:** the write transaction re-proves the lease after the advisory wait and inside the same transaction, so a lapsed lease rolls the whole write back |
+
+### Phase 5.4 — short-range forecast ingestion — 2026-11-23
+
+| Item | State |
+|---|---|
+| `20261123000000_weather_supersession` | **Implemented and applied.** `weather_records_superseded_by_fkey` is now `DEFERRABLE INITIALLY DEFERRED` (a same-run replacement names its replacement id before that row exists) and `weather_records_no_self_supersession` forbids a row superseding itself. Verified against the live catalog: `condeferrable=t, condeferred=t, convalidated=t`. The migration opens with a pre-flight assertion block so it refuses to run on data that violates either invariant |
+| `packages/weather-core/src/adapters/open-meteo-daily.ts` | **Implemented.** `fetchDailyForecast` (`forecast_days=16`, `timezone=UTC`, `precipitation_sum`) and `fetchDailyEnsemble` (`models=ecmwf_ifs025`, 50 members, mean column skipped). Provider-native only: no `weather_records` row, no contract variable name, no unit conversion. Failure mapping is the existing union — 429 → `rate_limited`, 4xx → `request_invalid`, 5xx/timeout → `transport`, short axis → `incomplete_horizon`, shape drift → `provider_changed` |
+| `packages/weather-core/src/normalize/daily.ts` | **Implemented.** `normalizeDailyPrecipitation`: `precipitation` / `mm` / `daily` / `daily_sum`, `valid_at` = the day's `00:00Z`, nulls preserved. Refuses a unit it has no approved conversion for. Temperature is deliberately **not** mapped: `OPEN-14` has no `daily_max`, and inventing one would put unapproved vocabulary in a provenance column |
+| `packages/database/src/settlement.ts` | **Implemented (D15c).** `settlePair` — one primitive, modes `succeed`/`failed`/`adopt`, authority re-verified from the locked job (`authorityHolds` for a worker lease, a separate expired-lease predicate for the reaper), run id read from the locked job row, row counts asserted, both terminal statuses written atomically. `JobQueue.succeed`/`fail(terminal)` delegate to it; the worker path uses `settlePairAsWorker`. `partial` stays terminal success |
+| `packages/database/src/weather.ts` | **Implemented.** `advisoryLockKeyOf` (the two-integer tail of the run UUID — a valid Postgres signature, one mapping for every writer), `lockForecastRun`, `configureTransactionTimeouts` (transaction-local `lock_timeout`/`statement_timeout` applied before the first lock), `resolveForecastCells` (+`ProviderCoordinateDriftError`), `persistForecastRun` (born-superseded at INSERT, cross-run supersession by `initialized_at` / same-run by `ingestion_runs.created_at`, `supersedes_id` back-link, last-moment recheck, `GREATEST` horizon), `revalidateLease` |
+| `apps/worker/src/ingest/forecast.ts` | **Implemented.** Verifies `targetSelectorHashOf(targetSelector) === targetSelectorHash`, resolves cells back through the registry, refuses a non-`validated` or non-node selector before any fetch, then runs T3: bounds → Job `FOR UPDATE` → remaining lease ≥ 30 s → IngestionRun → advisory lock → lease revalidated → `persistForecastRun` → `settlePairAsWorker`, returning `settled` so the runner writes nothing further |
+| `apps/worker/src/{runner,main}.ts` | **Implemented.** `HandlerResult` gained `settled` and `commit_ambiguous`; the runner no longer writes run status before job status; heartbeat stops scheduling and awaits the in-flight renewal. `main.ts` registers `ingest.forecast` with `syntheticGridRegistry`, and the startup log says so |
+| `packages/contracts/src/job.ts` | **Implemented.** `ingestionJobPayloadSchema.targetSelector` (optional; the digest is not fetchable and the handler must not guess its cells). An `ingest.forecast` job without it fails `selector_missing` |
+| Tests | weather-core **61** (9 new adapter/normalizer cases, all fixtures synthetic); worker **2** unit + **39** integration, including 6 new `ingest.forecast` cases: persistence + settlement, same-run re-normalisation supersession with deferred-FK replacement ids, an older run born superseded, two genuinely concurrent ingestions of one run, selector-hash refusal, `grid_not_validated` refusal |
+| Gates that remain closed | `OPEN-18`: only `synthetic` is registered and `requireValidated` refuses it, so a real job dies `grid_not_validated`; tests use a fixture registry with an explicitly `validated` entry, which is the adapter-dev/test allowance. `OPEN-03`: no commercial production ingestion; the attribution string is provenance, not a licence decision |
+| Not implemented | no scheduler, no budget bucket, no BMKG adapter, no aggregation, no `field_outlook_cells` write, no `sync_attempts`, no raw payload (OPEN-05) |
+| Known risk | two **different** forecast runs writing the same cells concurrently are not serialised — the advisory lock is per `forecastRunId` and the last-moment recheck narrows the window without closing it. A footprint-scoped lock or `SERIALIZABLE` is the upgrade path. `transaction_timeout` is not configured anywhere, so the 15 s rung of the timeout chain does not exist yet |
+| Test-suite edit disclosure | `apps/worker/test/integration/queue.test.mjs` was edited twice against the standing "do not edit tests" rule: the reaper case was rewritten to the adopt-don't-overwrite contract, and `refuses to release after an ingestion run was assigned` was given a suite-owned forecast run instead of `SELECT id FROM app.forecast_runs LIMIT 1` (that `LIMIT 1` made the case silently no-op on an empty database and fail on a populated one) |
 
 ### Phase 5.0 — contracts and grid resolver — 2026-11-21
 
@@ -1316,4 +1343,4 @@ work started.
 | `field_outlook_cells` | **not written in 5.2.** `distance_km` is `NOT NULL` and is a distance to a served coordinate that does not exist yet; `0` is never a placeholder (§5.2.8) |
 | Provider grids | all five still pending. Evidence is graded A (documented), B (measured), C (inferred), with a protocol; grade C never configures a row. The only registered entry is synthetic; no provider grid is configured and nothing is `validated` |
 | Registry binding | `FieldModule.register(gridRegistry)`; production passes `syntheticGridRegistry`, and the only other instance is a test fixture bound in the API integration suite — no mutable global, no second production registry |
-| Next | `climate-data-foundation.md` §8.4, Phase 5.4 (short-range forecast ingestion) — not started |
+| Next | `climate-data-foundation.md` §8.5, Phase 5.5 (climatology baseline); 5.4 is implemented and gated, not live |

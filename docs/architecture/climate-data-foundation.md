@@ -1,17 +1,23 @@
 # Climate Data Foundation
 
 Status: **Phase 5.0 implemented; 5.1 partially implemented; 5.2 implemented;
-5.3 implemented; 5.4–5.8 not started.** 5.2.1–5.2.8 are complete as of `8a6f2ec`
-(2026-11-22): generic grid resolution, a synthetic registry instance, the
-tenant-scoped field centroid read, cell identity persistence, and
-`POST /v1/fields/:fieldId/resolve-cell`. 5.3 is complete as of the working tree on
-2026-11-22: `app.jobs`, the PostgreSQL queue, the worker runner, and the
-`IngestionRun` lifecycle. The worker is operational but registers **no handler**, so
-no provider is called and no weather row is written; `apps/worker` is therefore no
-longer a stub, but ingestion itself is 5.4. No provider grid has been admitted or
-validated and `app.field_outlook_cells` is not written. Everything else in this document is a plan unless a row
-or section is marked as existing; §8.2 is the per-step record and
-`IMPLEMENTATION_STATUS.md` is the index.
+5.3 implemented; 5.4 implemented behind its gates; 5.5–5.8 not started.**
+5.2.1–5.2.8 are complete as of `8a6f2ec` (2026-11-22): generic grid resolution, a
+synthetic registry instance, the tenant-scoped field centroid read, cell identity
+persistence, and `POST /v1/fields/:fieldId/resolve-cell`. 5.3 is complete as of the
+working tree on 2026-11-22: `app.jobs`, the PostgreSQL queue, the worker runner,
+and the `IngestionRun` lifecycle. 5.4 is implemented in the working tree on
+2026-11-23 — the `ingest.forecast` handler calls Open-Meteo, normalizes daily
+precipitation and writes `app.weather_records` — but two owner gates keep it
+from being a *live* pipeline: `OPEN-03` (no commercial production ingestion until
+the licensing condition is met) and `OPEN-18` (only a `validated` grid may
+ingest, and the only registry the worker is given is `synthetic`, which
+`requireValidated` refuses). In the shipped configuration every `ingest.forecast`
+job therefore terminates with `grid_not_validated` before a provider is called.
+No provider grid has been admitted or validated and `app.field_outlook_cells` is
+not written. Everything else in this document is a plan unless a row or section
+is marked as existing; §8.2 is the per-step record and `IMPLEMENTATION_STATUS.md`
+is the index.
 
 This is the implementation plan for the climate plane. It does not replace any
 existing authority: `ADR-001` decides *which* sources and *how* they are labelled,
@@ -941,7 +947,7 @@ The two identities are the existing ones and no third is introduced.
 | What is one run? | `ForecastRun` — `(provider, model, product, initialized_at)`, UUIDv7 id |
 | What is one ingest? | `IngestionRun` — `(forecast_run_id, ingestion_version)`, where `ingestion_version = sha256(adapterVersion, normalizerVersion, targetSelectorHash)` |
 | What is one retry? | `attempt` on that row, incremented in place. Never a new row |
-| What is one job? | `ingest:{queue}:{forecastRunId}:{targetSelectorHash}` |
+| What is one job? | `ingest:{queue}:{forecastRunId}:{ingestionVersion}` — the ingestion version, not the selector hash. The hash alone collides across adapter/normalizer changes, and the job is one ingest, not one selector |
 
 Lifecycle, end to end:
 
@@ -1439,13 +1445,13 @@ column — never by inventing the value.
 |---|---|
 | Objective | 0–14 days of real forecast values for a field's cells |
 | Prerequisites | 5.1, 5.2, 5.3 |
-| Scope | `packages/weather-core/adapters/open-meteo-forecast.ts` (live), `…/open-meteo-ensemble.ts`, `apps/worker/src/ingest/forecast.ts`, `ingest.forecast` queue wiring |
-| Contracts | `WeatherValue` forecast variant |
-| Database impact | none; writes `weather_records` as `app_system` |
-| Tests | §7.1 rows 1–7 and 10; the day-14 ensemble null truncation asserted from a recorded payload |
-| Acceptance | one scheduled run stores deterministic and ensemble rows for a real cell; `horizon_end` equals the last non-null instant; a 429 defers instead of failing |
+| Scope | **as built:** `packages/weather-core/src/adapters/open-meteo-daily.ts` (both products in one module — the deterministic and ensemble calls differ only by URL and member columns), `packages/weather-core/src/normalize/daily.ts`, `apps/worker/src/ingest/forecast.ts`, `apps/worker/src/main.ts` registration, `packages/database/src/weather.ts`, `packages/database/src/settlement.ts`, the `20261123000000_weather_supersession` migration. The plan named two adapter files; one module is enough because the parsing, failure mapping and payload shape are shared |
+| Contracts | `ingestionJobPayloadSchema` gained `targetSelector`. The hash alone is not fetchable and the handler must not guess which cells were approved, so the selector travels in the payload and the handler verifies `targetSelectorHashOf(targetSelector) === targetSelectorHash` before it fetches anything. `targetSelector` is optional in the schema because not every job kind has one; an `ingest.forecast` job without it fails `selector_missing` |
+| Database impact | **two additive changes in one migration**: `weather_records.superseded_by_id` becomes `DEFERRABLE INITIALLY DEFERRED` (a same-run replacement names its replacement id before the row exists) and `weather_records_no_self_supersession` forbids a row superseding itself. No table, column or grant added |
+| Tests | executed — see `docs/review/phase-5.4-planning-consolidation.md` §verification: `packages/weather-core` adapter/normalizer unit tests, `apps/worker/test/integration/ingest-forecast.test.mjs` (persistence, same-run re-normalisation supersession, older-run-born-superseded, two genuinely concurrent ingestions, selector-hash refusal, `grid_not_validated`), plus the existing settlement/reaper suites |
+| Acceptance | **implemented:** one job stores deterministic or ensemble rows for the resolved cell, `outlook_cells` records the served coordinate, `forecast_runs.horizon_end` advances with `GREATEST` to the last ingested instant, the handler settles its own job/run pair inside T3, and a 429/transport failure is retryable while `incomplete_horizon`, `unsupported_unit` and `provider_changed` are terminal. **Refused by design:** every job against the shipped registry dies `grid_not_validated` (`OPEN-18`) and commercial production ingestion stays blocked (`OPEN-03`). **Not met:** "a 429 defers instead of failing" is only true if `Retry-After` is honoured by the retry backoff — today the backoff is the queue's fixed base delay, not the provider's hint |
 | Dependencies | 5.1, 5.2, 5.3 |
-| Risks | free-tier budget exhaustion and no commercial permission — both `OPEN-03`, and both must be settled before this runs on a schedule; the model's grid configuration must be validated first (§5.2.6) |
+| Risks | two *different* forecast runs writing the same cells concurrently are not serialised: the advisory lock is per `forecastRunId`, and the last-moment re-read narrows the window without closing it. A footprint-scoped lock or `SERIALIZABLE` closes it and is the upgrade path. Free-tier budget exhaustion and licensing remain `OPEN-03`; the model's grid configuration must be validated before any real cell is ingested (§5.2.6) |
 
 ### 8.5 Phase 5.5 — climatology baseline
 

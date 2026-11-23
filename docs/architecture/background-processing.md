@@ -1,11 +1,15 @@
 # Background Processing
 
-Status: implemented for Phase 5.3. Queue backing decided 2026-11-21 (PostgreSQL first,
-§2.1) and built on 2026-11-22: `app.jobs` (`prisma/migrations/20261122000000_jobs`),
-`apps/worker/src/queue/{types,postgres}.ts`, `apps/worker/src/runner.ts`, and the run
-lifecycle in `packages/database/src/climate.ts`. Handlers are inert until Phase 5.4:
-the worker claims, leases, retries, reaps, and shuts down, but no ingestion handler is
-registered, so no provider is called and no weather row is written.
+Status: implemented for Phase 5.3, extended in Phase 5.4. Queue backing decided
+2026-11-21 (PostgreSQL first, §2.1) and built on 2026-11-22: `app.jobs`
+(`prisma/migrations/20261122000000_jobs`), `apps/worker/src/queue/{types,postgres}.ts`,
+`apps/worker/src/runner.ts`, and the run lifecycle in `packages/database/src/climate.ts`.
+2026-11-23 added the settlement primitive (`packages/database/src/settlement.ts`), the
+per-run advisory lock and the T3 write transaction (`packages/database/src/weather.ts`),
+and the first real handler, `ingest.forecast`. The handler is registered but gated:
+the worker is given `syntheticGridRegistry`, `requireValidated` refuses it, so every
+`ingest.forecast` job ends `dead` with `grid_not_validated` before a provider is
+called (`OPEN-18`). `OPEN-03` still blocks commercial production ingestion.
 
 ## 1. Why a separate worker
 
@@ -93,7 +97,11 @@ records what was decided on 2026-11-21.
 - Job idempotency keys use ids: `ingest:{queue}:{forecastRunId}:{ingestionVersion}`, where `forecastRunId` is the UUIDv7 resolved from the natural key at enqueue time and `ingestionVersion = sha256(adapterVersion, normalizerVersion, targetSelectorHash)`. `ingestionVersion` rather than the bare selector hash: an adapter or normalizer bump must produce a new job, and the hash is already inside the version. The key is enforced by `UNIQUE (kind, idempotency_key)` (`jobs_identity_key`); a `dead` job retains its key permanently, so a replay is an explicit operator action or a new `ingestionVersion`.
 - A claim is charged when it is taken, not when a handler starts. If the process is asked to stop before the handler begins, the claim is released: requeued while `attempt < max_attempts`, `dead` at the ceiling. Requeueing at the ceiling is not an option — the next claim would exceed the CHECK and the row could never be claimed again. Because no handler ran, no `IngestionRun` exists and none is created; `ingestion_runs.attempt` is untouched. A claimed job therefore does **not** imply an ingestion execution began.
 - Atomic claim is one statement (`FOR UPDATE SKIP LOCKED` + `UPDATE … RETURNING`). A lease, not a held lock, protects the job: the claim commits before the handler runs, so a slow provider call never serialises other workers. `jobs_active_ingestion_idx` (unique partial on `ingestion_run_id` where `status = 'running'`) makes two running jobs owning one `IngestionRun` impossible to persist; its `23505` maps to `IngestionAlreadyOwnedError`, which is deliberately not a lease loss.
-- Only `running` may start or end an `IngestionRun`; `partial`, `succeeded` and `failed` have no outgoing transition. `succeed(job, tx)` and `fail(job, error, outcome, tx)` require the caller's transaction so a terminal job write and a terminal run write commit as one fact.
+- Only `running` may start or end an `IngestionRun`; `partial`, `succeeded` and `failed` have no outgoing transition. One primitive writes a terminal pair, `settlePair(tx, { jobId, authority, mode })` in `packages/database/src/settlement.ts`: it locks the job, re-verifies the caller's authority (a worker's lease token and unexpired lease, or the reaper's expired-lease predicate), takes the run id **from the locked job row** rather than from the argument, asserts every write touched the expected number of rows, and only then writes the two terminal statuses. `JobQueue.succeed`/`fail` remain on the interface and delegate to it; the worker's own path uses `settlePairAsWorker`. Refusing to invent a run when a terminal job has none is deliberate: a phantom `IngestionRun` would make an ingest look like it ran.
+- Settlement authority is not weakened for the reaper. The reaper has its own predicate — the lease is already expired and the token still matches the row it is requeueing — and a run that is *already* terminal is **adopted**, not overwritten: writing `dead` over a `succeeded` run would report a failure that did not happen.
+- Lock order is fixed: **Job → IngestionRun** in every transaction that touches both, never the reverse. `beginIngestionExecution` and the settlement both take the job `FOR UPDATE` first; a second order anywhere would deadlock against these two.
+- Locking both rows is not enough to serialise writers of the same forecast run, so the forecast write transaction additionally takes `pg_advisory_xact_lock(int, int)` keyed on the tail of the `ForecastRun` UUID (`advisoryLockKeyOf` in `weather.ts`). One deterministic mapping, used by every writer; a text key would be an invalid signature for the two-`integer` form.
+- The write transaction (T3) is bounded inside the transaction, not by the client: `SET LOCAL lock_timeout = '5s'` and `SET LOCAL statement_timeout = '10s'` are applied as the **first** statement, before any lock is taken, and the Prisma interactive transaction is given `maxWait: 2 s`, `timeout: 20 s`. A 30 s lease floor is re-checked after the advisory wait, inside the same transaction, because a lock wait of seconds can consume a lease that looked healthy when the handler started. The 15 s bound between statement and transaction timeouts does not exist yet — `transaction_timeout` is a PostgreSQL 17+ setting that this project does not configure, and no document claims otherwise.
 - Every derived artifact stores `inputRefs[]` (discriminated: forecast run, baseline, observation set, dataset), `fieldSnapshot` where applicable, `inputSnapshotHash`, `derivationVersion`, `computedAt`.
 - SEAS5: run at day 5, 12:00 UTC. Ingest starts +30 min, jittered per cell to spread load.
 - EC46: daily, after ~20:30 UTC.

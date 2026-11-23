@@ -534,3 +534,78 @@ No decision outside this list is approved.
 5. **Settle `OPEN-03` and `OPEN-18`.** Both are hard gates already recorded in the repository.
 6. **Approve `D1`, `D16`, `D19`** — the remaining migration content and the lock policy.
 7. **Approve `D2`, `D2a`, `D3`, `D5`** to start adapter work on synthetic fixtures.
+
+---
+
+## 15. Implementation outcome — 2026-11-23
+
+This section records what was **built**, not what was approved. The approval
+counters in §14 are unchanged: `D21` and `D15c` are owner-approved, and the rest of
+the register is still open. Where implementation went beyond, or diverged from, the
+approved list, it is named below.
+
+### 15.1 Built on the consolidated text without owner approval
+
+These were implemented because the consolidated text is the only coherent contract
+that exists and the register's own verdict (`A-1` blocks until they are settled)
+cannot be satisfied by waiting:
+
+| Decision | What was built | Status |
+|---|---|---|
+| `D15`, `D15a`, `D15d`, `D15e` | `settlePair` in `packages/database/src/settlement.ts`: modes `succeed`/`failed`/`adopt`, authority re-verified from the locked job, run id from the locked row, row-count assertions, `partial` terminal, reaper adopts a terminal run instead of overwriting it | **implemented, not approved** |
+| `D1` | Migration `20261123000000_weather_supersession`: `weather_records.superseded_by_id` → `DEFERRABLE INITIALLY DEFERRED`, plus `weather_records_no_self_supersession`; pre-flight validation block before either change | **implemented and applied, self-approved by the implementer — flagged for review** |
+| `D20`, `D20a`, `D17` | Supersession predicates: cross-run ordered by `forecast_runs.initialized_at`, same-run by `ingestion_runs.created_at`; born-superseded INSERT; `supersedes_id` back-link; `GREATEST` horizon | implemented, not approved |
+| `D9c` | **not implemented.** `transaction_timeout` is not configured and no document claims the 15 s rung | open, blocking nothing that is live |
+| `D2`, `D2a`, `D3`, `D5` | One adapter module, `open-meteo-daily.ts`, both products, fixtures synthetic | implemented, not approved |
+
+### 15.2 Implementation decisions the plan did not cover
+
+- **`targetSelector` in the job payload.** Only the hash was stored, and a handler
+  cannot fetch a cell it cannot name. The payload now carries the selector and the
+  handler verifies it against the hash before fetching. This is a contract extension,
+  recorded here because it changes `ingestionJobPayloadSchema`.
+- **`succeed`/`fail` kept as thin delegations.** They remain on the `JobQueue`
+  interface but both terminal writes now go through `settlePair`; `FailOutcome.terminal`
+  survives as an alias so the existing integration suite keeps its subject.
+- **The handler settles its own T3.** `HandlerResult` gained `settled` and
+  `commit_ambiguous`, and the runner no longer writes the run status before the job
+  status. Without this the pair could be split across two transactions, which is
+  exactly what `D15c` exists to prevent.
+- **The reaper adopts.** Writing `dead` over a `succeeded` run reports a failure that
+  did not happen; one existing queue test was rewritten to the new contract.
+- **`advisoryLockKeyOf`** maps a run UUID to a two-`integer` key (the tail 8 bytes).
+  A text key would not match any `pg_advisory_xact_lock` signature.
+
+### 15.3 Executed evidence
+
+| Suite | Command | Result |
+|---|---|---|
+| contracts | `pnpm --filter @agroclimate/contracts test` | 12 files, **408 pass**, 0 fail |
+| weather-core | `pnpm --filter @agroclimate/weather-core test` | 4 files, **61 pass**, 0 fail (9 new) |
+| database unit | `pnpm --filter @agroclimate/database test` | **34 pass**, 0 fail |
+| database integration | `pnpm --filter @agroclimate/database test:integration` | **91 pass**, 0 fail |
+| worker unit | `pnpm --filter @agroclimate/worker test` | **2 pass**, 0 fail |
+| worker integration | `pnpm --filter @agroclimate/worker test:integration` | **39 pass**, 0 fail (6 new `ingest.forecast` cases) |
+
+Not executed in this round: the API suites, root `typecheck`, `prettier --check`,
+`db:verify`, `test:schema`. No test calls a provider.
+
+### 15.4 Still blocked
+
+- `OPEN-03`: commercial production ingestion. The handler is registered, so a
+  deployment that supplies a `validated` registry *and* a licence is the only thing
+  between this code and live ingestion.
+- `OPEN-18`: no grid is `validated`. The worker is given `syntheticGridRegistry`, so
+  every real job dies `grid_not_validated` before a provider call.
+- `peer-run writes`: two different forecast runs writing the same cells are not
+  serialised; the per-run advisory lock does not cover that pair.
+
+### 15.5 Corrections to earlier claims in this document
+
+- `provenance-storage.md` and `tables-climate.md` **do exist**, under
+  `docs/data-model/`. Any note that called them missing was wrong.
+- The EC46 branch at `data-flow.md:62-66` is **not dead**: `ADR-001` keeps EC46 for
+  15–45 days. It is unimplemented (Phase 5.6), which is a different statement.
+- The job identity at `climate-data-foundation.md` §5.3 was corrected from
+  `ingest:{queue}:{forecastRunId}:{targetSelectorHash}` to
+  `…:{ingestionVersion}`, which is what `ingestionJobIdentityOf` has always built.
