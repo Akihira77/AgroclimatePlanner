@@ -68,6 +68,23 @@ export {
 } from "./normalize/daily.js";
 
 export {
+  ARCHIVE_ADAPTER_VERSION,
+  ARCHIVE_DEFAULT_BASE_URL,
+  ARCHIVE_EARLIEST_DATE,
+  ARCHIVE_MODEL,
+  ARCHIVE_PERIOD_FROM,
+  ARCHIVE_PERIOD_TO,
+  ARCHIVE_UNIT,
+  ARCHIVE_VARIABLE,
+  archiveDayCount,
+  buildArchiveDailyUrl,
+  fetchArchiveDaily,
+  type ArchiveAdapterConfig,
+  type ArchiveDailyPayload,
+  type ProviderArchiveDay,
+} from "./adapters/open-meteo-archive.js";
+
+export {
   SYNTHETIC_GRID_ID,
   SYNTHETIC_GRID_MODEL,
   SYNTHETIC_GRID_PROVIDER,

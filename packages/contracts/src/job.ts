@@ -72,6 +72,29 @@ export const ingestionJobPayloadSchema = z.strictObject({
 export type IngestionJobPayload = z.infer<typeof ingestionJobPayloadSchema>;
 
 /**
+ * The payload of an `ingest.climate` climatology job — Phase 5.5.
+ *
+ * Climatology is a baseline, not a forecast: there is no `ForecastRun` and no
+ * `IngestionRun`, so the forecast payload's run fields are absent rather than
+ * fabricated. The baseline version is **derived** from the dataset and the
+ * algorithm version by the builder, not carried in the payload — a stored copy
+ * could disagree with the rows it names.
+ *
+ * The selector still names cells and variables, so the approval digest works
+ * exactly as it does for a forecast ingest: the queue row is not a trusted
+ * authority for which cells were approved.
+ */
+export const climatologyJobPayloadSchema = z.strictObject({
+  provider: z.literal("open-meteo"),
+  model: z.literal("era5"),
+  baselineDataset: z.literal("era5"),
+  algorithmVersion: z.string().regex(/^[A-Za-z0-9._-]+$/),
+  targetSelectorHash: z.string().regex(/^[0-9a-f]{64}$/),
+  targetSelector: targetSelectorSchema,
+});
+export type ClimatologyJobPayload = z.infer<typeof climatologyJobPayloadSchema>;
+
+/**
  * One persisted job.
  *
  * The two refinements restate database CHECKs (`jobs_lease_check`,

@@ -1148,10 +1148,11 @@ Phases 4.5 and 4.6 remain **not started**.
 
 ---
 
-## Phase 5 — Climate Data Foundation — **5.0 complete; 5.1 partially implemented; 5.2 complete (5.2.1–5.2.8); 5.3 complete; 5.4 implemented behind its gates; 5.5–5.8 not started**
+## Phase 5 — Climate Data Foundation — **5.0 complete; 5.1 partially implemented; 5.2 complete (5.2.1–5.2.8); 5.3 complete; 5.4 implemented behind its gates; 5.5 implemented behind its gates; 5.6–5.8 not started**
 
 Status: **5.0 complete; 5.1 partially implemented; 5.2 complete, all eight steps;
-5.3 complete; 5.4 implemented behind `OPEN-03` and `OPEN-18`; 5.5–5.8 not started.**
+5.3 complete; 5.4 implemented behind `OPEN-03` and `OPEN-18`; 5.5 implemented
+behind the same two gates; 5.6–5.8 not started.**
 5.0 delivered the contract and resolver code in `packages/contracts` with tests, and
 added no migration, Prisma model, route, grant, policy, worker, queue, or persistence.
 It is complete as delivered: the `OPEN-14` vocabulary freeze remains a deferred open
@@ -1173,32 +1174,39 @@ CHECK). It is **not a live
 pipeline**: the worker is registered with `syntheticGridRegistry`, `requireValidated`
 refuses `synthetic`, so every job terminates `grid_not_validated` before a provider is
 called (`OPEN-18`), and `OPEN-03` blocks commercial production ingestion. No test
-calls a provider; every adapter fixture is synthetic. 5.5 through 5.8 are **not
-started**, and nothing here claims a served coordinate on a real grid, an aggregation,
-or a `field_outlook_cells` row.
+calls a provider; every adapter fixture is synthetic. 5.5 is implemented: the ERA5
+archive adapter, the pure `@agroclimate/climate-core` baseline builder, the
+`ingest.climate` handler registered in the worker, the versioned
+`app.climatology_normals` write, and the baseline contract/hash. It adds **no
+migration** and no queue. Like 5.4 it is not a live pipeline — the shipped registry
+refuses `grid_not_validated` (`OPEN-18`), and `OPEN-03` still blocks commercial
+ingestion — so no baseline row comes from a provider in this configuration, and the
+suites use a fixture validated grid. CHIRPS is **not** implemented. 5.6 through 5.8
+are **not started**, and nothing here claims a served coordinate on a real grid, an
+aggregation, an anomaly, or a `field_outlook_cells` row.
 
-Implementation evidence after the 5.4 corrective round (2026-11-23), all executed in
-this working tree: contracts **408** tests, weather-core **69** (17 adapter/normalizer
-cases), database unit **34** + integration **101** (10 new `forecast-persistence`
-cases), worker **2** unit + **47** integration (8 `ingest.forecast` cases and 6
-heartbeat/settlement cases), API **206** unit + **74** integration, `test:schema`
-**23**, root `typecheck` green (9 tasks), `db:verify` all privilege checks passed
-(exit 0). `pnpm --filter` `build` and `lint` are clean for `contracts`, `weather-core`,
-`database` and `worker`; Prettier is clean on every changed file. The five corrective
-findings (F-01…F-05) are addressed and their regression tests pass; owner decisions are
-unchanged — `D21` and `D15c` are approved, `D1`/`D15`/`D15a`/`D15d`/`D15e` remain
-implemented without an owner signature.
+Implementation evidence after Phase 5.5 (2026-11-23), all executed in this working
+tree: contracts **413** tests, weather-core **81** (12 new archive-adapter cases),
+climate-core **14** (a new package), database unit **34** + integration **115** (14
+new `climatology-persistence` cases), worker **2** unit + **60** integration (13 new
+`ingest.climate` cases), API **206** unit + **74** integration, `test:schema` **23**,
+root `typecheck` green (11 tasks), `db:verify` all privilege checks passed (exit 0),
+Prettier clean. `pnpm --filter` `build` and `lint` are clean for `contracts`,
+`weather-core`, `climate-core`, `database` and `worker`. The five 5.4 corrective
+findings (F-01…F-05) remain addressed; owner decisions are unchanged — `D21` and
+`D15c` are approved, `D1`/`D15`/`D15a`/`D15d`/`D15e` remain implemented without an
+owner signature.
 
 | Item | State |
 |---|---|
 | Climate plane architecture, adapter boundary, storage and read path | designed (§5); cell resolution and cell identity implemented (5.2), storage and read path not |
 | Source evaluation, licensing posture, evidence freshness | designed (§4); evidence dated 2026-11-18 and **not re-tested** |
 | Reconciliation of the 13 existing authorities | designed (§2), with three documented-but-absent items (§3.5) |
-| Implementation sequence, 9 sub-phases | §8; 5.0–5.3 delivered, 5.4 implemented behind its gates, 5.5–5.8 not started |
-| Verification strategy | specified (§7); the 5.0–5.4 portions are executed (evidence above), 5.5+ not written |
+| Implementation sequence, 9 sub-phases | §8; 5.0–5.3 delivered, 5.4 and 5.5 implemented behind their gates, 5.6–5.8 not started |
+| Verification strategy | specified (§7); the 5.0–5.5 portions are executed (evidence above), 5.6+ not written |
 | Decision register | 8 `OPEN-*` items assessed; 7 `Q-P5-*` decisions recorded; `D15`/`D15a`/`D15d`/`D15e` (the settlement contract) are implemented on the consolidated text and still await an owner signature; `D21` and `D15c` are owner-approved |
 | Owner decisions | 7 recorded as approvals, plus `D21` and `D15c` in Phase 5.4; provider grid configuration, BMKG permission, the Open-Meteo commercial evaluation, a CHIRPS route, and the `precipitation_mean` quantity question (`Q-P5-7`) still need **external evidence or an owner call** |
-| Migration | two additive migrations: `20261122000000_jobs` (5.3) and `20261123000000_weather_supersession` (5.4: `weather_records.superseded_by_id` → `DEFERRABLE INITIALLY DEFERRED`, plus `weather_records_no_self_supersession`). No table, column or grant added |
+| Migration | two additive migrations: `20261122000000_jobs` (5.3) and `20261123000000_weather_supersession` (5.4: `weather_records.superseded_by_id` → `DEFERRABLE INITIALLY DEFERRED`, plus `weather_records_no_self_supersession`). **5.5 adds no migration**: `climatology_normals` and its constraints were already in `20261118030000_domain_tables`. No table, column or grant added by 5.5 |
 
 What was measured rather than assumed, as `migration_owner` on 2026-11-21:
 
@@ -1255,7 +1263,7 @@ climatology; BMKG stays disabled by default; `bias_corrected` stays `false`.
 `open-decisions.md` §6 has since grown to `Q-P5-1`..`Q-P5-7`. 5.1 has started (adapter
 foundation only); 5.2 has all eight steps implemented; 5.3 has the queue, runner and run
 lifecycle implemented; 5.4 has its adapters, handler, settlement primitive and write
-transaction implemented behind `OPEN-03`/`OPEN-18`; 5.5–5.8 have no work started.
+transaction implemented behind `OPEN-03`/`OPEN-18`; 5.5 has its adapter, builder, handler and versioned write implemented behind the same two gates; 5.6–5.8 have no work started.
 
 ### Phase 5.3 — run lifecycle and worker runtime — 2026-11-22
 
@@ -1289,6 +1297,21 @@ transaction implemented behind `OPEN-03`/`OPEN-18`; 5.5–5.8 have no work start
 | Not implemented | no scheduler, no budget bucket, no BMKG adapter, no aggregation, no `field_outlook_cells` write, no `sync_attempts`, no raw payload (OPEN-05) |
 | Known risk | the cross-run race is closed by the footprint namespace, at the cost of serialising writers of one cell even when their instants do not overlap (the conflict domain is `(cell_key, variable)`). A selector in the hundreds would want a single server-side lock loop over the sorted keys; the ordering contract makes that swap safe. Key collisions (2^-32 per pair) merely serialise two unrelated footprints for one transaction. `transaction_timeout` is not configured anywhere, so the 15 s rung of the timeout chain does not exist yet |
 | Test-suite edit disclosure | `apps/worker/test/integration/queue.test.mjs` was edited twice against the standing "do not edit tests" rule: the reaper case was rewritten to the adopt-don't-overwrite contract, and `refuses to release after an ingestion run was assigned` was given a suite-owned forecast run instead of `SELECT id FROM app.forecast_runs LIMIT 1` (that `LIMIT 1` made the case silently no-op on an empty database and fail on a populated one) |
+
+### Phase 5.5 — climatology baseline — 2026-11-23
+
+| Item | State |
+|---|---|
+| `packages/weather-core/src/adapters/open-meteo-archive.ts` | **Implemented.** `fetchArchiveDaily` pins `models=era5`, `daily=precipitation_sum`, `precipitation_unit=mm`, `timezone=UTC`, `cell_selection=nearest`, and the inclusive `start_date`/`end_date` window (1991-01-01…2020-12-31 = **10 958** days in one request; probed live on 2026-11-23: HTTP 200, ~200 KB, 0 nulls, unit `mm`, `utc_offset_seconds=0`). Validates status (429 → `rate_limited` with `Retry-After`, 4xx → `request_invalid`, 5xx → `transport`), JSON shape, array agreement, exact day continuity (a duplicate or skipped date fails even when the count matches), returned unit (`unsupported_unit`), finite coordinates, and the calendar range. Provider-native payload only — no aggregation, no stored row. `servedLatitude`/`servedLongitude` are recorded as the provider's answered coordinate and are **not** a grid node (OPEN-18) |
+| `packages/climate-core/src/climatology.ts` | **Implemented (new package).** Pure and clock-free: `buildMonthlyClimatology` accepts `(dataset, cells[{cellKey, unit, days}], algorithmVersion?)` and returns 12 normals per cell. A calendar month counts a year only when **every** day of that month-year is present and non-null; a missing day is not `0` and a null is not an observation. The normal is the mean of valid **monthly totals**, never a mean of daily values. Negative, NaN and infinite amounts are refused, as are a non-`mm` unit, a duplicate day, an out-of-period day, a repeated cell key, and a month with no complete year (`incomplete_history`). `sampleYears` (1–30) is returned per month and `complete` is false unless all 12 months used all 30 years; no minimum-year threshold is invented. `baselineVersionOf` derives `ERA5:1991-2020:v1` deterministically from dataset, fixed period and algorithm version — no timestamp, no UUID. `baselineHashPayloadOf` builds the subset payload the hash covers |
+| `packages/contracts/src/{climate,hash,canonical,job}.ts` | **Implemented.** `baselineDatasetSchema`, `baselineMonthlyNormalSchema` (`month` must be the first of a calendar month; `sampleYears` 1–30), `baselineNormalsPayloadSchema`; `canonicalArrayRules.monthlyNormals` is a set ordered by `(cellKey, month)` where two conflicting normals for one identity are a canonicalisation error rather than a dropped duplicate; `hashBaselineNormals = sha256(canonicalJson(payload))`; `climatologyJobPayloadSchema` (`provider`/`model`/`baselineDataset` pinned, `algorithmVersion`, `targetSelectorHash`, `targetSelector`) — separate from `ingestionJobPayloadSchema` because a baseline opens no run |
+| `packages/database/src/climatology.ts` | **Implemented.** `persistClimatologyBaseline(tx, input)` validates the whole output first (12 distinct months per cell, finite non-negative values, `sampleYears` 1–30, valid coordinates, ordered period), resolves cells through `resolveForecastCells`, and inserts with `ON CONFLICT (baseline_version, outlook_cell_id, month) DO NOTHING`. It then reads all 12 rows back and compares dataset, period, value and sample count: an identical rebuild inserts nothing and reports `unchanged`, while a difference throws `ClimatologyConflictError`. **No `UPDATE` exists** — a changed baseline is a new `baseline_version`. The caller owns the transaction, so all cells and months commit or roll back together |
+| `apps/worker/src/ingest/climatology.ts`, `main.ts` | **Implemented.** `ingest.climate` with `opensIngestionRun: false` (no `ForecastRun`/`IngestionRun` is invented; settlement uses the job-only path). Before fetching: payload schema, `targetSelectorHashOf(targetSelector) === targetSelectorHash`, `registry.requireValidated`, and every selector cell re-resolved to a node of that grid. Fetches each cell's full 1991–2020 window, builds, then one transaction: timeouts → job `FOR UPDATE` → lease/`running`/no-run checks → `persistClimatologyBaseline` → `settlePairAsWorker`. Failure mapping is retryable for `rate_limited`/`transport` and terminal for `archive_incomplete`, `archive_unsupported_unit`, `archive_provider_changed`, `baseline_conflict`, `insufficient_history`, `selector_invalid`, `grid_not_validated`. Structured logs report dataset, version, cell count, inserted/unchanged, completeness and the minimum sample years |
+| Database impact | **none.** No migration, no grant, no column. `app_system` writes `app.climatology_normals`; `app_api` keeps `SELECT` only (asserted in the suite, not assumed) |
+| Tests | weather-core **81** (12 new archive cases), climate-core **14** (new), contracts **413** (5 new baseline cases), database **34** unit + **115** integration (14 new `climatology-persistence` cases: 12 rows, multi-cell, idempotent repeat, value/sample/dataset/period conflicts, old version intact, rollback on conflict, short/invalid/negative input, `app_api` read-only, no tenant column), worker **2** unit + **60** integration (13 new `ingest.climate` cases: success without a run, duplicate enqueue, `grid_not_validated`, selector cell and hash refusals, 5xx retry, short axis, insufficient history, all-cell rollback, conflict, retry exhaustion, lease-token loss, reaper recovery) |
+| Gates that remain closed | `OPEN-18`: the shipped registry is `synthetic`, so a real `ingest.climate` job dies `grid_not_validated` before a byte is fetched; the suite's fixture registry is the adapter-dev allowance. `OPEN-03`: no commercial production ingestion; ERA5 attribution is recorded per payload ("Contains modified Copernicus Climate Change Service information [year]") and is not a licence decision. No baseline row has been produced from a live provider by this process |
+| Not implemented | CHIRPS and NASA POWER builders, temperature climatology, anomalies, retention/pruning, `field_outlook_cells` writes, a production grid, and any read API |
+| Test-suite edit disclosure | `apps/worker/package.json` now runs `test:integration` with `--test-concurrency=1`: `queue.test.mjs` and the new `ingest-climatology.test.mjs` both claim `ingest.climate` jobs, and parallel files raced on the same rows (a concurrent cleanup deleted the other suite's job mid-handler). Serial files are the fix; no test assertion was weakened |
 
 ### Phase 5.0 — contracts and grid resolver — 2026-11-21
 
@@ -1347,4 +1370,4 @@ transaction implemented behind `OPEN-03`/`OPEN-18`; 5.5–5.8 have no work start
 | `field_outlook_cells` | **not written in 5.2.** `distance_km` is `NOT NULL` and is a distance to a served coordinate that does not exist yet; `0` is never a placeholder (§5.2.8) |
 | Provider grids | all five still pending. Evidence is graded A (documented), B (measured), C (inferred), with a protocol; grade C never configures a row. The only registered entry is synthetic; no provider grid is configured and nothing is `validated` |
 | Registry binding | `FieldModule.register(gridRegistry)`; production passes `syntheticGridRegistry`, and the only other instance is a test fixture bound in the API integration suite — no mutable global, no second production registry |
-| Next | `climate-data-foundation.md` §8.5, Phase 5.5 (climatology baseline); 5.4 is implemented and gated, not live |
+| Next | `climate-data-foundation.md` §8.6, Phase 5.6 (seasonal ingestion); 5.4 and 5.5 are implemented and gated, not live |

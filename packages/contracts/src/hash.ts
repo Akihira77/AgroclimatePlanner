@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { CanonicalizationError, canonicalJson } from "./canonical.js";
+import type { BaselineNormalsPayload } from "./climate.js";
 import type { DerivationDescriptor, FieldSnapshotPayload } from "./provenance.js";
 
 /**
@@ -39,4 +40,15 @@ export function hashFieldSnapshot(payload: FieldSnapshotPayload): string {
  */
 export function hashDerivationDescriptor(descriptor: DerivationDescriptor): string {
   return sha256Hex(canonicalJson(descriptor));
+}
+
+/**
+ * `baselineHash = SHA256(canonicalJson(BaselineNormalsPayload))`.
+ *
+ * The payload names the `cellKeys` subset that was actually consumed, so one
+ * baseline can carry different hashes for different derivations without either
+ * claiming to be a hash of the whole table.
+ */
+export function hashBaselineNormals(payload: BaselineNormalsPayload): string {
+  return sha256Hex(canonicalJson(payload));
 }

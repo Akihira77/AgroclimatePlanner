@@ -2,6 +2,7 @@ import { CONTRACTS_VERSION } from "@agroclimate/contracts";
 import { createPrismaClient } from "@agroclimate/database";
 import { syntheticGridRegistry } from "@agroclimate/weather-core";
 
+import { createClimatologyHandler } from "./ingest/climatology.js";
 import { createForecastHandler } from "./ingest/forecast.js";
 import { createPostgresQueue } from "./queue/postgres.js";
 import { createRunner, jsonLogger, RUNNER_DEFAULTS } from "./runner.js";
@@ -36,6 +37,13 @@ const handlers = [
   createForecastHandler({
     registry: syntheticGridRegistry,
     attribution: process.env["OPEN_METEO_ATTRIBUTION"] ?? "Open-Meteo.com (CC BY 4.0)",
+  }),
+  createClimatologyHandler({
+    registry: syntheticGridRegistry,
+    // Copernicus Licence wording; the build must never invent an attribution.
+    attribution:
+      process.env["ERA5_ATTRIBUTION"] ??
+      "Contains modified Copernicus Climate Change Service information (2026)",
   }),
 ];
 const runner = createRunner({

@@ -77,6 +77,12 @@ export const canonicalArrayRules: Readonly<Record<string, SetRule | SequenceRule
   // meaningful. Canonicalisation neither sorts nor repairs this collection —
   // the domain validator owns chronology, overlap, and coverage.
   evidenceSegments: { kind: "sequence" },
+
+  // The stored monthly normals of one baseline. Identity is `(cellKey, month)`
+  // because `climatology_normals_key` enforces exactly that; `valueMm` and
+  // `sampleYears` are content, so two rows for one identity with different
+  // values are a conflict rather than a duplicate to drop.
+  monthlyNormals: { kind: "set", orderBy: ["cellKey", "month"], dedupe: true },
 };
 
 /**

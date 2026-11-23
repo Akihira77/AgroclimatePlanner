@@ -118,6 +118,46 @@ export function targetSelectorHashOf(selector: TargetSelector): string {
   return sha256Hex(canonicalJson({ cells: selector.cells }));
 }
 
+/* ------------------------------------------------------------------ *
+ * Climatology baseline — Phase 5.5
+ * ------------------------------------------------------------------ */
+
+/** The datasets a baseline builder may produce. Matches `climatology_normals_dataset_check`. */
+export const baselineDatasetSchema = z.enum(["era5", "chirps_v3", "nasa_power"]);
+export type BaselineDataset = z.infer<typeof baselineDatasetSchema>;
+
+/**
+ * One stored monthly normal, as it exists in `app.climatology_normals`.
+ *
+ * `month` is the first day of a calendar month. `sampleYears` is the number of
+ * baseline years that contributed a complete monthly total; it is never a
+ * coverage percentage and never inferred from the period length.
+ */
+export const baselineMonthlyNormalSchema = z.strictObject({
+  cellKey: z.string().min(1),
+  month: isoDateSchema.refine((month) => month.slice(8, 10) === "01", {
+    message: "month must be the first day of a calendar month",
+  }),
+  valueMm: z.number().nonnegative(),
+  sampleYears: z.number().int().positive().max(30),
+});
+export type BaselineMonthlyNormal = z.infer<typeof baselineMonthlyNormalSchema>;
+
+/**
+ * The baseline hash preimage: the exact monthly normals of the cell subset a
+ * derivation consumed, not a global hash of the table.
+ *
+ * `monthlyNormals` is a set ordered by `(cellKey, month)` in the canonicaliser,
+ * so the hash is independent of emission order. A duplicate `(cellKey, month)`
+ * with conflicting content is a canonicalisation error, not a silent collapse.
+ */
+export const baselineNormalsPayloadSchema = z.strictObject({
+  baselineVersion: z.string().min(1),
+  baselineDataset: baselineDatasetSchema,
+  monthlyNormals: z.array(baselineMonthlyNormalSchema).min(1),
+});
+export type BaselineNormalsPayload = z.infer<typeof baselineNormalsPayloadSchema>;
+
 /**
  * The idempotency key of one ingestion job:
  * `ingest:{queue}:{forecastRunId}:{ingestionVersion}`.

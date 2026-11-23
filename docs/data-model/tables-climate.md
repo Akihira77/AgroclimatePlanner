@@ -428,6 +428,11 @@ Notes:
   place would silently change every stored anomaly that referenced the old one
   while still claiming the same version string — the reproducibility failure
   `provenance-contract.md` §4 rule 3 exists to prevent.
+- The writer (`packages/database/src/climatology.ts`) is **insert-only**: an
+  identical rebuild inserts nothing and verifies the stored value and
+  `sample_years` match, while a different value under an existing version throws
+  a conflict instead of overwriting. All cells and all 12 months are written in
+  one transaction, so an 11-row baseline cannot be observed.
 - Cache-key note from `ADR-001` D6: the monthly-init seasonal cache key omits a
   `day` component. `climatology_normals` follows the same idea — identity is
   `(baseline_version, cell, month)`, never a request timestamp.

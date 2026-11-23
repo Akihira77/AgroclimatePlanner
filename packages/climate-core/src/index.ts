@@ -1,0 +1,16 @@
+export {
+  BASELINE_PERIOD,
+  BASELINE_UNIT,
+  CLIMATOLOGY_ALGORITHM_VERSION,
+  baselineHashPayloadOf,
+  baselineVersionOf,
+  buildMonthlyClimatology,
+  type Baseline,
+  type BaselineNormal,
+  type BuildBaselineInput,
+  type CellBaseline,
+  type ClimatologyCellInput,
+  type ClimatologyFailureKind,
+  type ClimatologyOutcome,
+  type DailyPrecipitationInput,
+} from "./climatology.js";

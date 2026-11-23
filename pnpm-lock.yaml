@@ -324,6 +324,9 @@ importers:
 
   apps/worker:
     dependencies:
+      '@agroclimate/climate-core':
+        specifier: workspace:*
+        version: link:../../packages/climate-core
       '@agroclimate/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -343,6 +346,25 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
+
+  packages/climate-core:
+    dependencies:
+      '@agroclimate/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.6
+      eslint:
+        specifier: 'catalog:'
+        version: 9.39.5(jiti@2.7.0)(supports-color@7.2.0)
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 5.1.0(@types/node@26.6.6)(vite@8.3.8(@types/node@26.6.6)(jiti@2.7.0))
 
   packages/contracts:
     dependencies:

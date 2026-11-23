@@ -12,5 +12,10 @@ export * from "./grid.js";
 export * from "./cell-resolution.js";
 export * from "./provenance.js";
 export { CanonicalizationError, canonicalJson } from "./canonical.js";
-export { sha256Hex, hashFieldSnapshot, hashDerivationDescriptor } from "./hash.js";
+export {
+  sha256Hex,
+  hashFieldSnapshot,
+  hashDerivationDescriptor,
+  hashBaselineNormals,
+} from "./hash.js";
 export * from "./version.js";

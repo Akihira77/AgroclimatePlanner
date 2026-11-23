@@ -1,7 +1,8 @@
 # Climate Data Foundation
 
 Status: **Phase 5.0 implemented; 5.1 partially implemented; 5.2 implemented;
-5.3 implemented; 5.4 implemented behind its gates; 5.5–5.8 not started.**
+5.3 implemented; 5.4 implemented behind its gates; 5.5 implemented behind its
+gates; 5.6–5.8 not started.**
 5.2.1–5.2.8 are complete as of `8a6f2ec` (2026-11-22): generic grid resolution, a
 synthetic registry instance, the tenant-scoped field centroid read, cell identity
 persistence, and `POST /v1/fields/:fieldId/resolve-cell`. 5.3 is complete as of the
@@ -15,7 +16,13 @@ ingest, and the only registry the worker is given is `synthetic`, which
 `requireValidated` refuses). In the shipped configuration every `ingest.forecast`
 job therefore terminates with `grid_not_validated` before a provider is called.
 No provider grid has been admitted or validated and `app.field_outlook_cells` is
-not written. Everything else in this document is a plan unless a row or section
+not written. Phase 5.5 is implemented in the working tree on 2026-11-23: the
+`ingest.climate` handler fetches 1991–2020 ERA5 daily precipitation through the
+Open-Meteo archive route, builds 12 monthly normals per cell and writes
+`app.climatology_normals`. It is behind the same two gates as 5.4 — the shipped
+registry refuses `grid_not_validated` (`OPEN-18`) and commercial ingestion waits
+on `OPEN-03` — so no baseline row has been produced from a provider by this
+process yet; the suites use a fixture validated grid. CHIRPS is not implemented. Everything else in this document is a plan unless a row or section
 is marked as existing; §8.2 is the per-step record and `IMPLEMENTATION_STATUS.md`
 is the index.
 
@@ -254,9 +261,11 @@ Two rules that shape every file above:
    aggregation take data and return data. That is what lets the whole pipeline be
    tested from recorded fixtures with no network and no clock (§7).
 
-`climate-core` does not exist yet (§8.7 adds it). `weather-core` exists as a package
-since 5.1, but only the SEAS5 monthly adapter, the transport, and the monthly
-normalizer are written; cells, the other adapters, and record assembly are not (§5.1.2). The
+`climate-core` now exists as a workspace package, but only the climatology builder
+is written (§8.5); the aggregation, anomaly and outlook-assembly modules of §8.7
+are not. `weather-core` exists as a package since 5.1, but only the daily and
+seasonal adapters, the transport, and the normalizers are written; cells, the other
+adapters, and record assembly are not (§5.1.2). The
 alternative — putting adapters inside `apps/worker` —
 was rejected because `packages/contracts` cannot import from an app, and the
 `WeatherValue` contract is the type these functions must return.
@@ -1459,13 +1468,13 @@ column — never by inventing the value.
 |---|---|
 | Objective | 1991–2020 monthly normals per cell, versioned — the class that fills months 8–12 |
 | Prerequisites | 5.1, 5.3 |
-| Scope | `packages/climate-core/climatology.ts` (baseline builder), `packages/weather-core/adapters/open-meteo-archive.ts` (ERA5), `apps/worker/src/ingest/climatology.ts` |
-| Contracts | `baselineVersion`, `baselineHash` over a consumed subset |
-| Database impact | none; writes `climatology_normals` |
-| Tests | a hand-computed 30-year mean for one cell and month; a rebuild with a changed dataset produces a **new** `baseline_version` and leaves the old one intact |
-| Acceptance | 12 normals per cell for one `baseline_version`; `sample_years` recorded; no row edited in place |
+| Scope | **as built:** `packages/climate-core/src/climatology.ts` (the pure builder — a new workspace package, no I/O and no clock), `packages/weather-core/src/adapters/open-meteo-archive.ts` (ERA5 via `archive-api.open-meteo.com/v1/archive`), `apps/worker/src/ingest/climatology.ts` and its registration in `apps/worker/src/main.ts`, `packages/database/src/climatology.ts` (the versioned write), and the contract additions in `packages/contracts/src/{climate,hash,canonical,job}.ts`. The plan's path `packages/climate-core/climatology.ts` is realised as `src/` inside the package |
+| Contracts | `baselineVersion` is derived, not carried: `ERA5:1991-2020:v1` from dataset label, the fixed period and the algorithm version — no timestamp and no UUID, so a retry of the same calculation is the same version. `baselineHash` is `SHA256(canonicalJson(BaselineNormalsPayload))` over the stored monthly normals of the cells a derivation actually consumed, ordered by `(cellKey, month)`; it is not a hash of the table, and two conflicting normals for one `(cellKey, month)` are a canonicalisation error rather than a silent collapse. `climatologyJobPayloadSchema` is separate from the forecast payload because a baseline opens no run and carries no `forecastRunId` |
+| Database impact | **none.** The existing `app.climatology_normals` is used as designed: `UNIQUE (baseline_version, outlook_cell_id, month)`, all its CHECKs, no new column and no migration. `app_system` writes it; `app_api` keeps `SELECT` only. The table is global — no tenant id, no RLS |
+| Tests | executed: `packages/weather-core/src/adapters/open-meteo-archive.test.ts` (**12**: pinned URL, 10 958-day window, provider-native payload, null preserved, 429/4xx/5xx/timeout/size, malformed JSON, duplicate and skipped dates, short/long axis, unexpected unit, invalid coordinates); `packages/climate-core/src/climatology.test.ts` (**14**: hand-computed means, monthly totals not daily values, leap February, missing/null day exclusion, `sample_years`, incomplete period, no-complete-year failure, negative/NaN/Infinity, unit, duplicate/out-of-period day, order independence, per-cell separation, subset hash payload); `packages/contracts/src/baseline.test.ts` (**5**: order-independent hash, version/value sensitivity, conflicting duplicate, month day, sample ceiling); `packages/database/test/integration/climatology-persistence.test.mjs` (**14**: 12 rows, multi-cell, idempotent repeat, value/sample/dataset/period conflict, new version intact, rollback, short/invalid/negative input, `app_api` read-only, no tenant column); `apps/worker/test/integration/ingest-climatology.test.mjs` (**13**: success with no `IngestionRun`, duplicate enqueue, `grid_not_validated`, selector cell and selector hash refusals, 5xx retry, short axis, insufficient history, all-cells rollback, conflict, retry exhaustion, lease-token loss, reaper recovery) |
+| Acceptance | **implemented:** one `ingest.climate` job fetches the whole 1991–2020 window per cell in one request, builds exactly 12 normals, and commits all cells and months in the job's own transaction with its settlement. A monthly total counts only when every day of that month-year is present and non-null; a missing day is not zero. A month with no complete year fails the build (`insufficient_history`); `sample_years` (1–30) is stored per month so 27 is not reported as 30. A repeated identical write inserts nothing, and a differing value under an existing `baseline_version` is a terminal `baseline_conflict`. **Refused by design:** every real job dies `grid_not_validated` against the shipped registry (`OPEN-18`); served coordinates are recorded as a provider fact, never as a validated grid node; no `ForecastRun` or `IngestionRun` is invented. **Not met:** no baseline has been built from a live provider because the gate is closed, and CHIRPS is not attempted |
 | Dependencies | 5.1, 5.3 |
-| Risks | ERA5's ~25–34 % under-representation of convective rainfall is unverified locally; the baseline is labelled by dataset, and CHIRPS is preferred the moment a route exists |
+| Risks | ERA5's ~25–34 % under-representation of convective rainfall is unverified locally; the baseline is labelled by dataset, and CHIRPS stays preferred the moment a reachable route exists. The archive's returned coordinate can be interpolated for a nearby request, so the adapter records it without claiming grid identity — that is why OPEN-18 must be about the grid, not about a successful HTTP call |
 
 ### 8.6 Phase 5.6 — seasonal ingestion (EC46 and SEAS5)
 
