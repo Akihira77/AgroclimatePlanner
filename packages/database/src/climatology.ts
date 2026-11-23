@@ -48,6 +48,17 @@ export interface ClimatologyCellInput {
   readonly normals: readonly ClimatologyNormalInput[];
 }
 
+export interface ClimatologySourceMetadata {
+  /** Adapter release that produced the payload; audit only. */
+  readonly adapterVersion: string;
+  /** Coordinate-free, deterministic route reference (`https://…`). */
+  readonly sourceReference: string;
+  /** The licence string the provider requires, stored verbatim. */
+  readonly attribution: string;
+  /** When the provider response for this baseline was received. */
+  readonly retrievedAt: Date;
+}
+
 export interface PersistClimatologyBaselineInput {
   readonly provider: string;
   readonly model: string;
@@ -56,7 +67,10 @@ export interface PersistClimatologyBaselineInput {
   readonly baselineDataset: BaselineDataset;
   readonly periodFrom: Date;
   readonly periodTo: Date;
+  /** The calculation revision embedded in `baselineVersion` (the `v1` token). */
+  readonly algorithmVersion: string;
   readonly computedAt: Date;
+  readonly source: ClimatologySourceMetadata;
   readonly cells: readonly ClimatologyCellInput[];
 }
 
@@ -72,15 +86,34 @@ export interface PersistClimatologyBaselineResult {
  * a write.
  */
 export class ClimatologyConflictError extends Error {
-  override readonly name = "ClimatologyConflictError";
+  override readonly name: string = "ClimatologyConflictError";
 
   constructor(
     readonly baselineVersion: string,
-    readonly cellKey: string,
-    readonly month: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * The same `baseline_version` was presented with a different **source identity**
+ * — dataset, provider/model, route reference, period or algorithm revision.
+ *
+ * This is the enforcement behind the version-bump rule: a material change to the
+ * source or the calculation cannot quietly reuse an immutable version, and the
+ * stored normals are never overwritten to make the new identity fit.
+ */
+export class ClimatologySourceConflictError extends ClimatologyConflictError {
+  override readonly name = "ClimatologySourceConflictError";
+
+  constructor(
+    baselineVersion: string,
+    readonly field: string,
   ) {
     super(
-      `baseline "${baselineVersion}" already stores a different normal for cell "${cellKey}" month ${month}; a changed baseline needs a new baseline_version`,
+      baselineVersion,
+      `baseline "${baselineVersion}" was recorded with a different ${field}; a changed source identity or calculation needs a new baseline_version`,
     );
   }
 }
@@ -124,6 +157,19 @@ function assertBaselineInput(input: PersistClimatologyBaselineInput): void {
   if (input.baselineVersion.trim().length === 0) {
     throw new InvariantViolationError("baselineVersion must not be blank");
   }
+  if (input.algorithmVersion.trim().length === 0) {
+    throw new InvariantViolationError("algorithmVersion must not be blank");
+  }
+  if (input.source.adapterVersion.trim().length === 0) {
+    throw new InvariantViolationError("a baseline needs the adapter version that produced it");
+  }
+  if (!input.source.sourceReference.startsWith("https://")) {
+    throw new InvariantViolationError("sourceReference must be an https route reference");
+  }
+  if (input.source.attribution.trim().length === 0) {
+    throw new InvariantViolationError("a baseline needs the source attribution string");
+  }
+  dateKeyOf(input.source.retrievedAt);
   const periodFrom = dateKeyOf(input.periodFrom);
   const periodTo = dateKeyOf(input.periodTo);
   if (periodTo <= periodFrom) {
@@ -205,6 +251,89 @@ interface StoredNormal {
   readonly sampleYears: number | null;
 }
 
+interface StoredBaselineSource {
+  readonly baselineDataset: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly sourceReference: string;
+  readonly periodFrom: string;
+  readonly periodTo: string;
+  readonly algorithmVersion: string;
+}
+
+/**
+ * Record the source identity of a baseline version once, then prove that every
+ * rewrite of that version agrees with it.
+ *
+ * Insert-only for the same reason the normals are: `retrieved_at` and
+ * `computed_at` describe the first successful build of the version, and the
+ * per-cell last-serving time lives on `outlook_cells`. `adapter_version` and
+ * `attribution` are stored for audit but are **not** identity: a patch release
+ * that changes neither the source nor a value must not force a version bump.
+ */
+async function persistSourceMetadata(
+  tx: TenantTransaction,
+  input: PersistClimatologyBaselineInput,
+  periodFrom: string,
+  periodTo: string,
+): Promise<void> {
+  await tx.$queryRaw`
+    INSERT INTO app.climatology_baselines (
+      baseline_version, baseline_dataset, provider, model, adapter_version,
+      source_reference, attribution, retrieved_at, period_from, period_to,
+      algorithm_version, computed_at
+    )
+    VALUES (
+      ${input.baselineVersion},
+      ${input.baselineDataset},
+      ${input.provider},
+      ${input.model},
+      ${input.source.adapterVersion},
+      ${input.source.sourceReference},
+      ${input.source.attribution},
+      ${input.source.retrievedAt},
+      ${periodFrom}::date,
+      ${periodTo}::date,
+      ${input.algorithmVersion},
+      ${input.computedAt}
+    )
+    ON CONFLICT (baseline_version) DO NOTHING
+  `;
+
+  const [stored] = await tx.$queryRaw<StoredBaselineSource[]>`
+    SELECT baseline_dataset                    AS "baselineDataset",
+           provider,
+           model,
+           source_reference                    AS "sourceReference",
+           to_char(period_from, 'YYYY-MM-DD')  AS "periodFrom",
+           to_char(period_to, 'YYYY-MM-DD')    AS "periodTo",
+           algorithm_version                   AS "algorithmVersion"
+      FROM app.climatology_baselines
+     WHERE baseline_version = ${input.baselineVersion}
+     FOR UPDATE
+  `;
+  if (stored === undefined) {
+    throw new InvariantViolationError(
+      `baseline "${input.baselineVersion}" was recorded but could not be read back`,
+    );
+  }
+
+  const identity: readonly (readonly [string, string, string])[] = [
+    ["baseline_dataset", stored.baselineDataset, input.baselineDataset],
+    ["provider", stored.provider, input.provider],
+    ["model", stored.model, input.model],
+    ["source_reference", stored.sourceReference, input.source.sourceReference],
+    ["period_from", stored.periodFrom, periodFrom],
+    ["period_to", stored.periodTo, periodTo],
+    ["algorithm_version", stored.algorithmVersion, input.algorithmVersion],
+  ];
+  for (const [field, storedValue, incomingValue] of identity) {
+    if (storedValue !== incomingValue) {
+      throw new ClimatologySourceConflictError(input.baselineVersion, field);
+    }
+  }
+}
+
 /**
  * Persist one complete baseline for the given cells.
  *
@@ -219,6 +348,11 @@ export async function persistClimatologyBaseline(
 
   const periodFrom = dateKeyOf(input.periodFrom);
   const periodTo = dateKeyOf(input.periodTo);
+
+  // Metadata first: a version whose numbers exist without a source row would be
+  // exactly the provenance gap this table closes, and the transaction makes the
+  // pair atomic.
+  await persistSourceMetadata(tx, input, periodFrom, periodTo);
 
   const cellIds = await resolveForecastCells(tx, {
     provider: input.provider,
@@ -307,7 +441,10 @@ export async function persistClimatologyBaseline(
         row.valueMm !== normal.valueMm ||
         row.sampleYears !== normal.sampleYears
       ) {
-        throw new ClimatologyConflictError(input.baselineVersion, cell.cellKey, month);
+        throw new ClimatologyConflictError(
+          input.baselineVersion,
+          `baseline "${input.baselineVersion}" already stores a different normal for cell "${cell.cellKey}" month ${month}; a changed baseline needs a new baseline_version`,
+        );
       }
       matched += 1;
     }

@@ -1,6 +1,7 @@
 import type { GridRegistry, GridSpec, TargetSelectorEntry } from "@agroclimate/contracts";
 import {
   climatologyJobPayloadSchema,
+  hashBaselineNormals,
   resolveGridCell,
   targetSelectorHashOf,
 } from "@agroclimate/contracts";
@@ -12,6 +13,7 @@ import {
 import type { ClimatologyCellInput as ClimatologyCellBaselineInput } from "@agroclimate/database";
 import {
   ClimatologyConflictError,
+  ClimatologySourceConflictError,
   configureTransactionTimeouts,
   InvariantViolationError,
   LeaseLostError,
@@ -74,6 +76,21 @@ export const CLIMATOLOGY_TIMEOUTS = {
 } as const;
 
 const SUPPORTED_VARIABLES = new Set(["precipitation"]);
+
+/**
+ * How far the provider's answered coordinate may sit from the resolved grid node
+ * before the cell is refused.
+ *
+ * 1e-6° ≈ 0.11 m — the same bound `ProviderCoordinateDriftError` uses for a
+ * coordinate that moves between ingestions. It absorbs decimal serialisation
+ * noise between the grid spec and the response, and it is four orders of
+ * magnitude below the finest step any planned provider grid has (0.05°), so it
+ * cannot accept a neighbouring cell or an interpolated point.
+ *
+ * This is a *node identity* check, not drift: the drift check compares the new
+ * response with the stored one and lives in `resolveForecastCells`.
+ */
+export const NODE_COORDINATE_TOLERANCE_DEGREES = 1e-6;
 
 interface RequestedCell {
   readonly cellKey: string;
@@ -178,7 +195,22 @@ export function createClimatologyHandler(options: ClimatologyHandlerOptions): Jo
     };
     const outcome = await fetchArchiveDaily(config, runtime);
     if (!outcome.ok) return mapAdapterFailure(cell.cellKey, outcome);
-    return { cell, payload: outcome.value };
+
+    // The response coordinate is the provider's answer, not the grid node the
+    // selector approved. `cell_selection=nearest` normally returns the node;
+    // an interpolated or relocated point must fail closed instead of being
+    // stored as if it were one (OPEN-18).
+    const served = outcome.value;
+    const latOff = Math.abs(served.servedLatitude - cell.latitude);
+    const lonOff = Math.abs(served.servedLongitude - cell.longitude);
+    if (latOff > NODE_COORDINATE_TOLERANCE_DEGREES || lonOff > NODE_COORDINATE_TOLERANCE_DEGREES) {
+      return terminal(
+        "provider_coordinate_mismatch",
+        `cell ${cell.cellKey}: provider served ${served.servedLatitude},${served.servedLongitude}, which is not the grid node ${cell.latitude},${cell.longitude} within ${NODE_COORDINATE_TOLERANCE_DEGREES}°`,
+      );
+    }
+
+    return { cell, payload: served };
   }
 
   return {
@@ -245,11 +277,26 @@ export function createClimatologyHandler(options: ClimatologyHandlerOptions): Jo
       }
       const baseline = built.value;
 
-      // The provenance input ref for a later derivation. Computed here so the
-      // handler proves the built baseline is hashable without a ForecastRun.
+      // `baselineHash` is the provenance value for this exact cell subset. It is
+      // computed and logged here, not stored: the column would be a subset hash
+      // in a per-row table, and the contract says a derivation recomputes it from
+      // the subset it consumed.
       const hashPayload = baselineHashPayloadOf(
         baseline,
         baseline.cells.map((cell) => cell.cellKey),
+      );
+      const baselineHash = hashBaselineNormals(hashPayload);
+
+      const first = fetched[0];
+      if (first === undefined) {
+        throw new InvariantViolationError("no provider payload was retained");
+      }
+      // Every cell is fetched from the same pinned route; the metadata row stores
+      // the coordinate-free reference once for the version, not one URL per cell.
+      const sourceReference = first.payload.sourceReference;
+      const adapterVersion = first.payload.adapterVersion;
+      const retrievedAt = new Date(
+        Math.max(...fetched.map((entry) => Date.parse(entry.payload.receivedAt))),
       );
 
       const computedAt = now();
@@ -307,7 +354,14 @@ export function createClimatologyHandler(options: ClimatologyHandlerOptions): Jo
               baselineDataset: baseline.baselineDataset,
               periodFrom: new Date(`${baseline.periodFrom}T00:00:00.000Z`),
               periodTo: new Date(`${baseline.periodTo}T00:00:00.000Z`),
+              algorithmVersion: baseline.algorithmVersion,
               computedAt,
+              source: {
+                adapterVersion,
+                sourceReference,
+                attribution: first.payload.attribution,
+                retrievedAt,
+              },
               cells: cellsInput,
             });
 
@@ -333,7 +387,7 @@ export function createClimatologyHandler(options: ClimatologyHandlerOptions): Jo
               complete: baseline.cells.every((cell) => cell.complete),
               minSampleYears: Math.min(...baseline.cells.map((cell) => cell.minSampleYears)),
               coveragePercent,
-              baselineHashCells: hashPayload.monthlyNormals.length,
+              baselineHash,
             });
 
             return {
@@ -351,6 +405,9 @@ export function createClimatologyHandler(options: ClimatologyHandlerOptions): Jo
       } catch (error) {
         if (error instanceof ProviderCoordinateDriftError) {
           return terminal("provider_changed", error.message);
+        }
+        if (error instanceof ClimatologySourceConflictError) {
+          return terminal("baseline_source_conflict", error.message);
         }
         if (error instanceof ClimatologyConflictError) {
           return terminal("baseline_conflict", error.message);

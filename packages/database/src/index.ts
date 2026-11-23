@@ -127,10 +127,15 @@ export type {
   SettlementOutcome,
   SettlementRequest,
 } from "./settlement.js";
-export { ClimatologyConflictError, persistClimatologyBaseline } from "./climatology.js";
+export {
+  ClimatologyConflictError,
+  ClimatologySourceConflictError,
+  persistClimatologyBaseline,
+} from "./climatology.js";
 export type {
   ClimatologyCellInput,
   ClimatologyNormalInput,
+  ClimatologySourceMetadata,
   PersistClimatologyBaselineInput,
   PersistClimatologyBaselineResult,
 } from "./climatology.js";

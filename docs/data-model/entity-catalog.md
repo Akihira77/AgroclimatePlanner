@@ -17,8 +17,10 @@ boundary of this phase.
 
 ## 1. Specified tables
 
-22 tables from Phase 3, all implemented, plus one added afterwards: `sessions`, in
-`20261118050000_sessions` (S5), for 23 tables in total. Three of the 22 arrived with
+22 tables from Phase 3, all implemented, plus two added afterwards: `sessions`, in
+`20261118050000_sessions` (S5), and `climatology_baselines`, in
+`20261123010000_climatology_baselines` (Phase 5.5 corrective), for 24 tables in total.
+Three of the 22 arrived with
 Phase 2.2.3 (`users`, `farms`, `fields`); the other nineteen with Phase 3, in migration
 `20261118030000_domain_tables`. The `State` column records when each arrived, not whether
 it exists.
@@ -44,12 +46,13 @@ it exists.
 | 17 | `app.weather_records` | `WeatherRecord` | `global` | — | no | Phase 3 | `tables-climate.md` §4 |
 | 18 | `app.monthly_outlooks` | `MonthlyOutlook` | `global` | — | no | Phase 3 | `tables-climate.md` §5 |
 | 19 | `app.climatology_normals` | climatology baseline | `global` | — | no | Phase 3 | `tables-climate.md` §6 |
-| 20 | `app.suitability_runs` | `SuitabilityRun` | `tenant-derived` | `user_id` | yes | Phase 3 | `tables-derived.md` §1 |
-| 21 | `app.planting_windows` | `PlantingWindow` | `tenant-derived` | `user_id` | yes | Phase 3 | `tables-derived.md` §2 |
-| 22 | `app.ai_briefings` | `AiBriefing` | `tenant-derived` | `user_id` | yes | Phase 3 | `tables-derived.md` §3 |
-| 23 | `app.sessions` | `Session` | `identity` | `user_id` → `users` | yes | S5, 2026-11-20 | `ADR-005`, `phase-3.2.3` §7 |
+| 20 | `app.climatology_baselines` | baseline source metadata | `global` | — | no | 5.5 corrective | `tables-climate.md` §6.1 |
+| 21 | `app.suitability_runs` | `SuitabilityRun` | `tenant-derived` | `user_id` | yes | Phase 3 | `tables-derived.md` §1 |
+| 22 | `app.planting_windows` | `PlantingWindow` | `tenant-derived` | `user_id` | yes | Phase 3 | `tables-derived.md` §2 |
+| 23 | `app.ai_briefings` | `AiBriefing` | `tenant-derived` | `user_id` | yes | Phase 3 | `tables-derived.md` §3 |
+| 24 | `app.sessions` | `Session` | `identity` | `user_id` → `users` | yes | S5, 2026-11-20 | `ADR-005`, `phase-3.2.3` §7 |
 
-Tenant-owned (RLS): 10 tables — rows 1–7 and 20–22.
+Tenant-owned (RLS): 10 tables — rows 1–7 and 21–23.
 Global/reference (no RLS, no `user_id`): 12 tables — rows 8–19.
 Identity (RLS forced, not tenant-scoped): 1 table — row 23. `sessions` carries no
 `app.user_id` predicate on purpose: it is read during authentication, before a tenant

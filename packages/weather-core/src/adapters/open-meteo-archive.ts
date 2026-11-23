@@ -75,7 +75,14 @@ export interface ArchiveDailyPayload {
   readonly servedLongitude: number;
   readonly startDate: string;
   readonly endDate: string;
+  /** Exact per-cell request URL (includes the coordinates). */
   readonly sourceUrl: string;
+  /**
+   * The coordinate-free route and pinned parameters. This is what a baseline
+   * version can store once: a multi-cell build has many `sourceUrl`s but one
+   * source reference.
+   */
+  readonly sourceReference: string;
   readonly receivedAt: string;
   readonly rawPayloadRef: null;
   readonly days: readonly ProviderArchiveDay[];
@@ -136,6 +143,25 @@ export function buildArchiveDailyUrl(config: ArchiveAdapterConfig): string {
   params.set("longitude", String(config.longitude));
   params.set("start_date", config.startDate);
   params.set("end_date", config.endDate);
+  params.set("daily", ARCHIVE_VARIABLE);
+  params.set("models", ARCHIVE_MODEL);
+  params.set("precipitation_unit", ARCHIVE_UNIT);
+  params.set("cell_selection", "nearest");
+  params.set("timezone", "UTC");
+  return `${baseUrl.replace(/\/$/, "")}/v1/archive?${params.toString()}`;
+}
+
+/**
+ * The same route and pinned parameters as `buildArchiveDailyUrl`, without the
+ * coordinate, dates and window-specific values.
+ *
+ * A baseline row stores this once. It is deterministic, so a later reader can
+ * verify which product produced a version without re-deriving it from the
+ * adapter source, and it is coordinate-free because a multi-cell baseline has
+ * no single request URL.
+ */
+export function buildArchiveSourceReference(baseUrl: string = ARCHIVE_DEFAULT_BASE_URL): string {
+  const params = new URLSearchParams();
   params.set("daily", ARCHIVE_VARIABLE);
   params.set("models", ARCHIVE_MODEL);
   params.set("precipitation_unit", ARCHIVE_UNIT);
@@ -284,6 +310,7 @@ export async function fetchArchiveDaily(
       startDate: config.startDate,
       endDate: config.endDate,
       sourceUrl: url,
+      sourceReference: buildArchiveSourceReference(config.baseUrl ?? ARCHIVE_DEFAULT_BASE_URL),
       receivedAt: runtime.now().toISOString(),
       rawPayloadRef: null,
       days: Object.freeze(days),

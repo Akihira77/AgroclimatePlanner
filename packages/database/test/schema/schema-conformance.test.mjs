@@ -17,7 +17,7 @@ import { roleConnectionString } from "../../scripts/lib/connections.mjs";
 
 const owner = new Client({ connectionString: roleConnectionString("migration_owner") });
 
-/** The 24 domain tables, `docs/data-model/ownership-and-rls.md` §2. */
+/** The 25 domain tables, `docs/data-model/ownership-and-rls.md` §2. */
 const domainTables = [
   "users",
   "farms",
@@ -38,6 +38,7 @@ const domainTables = [
   "weather_records",
   "monthly_outlooks",
   "climatology_normals",
+  "climatology_baselines",
   "suitability_runs",
   "planting_windows",
   "ai_briefings",
@@ -100,7 +101,7 @@ after(async () => {
 });
 
 describe("table inventory", () => {
-  test("exactly the 24 domain tables exist in app, plus the migration ledger", async () => {
+  test("exactly the 25 domain tables exist in app, plus the migration ledger", async () => {
     const { rows } = await owner.query(
       "select tablename from pg_tables where schemaname = 'app' order by tablename",
     );
@@ -181,9 +182,9 @@ describe("row-level security flags", () => {
     assert.deepEqual(tenantGuc, [], "app.sessions must not carry a tenant GUC policy");
   });
 
-  test("tenant, identity and reference sets partition the 24 tables", () => {
+  test("tenant, identity and reference sets partition the 25 tables", () => {
     assert.equal(tenantTables.length, 10);
-    assert.equal(globalTables.length, 13);
+    assert.equal(globalTables.length, 14);
     assert.equal(identityTables.length, 1);
     assert.equal(
       tenantTables.length + globalTables.length + identityTables.length,

@@ -564,6 +564,30 @@ model ClimatologyNormal {
   @@map("climatology_normals")
 }
 
+/// Source metadata for one baseline version (Phase 5.5 corrective pass).
+///
+/// One row per `baseline_version`; the numbers live in `ClimatologyNormal`.
+/// A baseline is not a run, so this is the durable home for the route,
+/// attribution and retrieval time that no run row can carry.
+model ClimatologyBaseline {
+  baselineVersion  String   @id @map("baseline_version")
+  baselineDataset  String   @map("baseline_dataset")
+  provider         String
+  model            String
+  adapterVersion   String   @map("adapter_version")
+  sourceReference  String   @map("source_reference")
+  attribution      String
+  retrievedAt      DateTime @map("retrieved_at") @db.Timestamptz(6)
+  periodFrom       DateTime @map("period_from") @db.Date
+  periodTo         DateTime @map("period_to") @db.Date
+  algorithmVersion String   @map("algorithm_version")
+  computedAt       DateTime @map("computed_at") @db.Timestamptz(6)
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@schema("app")
+  @@map("climatology_baselines")
+}
+
 // Field operations — four tenant tables: resolution, observation, planting,
 // harvest.
 

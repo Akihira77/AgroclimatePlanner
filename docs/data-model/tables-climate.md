@@ -1,8 +1,8 @@
 # Tables — Weather and Climate Data Plane
 
-Seven global tables. No `user_id`, no RLS, no tenant dimension: a forecast for a grid
-cell is the same forecast for every tenant. That is why `app_api` may read the six
-climate tables directly while `app_system` owns the writes — and, for the seventh
+Eight global tables. No `user_id`, no RLS, no tenant dimension: a forecast for a grid
+cell is the same forecast for every tenant. That is why `app_api` may read the seven
+climate tables directly while `app_system` owns the writes — and, for the eighth
 (`app.jobs`, §7), `app_api` holds nothing at all.
 
 They are also the tables where "global" is a claim that must stay true. A row in
@@ -432,10 +432,80 @@ Notes:
   identical rebuild inserts nothing and verifies the stored value and
   `sample_years` match, while a different value under an existing version throws
   a conflict instead of overwriting. All cells and all 12 months are written in
-  one transaction, so an 11-row baseline cannot be observed.
+  one transaction, so an 11-row baseline cannot be observed. The same call
+  records the version's source row (§6.1) *before* the first normal; a conflict
+  rolls both back together.
 - Cache-key note from `ADR-001` D6: the monthly-init seasonal cache key omits a
   `day` component. `climatology_normals` follows the same idea — identity is
   `(baseline_version, cell, month)`, never a request timestamp.
+
+---
+
+## 6.1 `app.climatology_baselines`
+
+| | |
+|---|---|
+| Entity | source metadata for one climatology baseline version |
+| Class | global |
+| Purpose | the durable route, attribution and retrieval facts a normal row cannot carry |
+| Lifecycle | one row per `baseline_version`; insert-only; a conflicting identity is refused, never updated |
+| Exists | yes (Phase 5.5 corrective pass, `20261123010000_climatology_baselines`) |
+
+| Column | Type | Null | Default | Meaning |
+|---|---|---|---|---|
+| `baseline_version` | `text` | no | — | PK; the same string `climatology_normals` repeats |
+| `baseline_dataset` | `text` | no | — | `era5 \| chirps_v3 \| nasa_power` |
+| `provider` | `text` | no | — | source provider (`open-meteo`), not the local adapter name |
+| `model` | `text` | no | — | provider model (`era5`) |
+| `adapter_version` | `text` | no | — | adapter release that produced the payload; audit only |
+| `source_reference` | `text` | no | — | deterministic, coordinate-free route and pinned parameters (`https://…`) |
+| `attribution` | `text` | no | — | licence/attribution string, stored verbatim |
+| `retrieved_at` | `timestamptz(6)` | no | — | when the provider response for the version was received |
+| `period_from` | `date` | no | — | baseline window start |
+| `period_to` | `date` | no | — | baseline window end |
+| `algorithm_version` | `text` | no | — | the `v1` token embedded in `baseline_version` |
+| `computed_at` | `timestamptz(6)` | no | — | when the build ran |
+| `created_at` | `timestamptz(6)` | no | `now()` | — |
+
+Constraints:
+
+| Name | Definition | Invalid state prevented |
+|---|---|---|
+| `climatology_baselines_pkey` | `PRIMARY KEY (baseline_version)` | two source rows for one version |
+| `climatology_baselines_dataset_check` | `baseline_dataset IN ('era5','chirps_v3','nasa_power')` | a dataset no builder produces |
+| `climatology_baselines_period_check` | `period_to > period_from` | an inverted baseline window |
+| `climatology_baselines_source_check` | `source_reference ~ '^https://'` | a plaintext or unverifiable route |
+| `climatology_baselines_text_check` | version, provider, model, adapter, attribution and algorithm non-blank | a metadata row that explains nothing |
+
+Privileges: `app_api` holds `SELECT`; `app_system` holds `SELECT, INSERT, UPDATE,
+DELETE`. No RLS and no tenant column.
+
+Notes:
+
+- **Why a separate table.** The source identity is shared by every cell-month of a
+  version. Repeating a URL and an attribution on 12 rows per cell would be
+  duplication that can drift, and the correction was explicitly not to overload
+  `climatology_normals`.
+- **No foreign key** from `climatology_normals.baseline_version`: the string is a
+  free-form identity across two tables, and existing rows have no metadata to
+  back-fill. The writer inserts the metadata row first in the same transaction,
+  so this code path cannot produce normals without their source row.
+- **`adapter_version` and `attribution` are not identity.** A patch release or an
+  attribution-year change that leaves the source route and the numbers unchanged
+  is accepted on a repeat write and the first stored values are kept. Dataset,
+  provider, model, `source_reference`, period and `algorithm_version` are identity;
+  a disagreement throws `ClimatologySourceConflictError`, which is the version-bump
+  rule in code.
+- `source_reference` omits latitude, longitude and dates by design. The exact
+  per-cell request URL and the served coordinate are provider facts; the
+  coordinate-free reference is what one version can truthfully claim for a
+  multi-cell build. Per-cell requested/served coordinates remain on
+  `outlook_cells`.
+- `retrieved_at` and `computed_at` describe the **first** successful build of the
+  version. A later incremental or identical write does not move them; per-cell
+  last-serving time is `outlook_cells.served_updated_at`.
+- A future read API renders the attribution by joining this table on
+  `baseline_version`, not from a hard-coded year string.
 
 ---
 

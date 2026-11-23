@@ -9,6 +9,7 @@ import {
   ARCHIVE_UNIT,
   archiveDayCount,
   buildArchiveDailyUrl,
+  buildArchiveSourceReference,
   fetchArchiveDaily,
   type ArchiveAdapterConfig,
 } from "./open-meteo-archive.js";
@@ -75,6 +76,17 @@ describe("buildArchiveDailyUrl", () => {
     expect(ARCHIVE_PERIOD_TO).toBe("2020-12-31");
     expect(archiveDayCount(ARCHIVE_PERIOD_FROM, ARCHIVE_PERIOD_TO)).toBe(10_958);
   });
+
+  it("builds a coordinate-free, deterministic source reference for the version row", () => {
+    const reference = buildArchiveSourceReference();
+    expect(reference).toBe(
+      "https://archive-api.open-meteo.com/v1/archive?daily=precipitation_sum&models=era5&precipitation_unit=mm&cell_selection=nearest&timezone=UTC",
+    );
+    expect(reference).toBe(buildArchiveSourceReference());
+    expect(reference).not.toContain("latitude");
+    expect(reference).not.toContain("longitude");
+    expect(reference).not.toContain("start_date");
+  });
 });
 
 describe("fetchArchiveDaily", () => {
@@ -88,6 +100,7 @@ describe("fetchArchiveDaily", () => {
     expect(outcome.value.unit).toBe("mm");
     expect(outcome.value.servedLatitude).toBe(-6.25);
     expect(outcome.value.servedLongitude).toBe(106.75);
+    expect(outcome.value.sourceReference).toBe(buildArchiveSourceReference());
     expect(outcome.value.days).toEqual([
       { date: "2020-01-01", value: 1.2 },
       { date: "2020-01-02", value: null },

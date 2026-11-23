@@ -17,6 +17,7 @@ import { Client } from "pg";
 
 import {
   ClimatologyConflictError,
+  ClimatologySourceConflictError,
   createPrismaClient,
   InvariantViolationError,
   persistClimatologyBaseline,
@@ -37,6 +38,8 @@ const CELL_C = `p55-${token}-c`;
 const PERIOD_FROM = new Date("1991-01-01T00:00:00.000Z");
 const PERIOD_TO = new Date("2020-12-31T00:00:00.000Z");
 const COMPUTED_AT = new Date("2026-11-23T00:00:00.000Z");
+const SOURCE_REFERENCE =
+  "https://archive-api.open-meteo.com/v1/archive?daily=precipitation_sum&models=era5&precipitation_unit=mm&cell_selection=nearest&timezone=UTC";
 
 function normals(offset = 0) {
   return Array.from({ length: 12 }, (_unused, index) => ({
@@ -65,7 +68,14 @@ function input(overrides = {}) {
     baselineDataset: "era5",
     periodFrom: PERIOD_FROM,
     periodTo: PERIOD_TO,
+    algorithmVersion: `p55${token}`,
     computedAt: COMPUTED_AT,
+    source: {
+      adapterVersion: "open-meteo-archive-era5@1.0.0",
+      sourceReference: SOURCE_REFERENCE,
+      attribution: "Contains modified Copernicus Climate Change Service information (2026)",
+      retrievedAt: new Date("2026-11-23T00:00:00.000Z"),
+    },
     cells: [cell(CELL_A)],
     ...overrides,
   };
@@ -88,6 +98,20 @@ async function rowsFor(version) {
   return result.rows;
 }
 
+async function metadataFor(version) {
+  const result = await owner.query(
+    `SELECT baseline_dataset, provider, model, adapter_version, source_reference,
+            attribution, to_char(retrieved_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS retrieved_at,
+            to_char(period_from, 'YYYY-MM-DD') AS period_from,
+            to_char(period_to, 'YYYY-MM-DD') AS period_to,
+            algorithm_version
+       FROM app.climatology_baselines
+      WHERE baseline_version = $1`,
+    [version],
+  );
+  return result.rows;
+}
+
 before(async () => {
   await owner.connect();
   await api.connect();
@@ -97,6 +121,9 @@ after(async () => {
   // Ordered: normals name a cell, so they go first. Suite-private keys mean this
   // can never touch another suite's rows.
   await owner.query(`DELETE FROM app.climatology_normals WHERE baseline_version LIKE $1`, [
+    `ERA5:1991-2020:p55${token}%`,
+  ]);
+  await owner.query(`DELETE FROM app.climatology_baselines WHERE baseline_version LIKE $1`, [
     `ERA5:1991-2020:p55${token}%`,
   ]);
   await owner.query(`DELETE FROM app.outlook_cells WHERE model = $1`, [model]);
@@ -351,5 +378,107 @@ describe("climatology_normals — the privilege boundary", () => {
     );
     assert.ok(!columns.rows.some((row) => row.column_name === "user_id"));
     assert.ok(!columns.rows.some((row) => row.column_name === "field_id"));
+  });
+});
+
+describe("persistClimatologyBaseline — durable source metadata", () => {
+  it("records the source identity once beside the version", async () => {
+    const version = `ERA5:1991-2020:p55${token}-meta`;
+    await persist(input({ baselineVersion: version, algorithmVersion: `p55${token}-meta` }));
+
+    const [row] = await metadataFor(version);
+    assert.deepEqual(row, {
+      baseline_dataset: "era5",
+      provider,
+      model,
+      adapter_version: "open-meteo-archive-era5@1.0.0",
+      source_reference: SOURCE_REFERENCE,
+      attribution: "Contains modified Copernicus Climate Change Service information (2026)",
+      retrieved_at: "2026-11-23T00:00:00Z",
+      period_from: "1991-01-01",
+      period_to: "2020-12-31",
+      algorithm_version: `p55${token}-meta`,
+    });
+
+    const apiView = await api.query(
+      `SELECT attribution FROM app.climatology_baselines WHERE baseline_version = $1`,
+      [version],
+    );
+    assert.equal(apiView.rows.length, 1, "app_api can render the attribution");
+  });
+
+  it("keeps exactly one metadata row across an identical rebuild", async () => {
+    const version = `ERA5:1991-2020:p55${token}-meta-idem`;
+    await persist(input({ baselineVersion: version }));
+    await persist(input({ baselineVersion: version }));
+
+    const rows = await metadataFor(version);
+    assert.equal(rows.length, 1);
+  });
+
+  it("refuses a changed source identity under an existing version", async () => {
+    const version = `ERA5:1991-2020:p55${token}-meta-conflict`;
+    await persist(input({ baselineVersion: version }));
+
+    await assert.rejects(
+      () =>
+        persist(
+          input({
+            baselineVersion: version,
+            source: {
+              ...input().source,
+              sourceReference: SOURCE_REFERENCE.replace("models=era5", "models=era5_land"),
+            },
+          }),
+        ),
+      (error) =>
+        error instanceof ClimatologySourceConflictError && error.field === "source_reference",
+    );
+
+    const [row] = await metadataFor(version);
+    assert.equal(row.source_reference, SOURCE_REFERENCE);
+    assert.equal((await rowsFor(version)).length, 12);
+  });
+
+  it("does not force a version bump for an adapter patch, attribution year or retrieval time", async () => {
+    const version = `ERA5:1991-2020:p55${token}-meta-patch`;
+    await persist(input({ baselineVersion: version }));
+
+    const result = await persist(
+      input({
+        baselineVersion: version,
+        source: {
+          adapterVersion: "open-meteo-archive-era5@1.0.1",
+          sourceReference: SOURCE_REFERENCE,
+          attribution: "Contains modified Copernicus Climate Change Service information (2027)",
+          retrievedAt: new Date("2027-01-01T00:00:00.000Z"),
+        },
+      }),
+    );
+    assert.deepEqual(result, { cells: 1, inserted: 0, unchanged: 12 });
+
+    const [row] = await metadataFor(version);
+    assert.equal(
+      row.adapter_version,
+      "open-meteo-archive-era5@1.0.0",
+      "metadata is insert-only; the first write wins",
+    );
+    assert.equal(row.attribution.endsWith("(2026)"), true);
+  });
+
+  it("is read-only for app_api on the metadata table", async () => {
+    await assert.rejects(
+      () =>
+        api.query(
+          `INSERT INTO app.climatology_baselines (
+             baseline_version, baseline_dataset, provider, model, adapter_version,
+             source_reference, attribution, retrieved_at, period_from, period_to,
+             algorithm_version, computed_at
+           ) VALUES ($1, 'era5', $2, $3, 'x', $4, 'x',
+                     now(), DATE '1991-01-01', DATE '2020-12-31', 'x', now())`,
+          [`ERA5:1991-2020:p55${token}-api`, provider, model, SOURCE_REFERENCE],
+        ),
+      (error) => error.code === "42501",
+    );
   });
 });

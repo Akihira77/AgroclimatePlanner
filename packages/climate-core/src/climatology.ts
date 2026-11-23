@@ -37,9 +37,24 @@ export const BASELINE_PERIOD = {
 export const BASELINE_UNIT = "mm";
 
 /**
- * Calculation version. A change to the aggregation rule, the missing-data rule,
- * or the month identity must bump this: the version, not a timestamp, is what
- * distinguishes two materially different baselines.
+ * Calculation/source-semantics revision — the `v1` token in
+ * `ERA5:1991-2020:v1`.
+ *
+ * Bump this when the stored numbers or their meaning can change, including:
+ *
+ * - aggregation rule (a mean of monthly totals becoming a mean of daily values);
+ * - missing-data rule (a null month-year starting to contribute, or a missing
+ *   day starting to count as zero);
+ * - month identity, baseline period, or sample-year accounting;
+ * - unit interpretation (for example accepting inches as if they were mm);
+ * - provider endpoint, model or product selection when it changes the source
+ *   series (a provider-side reanalysis revision is caught by value conflict, but
+ *   the identity change must also bump this).
+ *
+ * Do **not** bump it for a release that changes neither the source nor the
+ * calculation: a refactor, a log line, a transport retry, or an adapter patch
+ * whose output is byte-identical. A version is what a stored anomaly repeats;
+ * timestamping every build would make a retry a different baseline.
  */
 export const CLIMATOLOGY_ALGORITHM_VERSION = "v1";
 

@@ -65,6 +65,7 @@ export const GLOBAL_TABLES = [
   "weather_records",
   "monthly_outlooks",
   "climatology_normals",
+  "climatology_baselines",
 ];
 
 /**

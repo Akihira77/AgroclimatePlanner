@@ -78,6 +78,7 @@ export {
   ARCHIVE_VARIABLE,
   archiveDayCount,
   buildArchiveDailyUrl,
+  buildArchiveSourceReference,
   fetchArchiveDaily,
   type ArchiveAdapterConfig,
   type ArchiveDailyPayload,

@@ -118,7 +118,7 @@ function payloadFor({ cells = [CELL], algorithmVersion = `t${token}`, selector }
   };
 }
 
-function makeRunner({ transport = transportWith(), maxAttempts = 3, registry = GRID } = {}) {
+function makeRunner({ transport = transportWith(), maxAttempts = 3, registry = GRID, log } = {}) {
   const queue = createPostgresQueue({ db: system, defaultMaxAttempts: maxAttempts });
   const handler = createClimatologyHandler({
     registry,
@@ -134,6 +134,7 @@ function makeRunner({ transport = transportWith(), maxAttempts = 3, registry = G
     heartbeatMs: 60_000,
     reaperIntervalMs: 600_000,
     pollIntervalMs: 60_000,
+    ...(log === undefined ? {} : { log }),
   });
   return { queue, handler, runner };
 }
@@ -186,6 +187,21 @@ async function normalsFor(version) {
   `;
 }
 
+async function metadataFor(version) {
+  return owner.$queryRaw`
+    SELECT provider, model, baseline_dataset AS "baselineDataset",
+           adapter_version AS "adapterVersion",
+           source_reference AS "sourceReference",
+           attribution,
+           to_char(retrieved_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "retrievedAt",
+           to_char(period_from, 'YYYY-MM-DD') AS "periodFrom",
+           to_char(period_to, 'YYYY-MM-DD') AS "periodTo",
+           algorithm_version AS "algorithmVersion"
+      FROM app.climatology_baselines
+     WHERE baseline_version = ${version}
+  `;
+}
+
 before(async () => {
   // This suite owns every job whose key carries its token; a failed previous
   // run must not leave one behind for this run's claim to pick up.
@@ -201,6 +217,7 @@ after(async () => {
      WHERE kind = 'ingest.climate' AND idempotency_key LIKE ${`climate:${token}:%`}
   `;
   await owner.$queryRaw`DELETE FROM app.climatology_normals WHERE baseline_version LIKE ${`ERA5:1991-2020:t${token}%`}`;
+  await owner.$queryRaw`DELETE FROM app.climatology_baselines WHERE baseline_version LIKE ${`ERA5:1991-2020:t${token}%`}`;
   await system.$disconnect();
   await owner.$disconnect();
 });
@@ -479,5 +496,169 @@ describe("ingest.climate — leases", () => {
     assert.equal(await runOnly(runner, id), "handled");
     assert.equal((await jobRow(id)).status, "succeeded");
     assert.equal((await normalsFor(`ERA5:1991-2020:${algorithmVersion}`)).length, 12);
+  });
+});
+
+describe("ingest.climate — served coordinate integrity (F-01)", () => {
+  it("refuses a served coordinate that is outside the node tolerance", async () => {
+    const algorithmVersion = `t${token}-off-node`;
+    const { queue, runner } = makeRunner({
+      transport: transportWith(() =>
+        envelope(
+          ALL_DAYS.map(() => 0.5),
+          { latitude: -6.2, longitude: 106.75 },
+        ),
+      ),
+    });
+    const { id } = await enqueueJob(queue, payloadFor({ algorithmVersion }));
+    assert.equal(await runOnly(runner, id), "handled");
+
+    const job = await jobRow(id);
+    assert.equal(job.status, "dead");
+    assert.equal(job.last_error.code, "provider_coordinate_mismatch");
+    assert.equal((await normalsFor(`ERA5:1991-2020:${algorithmVersion}`)).length, 0);
+    assert.equal((await metadataFor(`ERA5:1991-2020:${algorithmVersion}`)).length, 0);
+  });
+
+  it("refuses an interpolated served coordinate instead of storing it as a node", async () => {
+    const algorithmVersion = `t${token}-interpolated`;
+    const { queue, runner } = makeRunner({
+      transport: transportWith(() =>
+        envelope(
+          ALL_DAYS.map(() => 0.5),
+          // Half a 0.25° step from the node: an interpolated point, not a node.
+          { latitude: -6.125, longitude: 106.75 },
+        ),
+      ),
+    });
+    const { id } = await enqueueJob(queue, payloadFor({ algorithmVersion }));
+    assert.equal(await runOnly(runner, id), "handled");
+
+    const job = await jobRow(id);
+    assert.equal(job.status, "dead");
+    assert.equal(job.last_error.code, "provider_coordinate_mismatch");
+    assert.equal((await normalsFor(`ERA5:1991-2020:${algorithmVersion}`)).length, 0);
+  });
+
+  it("keeps drift detection when the served coordinate moves within the node tolerance", async () => {
+    const firstVersion = `t${token}-drift-a`;
+    const first = makeRunner({
+      transport: transportWith(() =>
+        envelope(
+          ALL_DAYS.map(() => 0.5),
+          { latitude: -6.2499991, longitude: 106.75 },
+        ),
+      ),
+    });
+    const firstJob = await enqueueJob(first.queue, payloadFor({ algorithmVersion: firstVersion }));
+    assert.equal(await runOnly(first.runner, firstJob.id), "handled");
+    assert.equal((await jobRow(firstJob.id)).status, "succeeded");
+
+    // Both points are within 1e-6° of the node, but 1.8e-6° apart: the node
+    // check passes and the stored-coordinate drift check catches the move.
+    const secondVersion = `t${token}-drift-b`;
+    const second = makeRunner({
+      transport: transportWith(() =>
+        envelope(
+          ALL_DAYS.map(() => 0.5),
+          { latitude: -6.2500009, longitude: 106.75 },
+        ),
+      ),
+    });
+    const secondJob = await enqueueJob(
+      second.queue,
+      payloadFor({ algorithmVersion: secondVersion }),
+    );
+    assert.equal(await runOnly(second.runner, secondJob.id), "handled");
+
+    const job = await jobRow(secondJob.id);
+    assert.equal(job.status, "dead");
+    assert.equal(job.last_error.code, "provider_changed");
+    assert.equal((await normalsFor(`ERA5:1991-2020:${secondVersion}`)).length, 0);
+    assert.equal((await metadataFor(`ERA5:1991-2020:${secondVersion}`)).length, 0);
+  });
+});
+
+describe("ingest.climate — durable source metadata (F-02)", () => {
+  it("records the source identity beside the version and keeps it readable", async () => {
+    const algorithmVersion = `t${token}-meta`;
+    const version = `ERA5:1991-2020:${algorithmVersion}`;
+    const { queue, runner } = makeRunner();
+    const { id } = await enqueueJob(queue, payloadFor({ algorithmVersion }));
+    assert.equal(await runOnly(runner, id), "handled");
+
+    const [row] = await metadataFor(version);
+    assert.deepEqual(row, {
+      provider: "open-meteo",
+      model: "era5",
+      baselineDataset: "era5",
+      adapterVersion: "open-meteo-archive-era5@1.0.0",
+      sourceReference:
+        "https://archive-api.open-meteo.com/v1/archive?daily=precipitation_sum&models=era5&precipitation_unit=mm&cell_selection=nearest&timezone=UTC",
+      attribution: "test fixture",
+      retrievedAt: "2026-11-23T00:00:00Z",
+      periodFrom: "1991-01-01",
+      periodTo: "2020-12-31",
+      algorithmVersion,
+    });
+  });
+
+  it("refuses a changed source identity under an existing version", async () => {
+    const algorithmVersion = `t${token}-meta-conflict`;
+    const version = `ERA5:1991-2020:${algorithmVersion}`;
+
+    await owner.$queryRaw`
+      INSERT INTO app.climatology_baselines (
+        baseline_version, baseline_dataset, provider, model, adapter_version,
+        source_reference, attribution, retrieved_at, period_from, period_to,
+        algorithm_version, computed_at
+      ) VALUES (
+        ${version}, 'era5', 'open-meteo', 'era5', 'open-meteo-archive-era5@1.0.0',
+        'https://archive-api.open-meteo.com/v1/archive?models=era5_land',
+        'test fixture', now(), DATE '1991-01-01', DATE '2020-12-31',
+        ${algorithmVersion}, now()
+      )
+    `;
+
+    const { queue, runner } = makeRunner();
+    const { id } = await enqueueJob(queue, payloadFor({ algorithmVersion }));
+    assert.equal(await runOnly(runner, id), "handled");
+
+    const job = await jobRow(id);
+    assert.equal(job.status, "dead");
+    assert.equal(job.last_error.code, "baseline_source_conflict");
+    assert.equal((await normalsFor(version)).length, 0);
+  });
+});
+
+describe("ingest.climate — baseline hash (F-05)", () => {
+  it("logs the actual SHA-256 over the consumed subset, stable for identical output", async () => {
+    const logged = [];
+    const { queue, runner } = makeRunner({
+      log: (event, fields) => {
+        if (event === "climatology_ingested") logged.push(fields);
+      },
+    });
+
+    const algorithmVersion = `t${token}-hash`;
+    const payload = payloadFor({ algorithmVersion });
+    const first = await enqueueJob(queue, payload);
+    assert.equal(await runOnly(runner, first.id), "handled");
+
+    // A second job with the same payload and a different idempotency key is a
+    // repeat delivery of the same baseline, not a different one.
+    const second = await enqueueJob(queue, payload);
+    assert.equal(await runOnly(runner, second.id), "handled");
+
+    const otherVersion = `t${token}-hash-b`;
+    const third = await enqueueJob(queue, payloadFor({ algorithmVersion: otherVersion }));
+    assert.equal(await runOnly(runner, third.id), "handled");
+
+    assert.equal(logged.length, 3);
+    for (const fields of logged) {
+      assert.match(fields.baselineHash, /^[0-9a-f]{64}$/);
+    }
+    assert.equal(logged[0].baselineHash, logged[1].baselineHash);
+    assert.notEqual(logged[0].baselineHash, logged[2].baselineHash);
   });
 });
