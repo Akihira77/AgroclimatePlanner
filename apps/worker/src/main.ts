@@ -1,6 +1,8 @@
 import { CONTRACTS_VERSION } from "@agroclimate/contracts";
 import { createPrismaClient } from "@agroclimate/database";
+import { syntheticGridRegistry } from "@agroclimate/weather-core";
 
+import { createForecastHandler } from "./ingest/forecast.js";
 import { createPostgresQueue } from "./queue/postgres.js";
 import { createRunner, jsonLogger, RUNNER_DEFAULTS } from "./runner.js";
 
@@ -8,14 +10,18 @@ import { createRunner, jsonLogger, RUNNER_DEFAULTS } from "./runner.js";
  * The worker process — `climate-data-foundation.md` §8.3.
  *
  * It connects as `app_system`, claims from `app.jobs`, renews a lease while it
- * works, and recovers abandoned leases on a timer. It does **not** call a
- * provider and does **not** write weather data: the ingestion handlers are
- * Phase 5.4, and registering none is the honest way to say so. A placeholder
- * handler that reported success would be indistinguishable from a real ingest
- * in `ingestion_runs`, which is exactly the lie this phase must not ship.
+ * works, and recovers abandoned leases on a timer.
  *
- * A zero-handler worker still does real work: it runs the reaper, so a crashed
- * worker's leases are recovered even when this process has nothing to claim.
+ * `ingest.forecast` is registered, and registering it opens no gate. The
+ * registry it is given is `syntheticGridRegistry`, whose only entry is
+ * `synthetic`, and `requireValidated` refuses that: every real job dies with
+ * `grid_not_validated` before a provider is called (OPEN-18). A validated
+ * registry is what turns the queue into a working ingest, and that is a
+ * deliberate, separate act.
+ *
+ * `OPEN-03` still applies: no commercial production ingestion until the
+ * Open-Meteo licensing condition is satisfied. The attribution string here is
+ * provenance, not a licence decision.
  */
 
 const connectionString = process.env["APP_SYSTEM_DATABASE_URL"];
@@ -26,17 +32,23 @@ if (connectionString === undefined || connectionString.length === 0) {
 
 const db = createPrismaClient({ connectionString });
 const queue = createPostgresQueue({ db, defaultMaxAttempts: 5 });
+const handlers = [
+  createForecastHandler({
+    registry: syntheticGridRegistry,
+    attribution: process.env["OPEN_METEO_ATTRIBUTION"] ?? "Open-Meteo.com (CC BY 4.0)",
+  }),
+];
 const runner = createRunner({
   db,
   queue,
-  handlers: [],
+  handlers,
   ...RUNNER_DEFAULTS,
 });
 
 jsonLogger("worker_started", {
   contracts: CONTRACTS_VERSION,
-  handlers: 0,
-  note: "no ingestion handler is registered; provider ingestion is Phase 5.4",
+  handlers: handlers.map((handler) => handler.kind),
+  note: "ingest.forecast is registered but every grid is synthetic; requireValidated refuses it",
   ...RUNNER_DEFAULTS,
 });
 

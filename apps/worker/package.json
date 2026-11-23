@@ -13,7 +13,8 @@
   },
   "dependencies": {
     "@agroclimate/contracts": "workspace:*",
-    "@agroclimate/database": "workspace:*"
+    "@agroclimate/database": "workspace:*",
+    "@agroclimate/weather-core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "catalog:",

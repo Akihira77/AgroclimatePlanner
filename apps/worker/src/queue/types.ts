@@ -49,7 +49,8 @@ export type FailOutcome =
 
 export interface ReapedJob {
   readonly id: string;
-  readonly status: "queued" | "dead";
+  /** `succeeded` only when the run had already completed successfully. */
+  readonly status: "queued" | "dead" | "succeeded";
 }
 
 export interface JobQueue {

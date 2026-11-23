@@ -286,17 +286,18 @@ describe("lease", () => {
   });
 
   it("refuses to release after an ingestion run was assigned", async () => {
+    // A run owned by this suite's provider, so the `after` hook can clean it up
+    // (it deletes jobs, then ingestion runs, then forecast runs, in FK order).
+    const forecastRunId = await createForecastRun();
     const runId = (
       await system.$queryRaw`
         INSERT INTO app.ingestion_runs
           (forecast_run_id, adapter_version, normalizer_version, target_selector_hash,
            ingestion_version, status)
-        SELECT id, 'a', 'n', ${"b".repeat(64)}, ${"b".repeat(64)}, 'running'
-          FROM app.forecast_runs LIMIT 1
+        VALUES (${forecastRunId}::uuid, 'a', 'n', ${"b".repeat(64)}, ${"b".repeat(64)}, 'running')
         RETURNING id::text AS "id"
       `
     )[0]?.id;
-    if (runId === undefined) return; // no forecast run available in this database
 
     const jobId = await expiredJob({ ingestionRunId: runId });
     const claimed = {
@@ -312,8 +313,6 @@ describe("lease", () => {
     // the row staying running.
     assert.equal(await queue.release({ ...claimed, leaseToken: randomUUID() }), false);
     assert.equal((await rowOf(jobId)).status, "running");
-
-    await owner.$queryRaw`DELETE FROM app.ingestion_runs WHERE id = ${runId}::uuid`;
   });
 });
 
@@ -356,7 +355,7 @@ describe("reaper", () => {
     assert.ok(run.finished_at instanceof Date);
   });
 
-  it("leaves a terminal run alone when it kills a job", async () => {
+  it("adopts a terminal run instead of writing a dead job over success", async () => {
     const ingestion = await createRunningIngestion();
     await owner.$queryRaw`
       UPDATE app.ingestion_runs SET status = 'succeeded', finished_at = now()
@@ -370,7 +369,10 @@ describe("reaper", () => {
 
     await queue.reapExpired();
 
-    assert.equal((await rowOf(job.id)).status, "dead");
+    // D15: the run is the stronger fact. A `dead` job over a successful run is
+    // the inconsistent pair the settlement refuses to invent, so the job adopts
+    // the terminal state it finds and no error is written over the data.
+    assert.equal((await rowOf(job.id)).status, "succeeded");
     assert.equal((await runRowOf(ingestion.runId)).status, "succeeded");
   });
 

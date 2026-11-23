@@ -249,6 +249,23 @@ export async function beginIngestionExecution(
   });
 
   return db.$transaction(async (tx) => {
+    // Job first, always (D21). The lock order is not a preference: a
+    // transaction that locks the run and then waits for the job deadlocks
+    // against every settlement, which locks the job and then the run.
+    const jobRows = await tx.$queryRaw<{ ingestionRunId: string | null }[]>`
+      SELECT ingestion_run_id::text AS "ingestionRunId"
+        FROM app.jobs
+       WHERE id = ${input.jobId}::uuid
+         AND lease_token = ${input.leaseToken}::uuid
+         AND status = 'running'
+         AND lease_expires_at > now()
+         FOR UPDATE
+    `;
+    const lockedJob = jobRows[0];
+    if (lockedJob === undefined) {
+      throw new LeaseLostError();
+    }
+
     const started = await tx.$queryRaw<{ id: string; attempt: number }[]>`
       INSERT INTO app.ingestion_runs
         (forecast_run_id, adapter_version, normalizer_version,
@@ -281,6 +298,14 @@ export async function beginIngestionExecution(
         );
       }
       throw new IngestionTerminalError(row.status);
+    }
+
+    if (lockedJob.ingestionRunId !== null && lockedJob.ingestionRunId !== run.id) {
+      // The job already owns a different run; it is not this worker's to
+      // re-point, and the partial unique index agrees.
+      throw new IngestionAlreadyOwnedError(
+        `job ${input.jobId} already owns ingestion run ${lockedJob.ingestionRunId}`,
+      );
     }
 
     try {

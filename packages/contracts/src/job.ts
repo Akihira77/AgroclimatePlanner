@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { isoInstantSchema } from "./enums.js";
+import { targetSelectorSchema } from "./climate.js";
 
 /**
  * Queue contracts — `docs/architecture/background-processing.md` §2.1 / §3 and
@@ -57,6 +58,16 @@ export const ingestionJobPayloadSchema = z.strictObject({
   adapterVersion: z.string().min(1),
   normalizerVersion: z.string().min(1),
   targetSelectorHash: z.string().regex(/^[0-9a-f]{64}$/),
+  /**
+   * The selector itself, not just its hash. Optional in the contract because
+   * not every ingestion kind needs one, but an `ingest.forecast` job without it
+   * is refused by its handler — the handler cannot fetch a cell it cannot name.
+   * When present the handler verifies
+   * `targetSelectorHashOf(targetSelector) === targetSelectorHash`; the
+   * redundancy is deliberate, so a payload edited in the queue is caught before
+   * anything is fetched.
+   */
+  targetSelector: targetSelectorSchema.optional(),
 });
 export type IngestionJobPayload = z.infer<typeof ingestionJobPayloadSchema>;
 

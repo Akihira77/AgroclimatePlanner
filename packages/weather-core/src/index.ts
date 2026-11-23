@@ -41,6 +41,31 @@ export {
 } from "./normalize/monthly.js";
 
 export {
+  DAILY_ENSEMBLE_ADAPTER_VERSION,
+  DAILY_ENSEMBLE_MODEL,
+  DAILY_FORECAST_ADAPTER_VERSION,
+  DAILY_FORECAST_DAYS,
+  DAILY_VARIABLE,
+  ENSEMBLE_DEFAULT_BASE_URL,
+  FORECAST_DEFAULT_BASE_URL,
+  buildDailyEnsembleUrl,
+  buildDailyForecastUrl,
+  fetchDailyEnsemble,
+  fetchDailyForecast,
+  type DailyAdapterConfig,
+  type DailyProviderPayload,
+  type ProviderDay,
+} from "./adapters/open-meteo-daily.js";
+
+export {
+  DAILY_NORMALIZER_VERSION,
+  SUPPORTED_DAILY_UNIT,
+  normalizeDailyPrecipitation,
+  type NormalizedDailySeries,
+  type NormalizedForecastValue,
+} from "./normalize/daily.js";
+
+export {
   SYNTHETIC_GRID_ID,
   SYNTHETIC_GRID_MODEL,
   SYNTHETIC_GRID_PROVIDER,

@@ -8,7 +8,7 @@ import {
   InvariantViolationError,
   isCheckViolation,
   LeaseLostError,
-  markIngestionStatus,
+  settlePairAsWorker,
 } from "@agroclimate/database";
 
 import { retryDelayMsFor } from "./queue/postgres.js";
@@ -47,14 +47,24 @@ export interface HandlerContext {
 
 export type HandlerResult =
   | {
-      readonly outcome: "succeeded";
+      readonly outcome: "settled";
       /** `partial` is a terminal success (§4.4); it is not a failure. */
-      readonly ingestionStatus?: "succeeded" | "partial" | undefined;
+      readonly to: "succeeded" | "partial";
+      readonly recordCount: number;
+      readonly coveragePercent: number;
+    }
+  | {
+      readonly outcome: "succeeded";
       readonly recordCount?: number | undefined;
       readonly coveragePercent?: number | undefined;
     }
   | { readonly outcome: "retryable"; readonly error: JobError }
-  | { readonly outcome: "terminal"; readonly error: JobError };
+  | { readonly outcome: "terminal"; readonly error: JobError }
+  /**
+   * The T3 transaction may or may not have committed. The runner never guesses:
+   * it retries, and the retry discovers the truth from the job's own state.
+   */
+  | { readonly outcome: "commit_ambiguous"; readonly error?: JobError | undefined };
 
 export interface JobHandler {
   readonly kind: JobKind;
@@ -145,52 +155,65 @@ export function createRunner(options: RunnerOptions): Runner {
     return { code, message, retryable: true };
   }
 
-  async function failTerminal(
-    job: ClaimedJob,
-    error: JobError,
-    execution: IngestionExecution | null,
-  ): Promise<void> {
+  /**
+   * Settle a failed job through the one primitive. The run, if the job has one,
+   * is read from the locked job row: the caller never names it, so a stale
+   * `IngestionExecution` cannot be used to settle the wrong run.
+   */
+  async function failTerminal(job: ClaimedJob, error: JobError): Promise<void> {
     await db.$transaction(async (tx) => {
-      if (execution !== null) {
-        await markIngestionStatus(tx, {
-          runId: execution.runId,
-          to: "failed",
-          error: { code: error.code, message: error.message },
-        });
-      }
-      const owned = await queue.fail(job, error, { terminal: true }, tx);
-      if (!owned) throw new LeaseLostError();
+      await settlePairAsWorker(tx, {
+        jobId: job.id,
+        leaseToken: job.leaseToken,
+        mode: { mode: "failed", error: { code: error.code, message: error.message } },
+      });
     });
   }
 
-  async function settle(
-    job: ClaimedJob,
-    result: HandlerResult,
-    execution: IngestionExecution | null,
-  ): Promise<void> {
+  async function settle(job: ClaimedJob, result: HandlerResult): Promise<void> {
+    if (result.outcome === "settled") {
+      // The handler owned T3: data and terminal state committed together. There
+      // is nothing left to write, and re-writing it would be a second authority.
+      log("job_succeeded", {
+        jobId: job.id,
+        kind: job.kind,
+        ingestionStatus: result.to,
+        recordCount: result.recordCount,
+      });
+      return;
+    }
+
     if (result.outcome === "succeeded") {
-      const to = result.ingestionStatus ?? "succeeded";
       await db.$transaction(async (tx) => {
-        if (execution !== null) {
-          await markIngestionStatus(tx, {
-            runId: execution.runId,
-            to,
+        await settlePairAsWorker(tx, {
+          jobId: job.id,
+          leaseToken: job.leaseToken,
+          mode: {
+            mode: "succeed",
+            to: "succeeded",
             recordCount: result.recordCount ?? 0,
             coveragePercent: result.coveragePercent ?? 0,
-          });
-        }
-        const owned = await queue.succeed(job, tx);
-        if (!owned) throw new LeaseLostError();
+          },
+        });
       });
-      log("job_succeeded", { jobId: job.id, kind: job.kind, ingestionStatus: to });
+      log("job_succeeded", { jobId: job.id, kind: job.kind, ingestionStatus: "succeeded" });
       return;
     }
 
     if (result.outcome === "terminal") {
-      await failTerminal(job, result.error, execution);
+      await failTerminal(job, result.error);
       log("job_dead", { jobId: job.id, kind: job.kind, code: result.error.code });
       return;
     }
+
+    const error =
+      result.outcome === "commit_ambiguous"
+        ? (result.error ?? {
+            code: "commit_ambiguous",
+            message: "the ingestion transaction did not report whether it committed",
+            retryable: true,
+          })
+        : result.error;
 
     if (job.attempt >= job.maxAttempts) {
       // The retry budget is spent. This is the *only* path that turns a
@@ -198,21 +221,21 @@ export function createRunner(options: RunnerOptions): Runner {
       // the run — the alternative leaves a `running` IngestionRun that nothing
       // will ever finish.
       log("retry_exhausted", { jobId: job.id, attempt: job.attempt });
-      await failTerminal(job, result.error, execution);
-      log("job_dead", { jobId: job.id, kind: job.kind, code: result.error.code });
+      await failTerminal(job, error);
+      log("job_dead", { jobId: job.id, kind: job.kind, code: error.code });
       return;
     }
 
     const retryAfterMs = retryDelayMsFor(job.attempt);
     await db.$transaction(async (tx) => {
-      const owned = await queue.fail(job, result.error, { retryable: true, retryAfterMs }, tx);
+      const owned = await queue.fail(job, error, { retryable: true, retryAfterMs }, tx);
       if (!owned) throw new LeaseLostError();
     });
     log("job_retry_scheduled", {
       jobId: job.id,
       attempt: job.attempt,
       retryAfterMs,
-      code: result.error.code,
+      code: error.code,
     });
   }
 
@@ -229,9 +252,13 @@ export function createRunner(options: RunnerOptions): Runner {
 
     // The heartbeat renews while the handler works. A failed renewal means the
     // lease is gone: abort, and let the settle path discover the loss rather
-    // than writing a result nobody owns.
+    // than writing a result nobody owns. Renewals never stack: one in flight at
+    // a time, and the last one is awaited before settlement so a renewal that
+    // lands after the terminal write cannot resurrect a lease.
+    let renewing: Promise<void> | null = null;
     const beat = setInterval(() => {
-      void queue
+      if (renewing !== null) return;
+      renewing = queue
         .renew(job, leaseMs)
         .then((owned) => {
           if (!owned) {
@@ -241,6 +268,9 @@ export function createRunner(options: RunnerOptions): Runner {
         })
         .catch((error: unknown) => {
           log("heartbeat_error", { jobId: job.id, message: toJobError(error).message });
+        })
+        .finally(() => {
+          renewing = null;
         });
     }, heartbeatMs);
 
@@ -250,15 +280,11 @@ export function createRunner(options: RunnerOptions): Runner {
       if (handler.opensIngestionRun) {
         const parsed = ingestionJobPayloadSchema.safeParse(job.payload);
         if (!parsed.success) {
-          await failTerminal(
-            job,
-            {
-              code: "payload_invalid",
-              message: "the job payload does not satisfy ingestionJobPayloadSchema",
-              retryable: false,
-            },
-            null,
-          );
+          await failTerminal(job, {
+            code: "payload_invalid",
+            message: "the job payload does not satisfy ingestionJobPayloadSchema",
+            retryable: false,
+          });
           log("job_dead", { jobId: job.id, kind: job.kind, code: "payload_invalid" });
           return;
         }
@@ -275,7 +301,7 @@ export function createRunner(options: RunnerOptions): Runner {
         log,
         execution,
       });
-      await settle(job, result, execution);
+      await settle(job, result);
     } catch (error) {
       if (error instanceof LeaseLostError) {
         log("lease_lost", { jobId: job.id });
@@ -292,20 +318,17 @@ export function createRunner(options: RunnerOptions): Runner {
         return;
       }
       if (error instanceof InvariantViolationError || isCheckViolation(error)) {
-        await failTerminal(
-          job,
-          { ...toJobError(error, "invariant_violation"), retryable: false },
-          execution,
-        );
+        await failTerminal(job, { ...toJobError(error, "invariant_violation"), retryable: false });
         log("job_dead", { jobId: job.id, kind: job.kind, code: "invariant_violation" });
         return;
       }
       // Unknown failure: retryable, but never beyond the attempt budget — the
       // settle path turns the last attempt into a dead job and a failed run.
       log("handler_error", { jobId: job.id, message: toJobError(error).message });
-      await settle(job, { outcome: "retryable", error: toJobError(error) }, execution);
+      await settle(job, { outcome: "retryable", error: toJobError(error) });
     } finally {
       clearInterval(beat);
+      if (renewing !== null) await renewing;
       controllers.delete(job.id);
       if (currentJobId === job.id) currentJobId = null;
     }

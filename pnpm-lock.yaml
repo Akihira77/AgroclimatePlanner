@@ -330,6 +330,9 @@ importers:
       '@agroclimate/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@agroclimate/weather-core':
+        specifier: workspace:*
+        version: link:../../packages/weather-core
     devDependencies:
       '@types/node':
         specifier: 'catalog:'

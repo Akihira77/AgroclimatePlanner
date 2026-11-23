@@ -95,6 +95,34 @@ export {
 } from "./run-errors.js";
 export { createTenantScope, normaliseTenantId, TenantContextError } from "./tenant.js";
 export type { TenantScope, TenantTransaction } from "./tenant.js";
+export {
+  advisoryLockKeyOf,
+  configureTransactionTimeouts,
+  lockForecastRun,
+  persistForecastRun,
+  ProviderCoordinateDriftError,
+  resolveForecastCells,
+  revalidateLease,
+} from "./weather.js";
+export type {
+  ForecastCell,
+  ForecastRecordInput,
+  PersistForecastRunInput,
+  PersistForecastRunResult,
+} from "./weather.js";
+export {
+  InconsistentSettlementError,
+  JobMissingError,
+  lockJobForSettlement,
+  settlePair,
+  settlePairAsWorker,
+} from "./settlement.js";
+export type {
+  SettlementAuthority,
+  SettlementMode,
+  SettlementOutcome,
+  SettlementRequest,
+} from "./settlement.js";
 
 export interface DatabaseOptions {
   /** `postgresql://…` connection string. Validated by `pg`, not by us. */
