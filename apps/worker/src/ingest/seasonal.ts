@@ -15,8 +15,10 @@ import {
   type ForecastFootprint,
 } from "@agroclimate/database";
 import {
+  aggregateMonthlyMemberTotals,
   createFetchTransport,
   fetchEc46Daily,
+  fetchSeas5MemberDaily,
   fetchSeas5Monthly,
   normalizeDailyPrecipitation,
   normalizeMonthlySeries,
@@ -54,7 +56,13 @@ import { NODE_COORDINATE_TOLERANCE_DEGREES } from "./climatology.js";
  * Nothing here computes spread, probability, or confidence. EC46's 50 members
  * are stored as member rows so a later phase can derive spread from real
  * members; the mean column is never stored as if it were deterministic
- * (ADR-001 D8/D8b). SEAS5 has no member column and claims none.
+ * (ADR-001 D8/D8b).
+ *
+ * SEAS5 publishes its own `precipitation_mean` monthly series and, verified
+ * 2026-11-23, 50 daily members. The mean is stored as its own row; the members
+ * are aggregated **per member, per calendar month** at ingest and stored as
+ * member rows, because members are ephemeral (ADR-001 D8b). No spread is
+ * computed here — this handler only makes it derivable.
  */
 
 export interface SeasonalHandlerOptions {
@@ -120,6 +128,12 @@ interface RequestedCell {
 interface FetchedCell {
   readonly requested: RequestedCell;
   readonly payload: DailyProviderPayload | Seas5MonthlyPayload;
+  /**
+   * SEAS5 only: the daily member series the monthly aggregates are built from.
+   * Fetched beside the monthly answer, because members are ephemeral and an
+   * aggregate that is not taken now can never be taken (ADR-001 D8b).
+   */
+  readonly memberDaily?: DailyProviderPayload | undefined;
 }
 
 function terminal(code: string, message: string): HandlerResult {
@@ -230,14 +244,15 @@ export function createSeasonalHandler(options: SeasonalHandlerOptions): JobHandl
     };
 
     let outcome: AdapterOutcome<DailyProviderPayload | Seas5MonthlyPayload>;
+    let monthlyConfig: Seas5MonthlyConfig | null = null;
     if (run.model === "ecmwf_ec46") {
       outcome = await fetchEc46Daily(base satisfies DailyAdapterConfig, runtime);
     } else {
-      const config: Seas5MonthlyConfig = {
+      monthlyConfig = {
         ...base,
         initializedAt: run.initializedAt.toISOString(),
       };
-      outcome = await fetchSeas5Monthly(config, runtime);
+      outcome = await fetchSeas5Monthly(monthlyConfig, runtime);
     }
     if (!outcome.ok) return mapAdapterFailure(run.model, cell.cellKey, outcome);
 
@@ -254,7 +269,26 @@ export function createSeasonalHandler(options: SeasonalHandlerOptions): JobHandl
       );
     }
 
-    return { requested: cell, payload: served };
+    if (monthlyConfig === null) return { requested: cell, payload: served };
+
+    // The member request is a second answer for the same cell, and it is
+    // checked on its own: a monthly answer at the node does not prove the daily
+    // one is.
+    const members = await fetchSeas5MemberDaily(monthlyConfig, runtime);
+    if (!members.ok) {
+      return mapAdapterFailure(`${run.model}_members`, cell.cellKey, members);
+    }
+    if (
+      Math.abs(members.value.servedLatitude - cell.latitude) > NODE_COORDINATE_TOLERANCE_DEGREES ||
+      Math.abs(members.value.servedLongitude - cell.longitude) > NODE_COORDINATE_TOLERANCE_DEGREES
+    ) {
+      return terminal(
+        "provider_coordinate_mismatch",
+        `cell ${cell.cellKey}: member series served ${members.value.servedLatitude},${members.value.servedLongitude}, which is not the grid node ${cell.latitude},${cell.longitude} within ${NODE_COORDINATE_TOLERANCE_DEGREES}°`,
+      );
+    }
+
+    return { requested: cell, payload: served, memberDaily: members.value };
   }
 
   return {
@@ -378,6 +412,36 @@ export function createSeasonalHandler(options: SeasonalHandlerOptions): JobHandl
           return mapAdapterFailure(run.model, cell.requested.cellKey, normalized);
         quantity = normalized.quantity;
 
+        // D8b: the members are aggregated here or not at all. Each stored row is
+        // one member's monthly total, which is exactly what the provider's own
+        // `precipitation_mean` is the mean of — the two are cross-checkable and
+        // neither replaces the other.
+        const memberDaily = cell.memberDaily;
+        if (memberDaily === undefined) {
+          return terminal(
+            "member_series_missing",
+            `cell ${cell.requested.cellKey}: the SEAS5 member series was not fetched, so no monthly aggregate can be stored`,
+          );
+        }
+        const aggregated = aggregateMonthlyMemberTotals(memberDaily, cell.requested.cellKey);
+        if (!aggregated.ok) {
+          return mapAdapterFailure(`${run.model}_members`, cell.requested.cellKey, aggregated);
+        }
+
+        // Two answers about the same run must describe the same months. If the
+        // monthly product and the daily member window disagree, the aggregate
+        // would be attached to months the mean does not cover.
+        const monthlyKeys = normalized.months.map((month) => month.month);
+        if (
+          monthlyKeys.length !== aggregated.value.months.length ||
+          monthlyKeys.some((month, index) => month !== aggregated.value.months[index])
+        ) {
+          return terminal(
+            "provider_changed",
+            `cell ${cell.requested.cellKey}: monthly mean covers ${monthlyKeys.join(", ")} but the member window covers ${aggregated.value.months.join(", ")}`,
+          );
+        }
+
         for (const month of normalized.months) {
           records.push({
             cellKey: cell.requested.cellKey,
@@ -398,6 +462,28 @@ export function createSeasonalHandler(options: SeasonalHandlerOptions): JobHandl
             spatialResolutionKm,
             sourceUrl: monthly.sourceUrl,
             attribution: monthly.attribution,
+          });
+        }
+
+        for (const value of aggregated.value.values) {
+          records.push({
+            cellKey: value.cellKey,
+            variable: value.variable,
+            unit: value.unit,
+            validAt: new Date(value.validAt),
+            value: value.value,
+            temporalResolution: value.temporalResolution,
+            ensembleMember: value.ensembleMember,
+            ensembleSize: value.ensembleSize,
+            aggregationLevel: value.aggregationLevel,
+            requestedLat: memberDaily.requestedLatitude,
+            requestedLon: memberDaily.requestedLongitude,
+            servedLat: memberDaily.servedLatitude,
+            servedLon: memberDaily.servedLongitude,
+            servedValueIsInterpolated: false,
+            spatialResolutionKm,
+            sourceUrl: memberDaily.sourceUrl,
+            attribution: memberDaily.attribution,
           });
         }
       }

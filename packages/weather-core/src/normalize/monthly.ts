@@ -1,6 +1,12 @@
-import { failure, type NormalizationFailure } from "../failures.js";
+import { failure, type AdapterOutcome, type NormalizationFailure } from "../failures.js";
 import type { ProviderMonth, Seas5MonthlyPayload } from "../adapters/open-meteo-seasonal.js";
-import { formatMonthKey, isConsecutiveMonth, parseCalendarMonth } from "../calendar-month.js";
+import type { DailyProviderPayload } from "../adapters/open-meteo-daily.js";
+import {
+  daysInMonth,
+  formatMonthKey,
+  isConsecutiveMonth,
+  parseCalendarMonth,
+} from "../calendar-month.js";
 
 /**
  * Monthly normalizer: provider-native series in, the same series with validated
@@ -134,4 +140,171 @@ export function normalizeMonthlySeries(
     reproducibility: { reproducible: false, reason: "raw_payload_not_retained" },
   };
   return Object.freeze(series);
+}
+
+/* ------------------------------------------------------------------ *
+ * SEAS5 per-member monthly aggregation — ADR-001 D8b
+ * ------------------------------------------------------------------ */
+
+/**
+ * The monthly aggregate of one member's daily sums.
+ *
+ * D8b says members are ephemeral and aggregates are the system of record, so the
+ * aggregation happens here, at ingest, and the daily members are not stored.
+ *
+ * The rule is deliberately the strict one:
+ *
+ * - a member-month is a **sum of that member's daily `precipitation_sum` values**
+ *   over the calendar month, which is what the provider's own
+ *   `precipitation_mean` is the ensemble mean of (verified 2026-11-23);
+ * - it is stored only when the axis covers **every** day of the month and every
+ *   one of those days carries a value for that member. A missing day is not `0`:
+ *   an incomplete month is `null` with a reason, never a partial sum presented as
+ *   a monthly total;
+ * - nothing is divided, converted or bias-corrected. `unit` stays `mm` and no
+ *   monthly-mean-to-accumulation conversion is attempted.
+ */
+export const MONTHLY_MEMBER_AGGREGATION_VERSION = "monthly-member-aggregation@1.0.0";
+/** `monthly_sum` is already in the OPEN-14 vocabulary: a sum over a calendar month. */
+export const MONTHLY_MEMBER_AGGREGATION_LEVEL = "monthly_sum";
+
+export interface NormalizedMonthlyMemberValue {
+  readonly cellKey: string;
+  /**
+   * The provider's own daily quantity, kept as the monthly aggregate's variable.
+   * It is deliberately **not** `precipitation` and **not** `precipitation_mean`:
+   * supersession matches on `(cell, variable, valid_at, member)` across runs and
+   * products, so a seasonal monthly total must not share a key with a daily
+   * subseasonal value on the first of the month.
+   */
+  readonly variable: "precipitation_sum";
+  readonly unit: typeof SUPPORTED_PRECIPITATION_UNIT;
+  /** First day of the month, `00:00Z`. */
+  readonly validAt: string;
+  /** The member's monthly total in `mm`, or `null` when the month is incomplete. */
+  readonly value: number | null;
+  readonly temporalResolution: "monthly";
+  readonly ensembleMember: number;
+  readonly ensembleSize: number;
+  readonly aggregationLevel: typeof MONTHLY_MEMBER_AGGREGATION_LEVEL;
+}
+
+export interface NormalizedMonthlyMemberSeries {
+  readonly aggregationVersion: string;
+  readonly months: readonly string[];
+  readonly ensembleSize: number;
+  readonly values: readonly NormalizedMonthlyMemberValue[];
+}
+
+export function aggregateMonthlyMemberTotals(
+  payload: DailyProviderPayload,
+  cellKey: string,
+): AdapterOutcome<NormalizedMonthlyMemberSeries> {
+  if (payload.unit !== SUPPORTED_PRECIPITATION_UNIT) {
+    return failure(
+      "unsupported_unit",
+      `member precipitation is reported in "${payload.unit}"; only "mm" is accepted and no conversion is defined`,
+    );
+  }
+  if (payload.days.length === 0) {
+    return failure("invalid_payload", "the payload carries no daily member values");
+  }
+
+  const memberIds = new Set<number>();
+  /** `month` → `member` → `day` → value. A duplicate day is refused, not summed twice. */
+  const byMonth = new Map<string, Map<number, Map<string, number | null>>>();
+  const months: string[] = [];
+
+  for (const day of payload.days) {
+    if (day.member === null) {
+      return failure("invalid_payload", "a deterministic value cannot be aggregated as a member");
+    }
+    const monthKey = `${day.date.slice(0, 7)}-01`;
+    const parsedMonth = parseCalendarMonth(monthKey);
+    if (parsedMonth === null || formatMonthKey(parsedMonth) !== monthKey) {
+      return failure("invalid_payload", `daily date "${day.date}" is not a calendar day`);
+    }
+    // `2026-02-30` has a valid month prefix but is not a day; without this the
+    // calendar-day count could be reached by an impossible date.
+    const instant = Date.parse(`${day.date}T00:00:00.000Z`);
+    if (Number.isNaN(instant) || new Date(instant).toISOString().slice(0, 10) !== day.date) {
+      return failure("invalid_payload", `daily date "${day.date}" is not a calendar day`);
+    }
+    if (day.value !== null && (!Number.isFinite(day.value) || day.value < 0)) {
+      return failure(
+        "invalid_payload",
+        `member ${day.member + 1} on ${day.date} is not a finite non-negative amount`,
+      );
+    }
+    memberIds.add(day.member);
+
+    let month = byMonth.get(monthKey);
+    if (month === undefined) {
+      month = new Map();
+      byMonth.set(monthKey, month);
+      months.push(monthKey);
+    }
+    let member = month.get(day.member);
+    if (member === undefined) {
+      member = new Map();
+      month.set(day.member, member);
+    }
+    if (member.has(day.date)) {
+      return failure("invalid_payload", `member ${day.member + 1} repeats ${day.date}`);
+    }
+    member.set(day.date, day.value);
+  }
+
+  months.sort();
+  const ensembleSize = memberIds.size;
+  const values: NormalizedMonthlyMemberValue[] = [];
+
+  for (const monthKey of months) {
+    const calendarMonth = parseCalendarMonth(monthKey);
+    if (calendarMonth === null) {
+      return failure("invalid_payload", `"${monthKey}" is not a calendar month`);
+    }
+    const expectedDays = daysInMonth(calendarMonth);
+    const month = byMonth.get(monthKey) as Map<number, Map<string, number | null>>;
+
+    for (const memberId of [...memberIds].sort((a, b) => a - b)) {
+      const days = month.get(memberId);
+      // A month the axis never reached is incomplete, not dry.
+      const complete = days !== undefined && days.size === expectedDays;
+      let total: number | null = null;
+      if (complete) {
+        let sum = 0;
+        let allValued = true;
+        for (const value of days.values()) {
+          if (value === null) {
+            allValued = false;
+            break;
+          }
+          sum += value;
+        }
+        total = allValued ? sum : null;
+      }
+      values.push({
+        cellKey,
+        variable: "precipitation_sum",
+        unit: SUPPORTED_PRECIPITATION_UNIT,
+        validAt: `${monthKey}T00:00:00.000Z`,
+        value: total,
+        temporalResolution: "monthly",
+        ensembleMember: memberId,
+        ensembleSize,
+        aggregationLevel: MONTHLY_MEMBER_AGGREGATION_LEVEL,
+      });
+    }
+  }
+
+  return {
+    ok: true,
+    value: Object.freeze({
+      aggregationVersion: MONTHLY_MEMBER_AGGREGATION_VERSION,
+      months: Object.freeze(months),
+      ensembleSize,
+      values: Object.freeze(values),
+    }),
+  };
 }

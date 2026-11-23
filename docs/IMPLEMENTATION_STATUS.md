@@ -1148,13 +1148,13 @@ Phases 4.5 and 4.6 remain **not started**.
 
 ---
 
-## Phase 5 — Climate Data Foundation — **5.0 complete; 5.1 partially implemented; 5.2 complete (5.2.1–5.2.8); 5.3 complete; 5.4 implemented behind its gates; 5.5 implemented behind its gates; 5.6 implemented behind its gates (values), spread not implemented; 5.7–5.8 not started**
+## Phase 5 — Climate Data Foundation — **5.0 complete; 5.1 partially implemented; 5.2 complete (5.2.1–5.2.8); 5.3 complete; 5.4 implemented behind its gates; 5.5 implemented behind its gates; 5.6 implemented behind its gates (values + SEAS5 per-member monthly aggregates), spread not computed; 5.7–5.8 not started**
 
 Status: **5.0 complete; 5.1 partially implemented; 5.2 complete, all eight steps;
 5.3 complete; 5.4 implemented behind `OPEN-03` and `OPEN-18`; 5.5 implemented
-behind the same two gates; 5.6 implemented behind the same two gates — the values
-and their storage are done, ensemble spread and probability are not; 5.7–5.8 not
-started.**
+behind the same two gates; 5.6 implemented behind the same two gates — the values,
+their storage, and the ADR-001 D8b SEAS5 per-member monthly aggregates are done;
+ensemble spread itself and probability are not; 5.7–5.8 not started.**
 5.0 delivered the contract and resolver code in `packages/contracts` with tests, and
 added no migration, Prisma model, route, grant, policy, worker, queue, or persistence.
 It is complete as delivered: the `OPEN-14` vocabulary freeze remains a deferred open
@@ -1184,35 +1184,41 @@ migration** and no queue. Like 5.4 it is not a live pipeline — the shipped reg
 refuses `grid_not_validated` (`OPEN-18`), and `OPEN-03` still blocks commercial
 ingestion — so no baseline row comes from a provider in this configuration, and the
 suites use a fixture validated grid. CHIRPS is **not** implemented. 5.6 is
-implemented on that same pattern: the EC46 daily request joins the SEAS5 monthly one
-in `open-meteo-seasonal.ts`, `apps/worker/src/ingest/seasonal.ts` stores days 15–45
-as `subseasonal_forecast` member rows and the provider's seven months as
-`seasonal_forecast`, and one `ingest.climate` handler serves both the baseline and
-the two seasonal products (the payload decides). It adds **no migration** — the
-existing CHECKs already permitted `seasonal` and both data classes. Ensemble spread,
-probability and any confidence figure are **not** implemented; the mean column is
-never stored as a member. 5.7 and 5.8 are **not started**, and nothing here claims a
-served coordinate on a real grid, an aggregation, an anomaly, or a
-`field_outlook_cells` row.
+implemented on that same pattern: the EC46 daily request and the SEAS5 daily-member
+request join the SEAS5 monthly one in `open-meteo-seasonal.ts`, and
+`apps/worker/src/ingest/seasonal.ts` stores days 15–45 as `subseasonal_forecast`
+member rows, the provider's seven months as `seasonal_forecast`, and — per ADR-001
+D8b, now resolved on live evidence — **50 per-member monthly totals per month** as
+`precipitation_sum`/`monthly_sum` rows. One `ingest.climate` handler serves both the
+baseline and the two seasonal products (the payload decides). It adds **no
+migration** — the existing CHECKs already permitted `seasonal`, both data classes
+and member rows. Ensemble spread itself, probability and any confidence figure are
+**not** computed; the aggregates exist so a later phase can compute spread from real
+members, and neither mean column is ever stored as a member. 5.7 and 5.8 are **not
+started**, and nothing here claims a served coordinate on a real grid, an
+aggregation into `monthly_outlooks`, an anomaly, or a `field_outlook_cells` row.
 
-Implementation evidence after the Phase 5.6 change (2026-11-23), all executed in this
-working tree: contracts **413** tests, weather-core **97** (13 archive + 17 daily + 36
-seasonal + 16 registry + 15 monthly), climate-core **14**, database unit **34** +
-integration **120**, worker **2** unit + **80** integration (19 climatology + 14
-seasonal `ingest.climate` cases), API **206** unit + **74** integration,
-`test:schema` **23**, `pnpm test` green (11 tasks), root `typecheck` green (11 tasks),
-root `build` green (7 tasks), `db:verify` all privilege checks passed (exit 0),
-Prettier clean. `pnpm --filter @agroclimate/database test:rls` fails one pre-existing
-assertion — it still expects **21** non-authentication `app` tables and the catalogue
-now holds **23** (`climatology_baselines`, `climatology_normals`, both from 5.5); the
-per-table probes all pass. That guard is stale on `040618e`, not caused by 5.6, and
-it was left untouched under the "do not edit tests" rule. The five 5.4 corrective
-findings (F-01…F-05) and the 5.5 findings F-01/F-02/F-03/F-05 remain addressed. The
-2026-11-23 EC46 live probe recorded in `docs/research/forecast-horizon-capabilities.md`
-proves the payload shape only: 46 daily rows, 50 members plus a mean, day 45 null.
-No row in any table comes from a live provider. Owner decisions are unchanged —
-`D21` and `D15c` are approved, `D1`/`D15`/`D15a`/`D15d`/`D15e` remain implemented
-without an owner signature.
+Implementation evidence after the Phase 5.6 corrective pass (2026-11-23), all
+executed in this working tree: contracts **413** tests, weather-core **117** (13
+archive + 17 daily + 36 seasonal + 16 registry + 22 monthly, of which 7 are the new
+member-aggregation cases + 13 SEAS5 member adapter cases), climate-core **14**,
+database unit **34** + integration **120**, worker **2** unit + **84** integration
+(19 climatology + 18 seasonal `ingest.climate` cases), API **206** unit + **74**
+integration, `test:schema` **23**, `pnpm test` green (11 tasks), root `typecheck`
+green (11 tasks), root `build` green (7 tasks), `db:verify` all privilege checks
+passed (exit 0), `pnpm --filter @agroclimate/database test:rls` **92/92 green**,
+Prettier clean. The RLS catalogue guard now expects **23** non-authentication `app`
+tables and explains the arithmetic (26 in `app` − `users`, `sessions`,
+`_prisma_migrations`); `climatology_baselines` and `climatology_normals` (both from
+5.5) are probed like every other table, and no table was excluded to preserve the
+old count. The five 5.4 corrective findings (F-01…F-05) and the 5.5 findings
+F-01/F-02/F-03/F-05 remain addressed. The 2026-11-23 live probes recorded in
+`docs/research/forecast-horizon-capabilities.md` prove the EC46 payload shape and
+the SEAS5 daily-member shape, including that the mean of the 50 per-member monthly
+sums reproduces the provider's `precipitation_mean` to its 0.1 mm rounding (ratios
+0.989–1.011). No row in any table comes from a live provider. Owner decisions are
+unchanged — `D21` and `D15c` are approved, `D1`/`D15`/`D15a`/`D15d`/`D15e` remain
+implemented without an owner signature.
 
 | Item | State |
 |---|---|
@@ -1280,7 +1286,7 @@ climatology; BMKG stays disabled by default; `bias_corrected` stays `false`.
 `open-decisions.md` §6 has since grown to `Q-P5-1`..`Q-P5-7`. 5.1 has started (adapter
 foundation only); 5.2 has all eight steps implemented; 5.3 has the queue, runner and run
 lifecycle implemented; 5.4 has its adapters, handler, settlement primitive and write
-transaction implemented behind `OPEN-03`/`OPEN-18`; 5.5 has its adapter, builder, handler and versioned write implemented behind the same two gates; 5.6 has its EC46 and SEAS5 handlers and its storage implemented behind the same two gates, with ensemble spread still absent; 5.7–5.8 have no work started.
+transaction implemented behind `OPEN-03`/`OPEN-18`; 5.5 has its adapter, builder, handler and versioned write implemented behind the same two gates; 5.6 has its EC46 and SEAS5 handlers, its SEAS5 per-member monthly aggregates (D8b) and its storage implemented behind the same two gates, with ensemble spread itself still not computed; 5.7–5.8 have no work started.
 
 ### Phase 5.3 — run lifecycle and worker runtime — 2026-11-22
 
@@ -1335,18 +1341,20 @@ transaction implemented behind `OPEN-03`/`OPEN-18`; 5.5 has its adapter, builder
 
 | Item | State |
 |---|---|
-| `packages/weather-core/src/adapters/open-meteo-seasonal.ts` | **Extended.** The SEAS5 monthly request from 5.1 is unchanged (`models=ecmwf_seas5`, `monthly=precipitation_mean`, `forecast_days=217`, seven consecutive first-of-month keys, provider-native unit, no `valueMm`). EC46 daily is added beside it: `buildEc46DailyUrl` pins `models=ecmwf_ec46`, `daily=precipitation_sum`, `forecast_days=46` and **no** `timezone` parameter (the provider default is GMT); `fetchEc46Daily` asserts the **46-row** axis, that `time[0]` is the request day in UTC (so index is lead day, verified rather than assumed), that consecutive keys are consecutive days, that the mean column is present, and that the member set is exactly `member01..member50`. The mean column is excluded from the returned days, mirroring `fetchDailyEnsemble`; the payload carries 50 members × 46 days with `ensembleSize = 50`. `EC46_ADAPTER_VERSION = "open-meteo-seasonal-ec46@1.0.0"`. Live probe 2026-11-23 recorded in `docs/research/forecast-horizon-capabilities.md`: `200`, 46 rows `2026-11-23 … 2027-01-07`, 50 members + mean, day 45 null in every column |
+| `packages/weather-core/src/adapters/open-meteo-seasonal.ts` | **Extended.** The SEAS5 monthly request from 5.1 is unchanged (`models=ecmwf_seas5`, `monthly=precipitation_mean`, `forecast_days=217`, seven consecutive first-of-month keys, provider-native unit, no `valueMm`). EC46 daily is added beside it: `buildEc46DailyUrl` pins `models=ecmwf_ec46`, `daily=precipitation_sum`, `forecast_days=46` and **no** `timezone` parameter (the provider default is GMT); `fetchEc46Daily` asserts the **46-row** axis, that `time[0]` is the request day in UTC (so index is lead day, verified rather than assumed), that consecutive keys are consecutive days, that the mean column is present, and that the member set is exactly `member01..member50`. The mean column is excluded from the returned days, mirroring `fetchDailyEnsemble`; the payload carries 50 members × 46 days with `ensembleSize = 50`. `EC46_ADAPTER_VERSION = "open-meteo-seasonal-ec46@1.0.0"`. Live probe 2026-11-23 recorded in `docs/research/forecast-horizon-capabilities.md`: `200`, 46 rows `2026-11-23 … 2027-01-07`, 50 members + mean, day 45 null in every column. **SEAS5 daily members added 2026-11-23** (ADR-001 D8b): `buildSeas5MemberDailyUrl` pins `models=ecmwf_seas5`, `daily=precipitation_sum`, `start_date`/`end_date` from `seas5MemberWindow(initializedAt)` and **no** `forecast_days`/`timezone`; `fetchSeas5MemberDaily` asserts the calendar day count of the run's seven months (212 for a Nov–May window), that the axis starts on the first day of the initialization month and is consecutive, that the mean column is present, and that the member set is exactly `member01..member50`; the daily mean is never returned as a member. `SEAS5_MEMBER_ADAPTER_VERSION = "open-meteo-seasonal-seas5-member@1.0.0"`. Live probe 2026-11-23: `200`, 212 rows for `2026-11-01 … 2027-05-31`, 50 members + mean, and the mean of the 50 per-member monthly sums reproduced the provider's monthly `precipitation_mean` (ratios 0.989–1.011) |
 | `packages/weather-core/src/adapters/open-meteo-daily.ts` | **Extended, no second implementation.** `getDaily` became exported `fetchDailyBlock`, and the member-set verification became exported `collectMembers(label, variable, columns, expected)`; `fetchDailyEnsemble` now calls it. The EC46 request therefore shares one HTTP failure contract (429/4xx/5xx/unexpected-status/timeout/oversize) and one member rule. `DailyProviderPayload.product` widened to include `"seasonal"`. No behaviour change for 5.4 |
-| `apps/worker/src/ingest/seasonal.ts` | **Implemented (new).** `kind: "ingest.climate"`. Product gate first: the run must have `product = 'seasonal'` and its model must map (`ecmwf_ec46` → `subseasonal_forecast` / `daily_sum`, `ecmwf_seas5` → `seasonal_forecast` / `monthly_mean`), else terminal `unsupported_product`. Then `targetSelector` presence, selector-hash equality, `registry.requireValidated`, and every selector cell re-resolved to a node of that grid. Per cell: fetch, then the served coordinate must be the node within `NODE_COORDINATE_TOLERANCE_DEGREES = 1e-6°` or `provider_coordinate_mismatch` (terminal, before any write, same rule as 5.5). EC46 records are trimmed to lead day ≥ 15 (`EC46_FIRST_SUBSEASONAL_LEAD_DAY`); SEAS5 records keep `variable = precipitation_mean`, `unit` as returned, `temporal_resolution = monthly`, `valid_at` = first of month `00:00Z`. All-null answers are terminal `no_values`, never a `succeeded` run at 0 %. One transaction: timeouts → job `FOR UPDATE` → lease/`running`/run-id checks → ingestion-run lock → `lockForecastWriteScope` → `revalidateLease` → `persistForecastRun` → `settlePairAsWorker`. Retryable: `rate_limited`, `transport`. Terminal: everything else, plus `provider_coordinate_mismatch`, `ecmwf_ec46_incomplete`, `selector_missing`, `selector_hash_mismatch`, `unsupported_product`, `grid_not_validated`, `forecast_run_missing`, `no_values`, `provider_changed` |
+| `packages/weather-core/src/normalize/monthly.ts` + `calendar-month.ts` | **Extended.** `aggregateMonthlyMemberTotals(payload, cellKey)` turns the 50 daily member series into per-member calendar-month totals. Rule: a member-month is the sum of that member's daily `precipitation_sum` over the month, stored only when the axis covers every day of that month **and** every one of those days carries a value; otherwise the row is kept with `value = null` (a missing day is not `0`). Duplicate days, impossible calendar days (e.g. `2027-02-30`), negative/non-finite amounts, a `null` member, and a non-`mm` unit are refused. Output rows: `variable = precipitation_sum`, `aggregation_level = monthly_sum`, `temporal_resolution = monthly`, `ensemble_member = 0..49`, `ensemble_size = 50`, `unit = mm`, `valid_at` = first of month `00:00Z`. `calendar-month.ts` gains `daysInMonth`/`addMonths`/`monthKeyOfDay` (integer month arithmetic, no `Date` timezone). `MONTHLY_MEMBER_AGGREGATION_VERSION = "monthly-member-aggregation@1.0.0"` |
+| `apps/worker/src/ingest/seasonal.ts` | **Implemented (new).** `kind: "ingest.climate"`. Product gate first: the run must have `product = 'seasonal'` and its model must map (`ecmwf_ec46` → `subseasonal_forecast` / `daily_sum`, `ecmwf_seas5` → `seasonal_forecast` / `monthly_mean`), else terminal `unsupported_product`. Then `targetSelector` presence, selector-hash equality, `registry.requireValidated`, and every selector cell re-resolved to a node of that grid. Per cell: fetch, then the served coordinate must be the node within `NODE_COORDINATE_TOLERANCE_DEGREES = 1e-6°` or `provider_coordinate_mismatch` (terminal, before any write, same rule as 5.5). EC46 records are trimmed to lead day ≥ 15 (`EC46_FIRST_SUBSEASONAL_LEAD_DAY`); SEAS5 records keep `variable = precipitation_mean`, `unit` as returned, `temporal_resolution = monthly`, `valid_at` = first of month `00:00Z`. **SEAS5 also fetches the daily members** and aggregates them at ingest (D8b); the member answer is separately coordinate-checked, and the monthly axis and the member window must name the same months or the job dies `provider_changed`. All-null answers are terminal `no_values`, never a `succeeded` run at 0 %. One transaction: timeouts → job `FOR UPDATE` → lease/`running`/run-id checks → ingestion-run lock → `lockForecastWriteScope` → `revalidateLease` → `persistForecastRun` → `settlePairAsWorker`. Retryable: `rate_limited`, `transport`. Terminal: everything else, plus `provider_coordinate_mismatch`, `ecmwf_ec46_incomplete`, `selector_missing`, `selector_hash_mismatch`, `unsupported_product`, `grid_not_validated`, `forecast_run_missing`, `no_values`, `provider_changed`, `member_series_missing` |
 | Why days 0–14 are not stored | `persistForecastRun` supersedes live rows on `(cell_key, variable, valid_at, ensemble_member)` **without** filtering model, product or data class, and both EC46 and `ecmwf_ifs025` use the same variable name and member indices. Storing EC46 days 0–14 would let one model supersede the other's rows. The band boundary is therefore a correctness requirement, not cosmetic |
+| Why the SEAS5 monthly totals are `precipitation_sum`, not `precipitation` | The same cross-product supersession applies at a *date*: a monthly aggregate is valid at the first of the month `00:00Z`, which is also a valid daily instant, and the member indices are the same `0..49`. Storing them as `precipitation` made a newer SEAS5 run supersede the older EC46 subseasonal rows for that day — observed in the integration suite as 50 vanished live rows. `precipitation_sum` (the provider's own daily quantity name) is a distinct key component, so the two products never collide; `aggregation_level`/`temporal_resolution` carry the monthly meaning. This was a real defect found and fixed in the corrective pass, not a hypothetical |
 | Contracts | **none new.** A seasonal job is the existing `ingestionJobPayloadSchema` on the existing `ingest.climate` kind; the payload's `forecastRunId` distinguishes it from a climatology job. No new `jobKind`, no second queue, no contract variant. `background-processing.md` §2.1 already put EC46, SEAS5 and the baseline on one queue |
 | `apps/worker/src/{main.ts,runner.ts}` | **Changed.** `JobHandler.opensIngestionRun` is now `boolean | ((payload: unknown) => boolean)` so one `ingest.climate` handler opens an `IngestionRun` for a seasonal job and none for a climatology job; the runner evaluates it per job before `beginIngestionExecution`. `main.ts` builds one `ingest.climate` handler that dispatches on `isSeasonalJobPayload(payload)`, registered beside `ingest.forecast` |
 | Database impact | **none.** No migration, table, column or grant. `PersistForecastRunInput.product` / `dataClass` unions widened in `packages/database/src/weather.ts`; the SQL and every CHECK are untouched. `monthly_outlooks` is not written |
-| Tests | weather-core **97** (seasonal file **36**: the 21 SEAS5 cases plus 15 EC46 — pinned URL and no `timezone`, 50×46 rows with the mean excluded and never mistaken for a member, member null preserved, axis not anchored on the request day, short/long axis, skipped day, duplicate/missing/51st/unexpected member, missing mean column, changed shape, non-JSON body, non-numeric column, 429/4xx/5xx/302/transport, no request for invalid configuration). worker **2** unit + **80** integration (`ingest-seasonal` **14**: EC46 lead days 15–45 = 31×50 member rows in `subseasonal_forecast` with `daily_sum`/`mm`/size 50 and the run's own `initialized_at`; all-null → `no_values`; answered coordinate off the node; truncated axis → `ecmwf_ec46_incomplete`; 429 requeued with nothing written; SEAS5 seven months as `precipitation_mean`/`mm`/`monthly`/`monthly_mean` with provider values; null month stored as null at 85.71 % coverage and `partial`; `grid_not_validated`; non-seasonal product; unsupported model; idempotent enqueue; same-run re-normalisation supersession with linked replacement ids; lease loss rolling back with the run left `running`; no tenant column and `app_api` cannot write) |
+| Tests | weather-core **117**: seasonal adapter file **36** (the 21 SEAS5 monthly cases plus 15 EC46 — pinned URL and no `timezone`, 50×46 rows with the mean excluded and never mistaken for a member, member null preserved, axis not anchored on the request day, short/long axis, skipped day, duplicate/missing/51st/unexpected member, missing mean column, changed shape, non-JSON body, non-numeric column, 429/4xx/5xx/302/transport, no request for invalid configuration); SEAS5 member adapter file **13** (seven-month calendar window incl. leap February, range URL with no `forecast_days`, 50×212 rows, daily mean never a member, member null preserved, short/long/gapped/shifted axis, duplicate/missing/51st/unexpected member, missing mean column, 429/4xx/503/transport); monthly file **22** (15 pre-existing + 7 aggregation: 31/28-day calendar sums, member identity/provenance, one null day nulls only that member-month, a month short one day nulls the whole month, duplicate and impossible days refused, non-`mm`/negative/null-member refused). worker **2** unit + **84** integration (`ingest-seasonal` **18**: EC46 lead days 15–45 = 31×50 member rows in `subseasonal_forecast` with `daily_sum`/`mm`/size 50 and the run's own `initialized_at`; all-null → `no_values`; answered coordinate off the node; truncated axis → `ecmwf_ec46_incomplete`; 429 requeued with nothing written; SEAS5 seven months as `precipitation_mean`/`mm`/`monthly`/`monthly_mean` with provider values; **50 members × 7 months as `precipitation_sum`/`monthly_sum` with totals 31/31/28/31/30/31/30 and the 999 mean column never summed**; null month stored as null beside intact member rows at 99.72 % coverage and `partial`; one null member-day nulling only that member-month; SEAS5 idempotent enqueue and same-run re-normalisation supersession (357→714 rows, 357 linked); member series answered off the node; `grid_not_validated`; non-seasonal product; unsupported model; lease loss rolling back with the run left `running`; no tenant column and `app_api` cannot write) |
 | Gates that remain closed | `OPEN-18`: the shipped registry is `synthetic`, so a real seasonal job dies `grid_not_validated` before a byte is fetched; the suites use a fixture registry with explicit `validated` entries — the adapter-dev allowance, not provider evidence. `OPEN-03`: no commercial production ingestion, and the ECMWF/Open-Meteo attribution is provenance, not a licence decision. `OPEN-05`: no raw payload is retained |
-| Not implemented, not claimed | Ensemble spread, probability, terciles, exceedance, any confidence figure, `model_skill`. The 50 member rows exist so spread can be derived from real members later; nothing derives it now, and the mean column is never stored as a deterministic value (ADR-001 D8/D8b). SEAS5 has no member column and claims none. Also absent: monthly→daily conversion, `precipitation_mean` → `valueMm` reinterpretation, climatology filling, anomaly, bias correction (`bias_corrected` is CHECK-forced false), `monthly_outlooks` (5.7), `field_outlook_cells` |
+| Not implemented, not claimed | Ensemble spread, probability, terciles, exceedance, any confidence figure, `model_skill`. The EC46 member rows and the SEAS5 per-member monthly totals exist so spread can be derived from real members later; **nothing derives it now**, and no mean column is stored as a deterministic member (ADR-001 D8/D8b). Also absent: monthly→daily conversion, `precipitation_mean` → `valueMm` reinterpretation, monthly-mean→accumulation conversion, climatology filling, anomaly, bias correction (`bias_corrected` is CHECK-forced false), `monthly_outlooks` (5.7), `field_outlook_cells` |
 | Deferred question | `Q-P5-7` (`precipitation_mean` is a monthly mean, `valueMm` is a monthly total) is untouched: the provider's name, unit and value are stored as they arrive, and the read path must label the quantity. Changing it needs provider evidence, not a rename |
-| Test-suite edit disclosure | none — no existing test file was modified. A new file, `apps/worker/test/integration/ingest-seasonal.test.mjs`, was added, and it cleans up its own job keys and rows in `after` because it deliberately leaves a retry-scheduled job and a lease-lost one; without that, the following test file's runner claimed them and its assertions failed |
+| Test-suite edit disclosure | Two test files were edited in this corrective pass, on explicit instruction: (1) `apps/worker/test/integration/ingest-seasonal.test.mjs` — the pre-existing 14 cases were extended to 18 and the SEAS5 expectations moved from 7 rows to 357 (7 means + 350 member totals); this file was already owned by 5.6 and still cleans up its own job keys and rows in `after`, because it deliberately leaves a retry-scheduled job and a lease-lost one; (2) `packages/database/test/rls/auth-boundary.test.mjs` — the stale 21-table catalogue guard was corrected to 23 with the arithmetic in the message; every per-table RLS/privilege probe is untouched. New test files were added (`open-meteo-seasonal-members.test.ts`, 7 cases appended to `normalize/monthly.test.ts`); no production test was weakened or skipped |
 
 ### Phase 5.0 — contracts and grid resolver — 2026-11-21
 

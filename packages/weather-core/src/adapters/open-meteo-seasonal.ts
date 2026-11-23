@@ -1,7 +1,14 @@
 import { z } from "zod";
 import { failure, type AdapterOutcome } from "../failures.js";
 import type { AdapterRuntime } from "../runtime.js";
-import { formatMonthKey, isConsecutiveMonth, parseCalendarMonth } from "../calendar-month.js";
+import {
+  addMonths,
+  daysInMonth,
+  formatMonthKey,
+  isConsecutiveMonth,
+  parseCalendarMonth,
+  type CalendarMonth,
+} from "../calendar-month.js";
 import {
   collectMembers,
   fetchDailyBlock,
@@ -64,6 +71,31 @@ export const EC46_LAST_LEAD_DAY = EC46_FORECAST_DAYS - 1;
 /** The payload delivers exactly 50 members (doc claims 51 including the mean). */
 export const EC46_ENSEMBLE_MEMBERS = 50;
 export const EC46_DAILY_VARIABLE = "precipitation_sum";
+
+/**
+ * SEAS5 daily members — the basis of ADR-001 D8b.
+ *
+ * The monthly axis of SEAS5 exposes no spread variable, so a monthly spread can
+ * only come from the members themselves, and members are ephemeral: they are
+ * aggregated at ingest or never. Verified live on 2026-11-23 at `-6.2,106.8`:
+ *
+ * - `models=ecmwf_seas5&daily=precipitation_sum&start_date=2026-11-01&end_date=2027-05-31`
+ *   → `200`, **212 rows** (the seven calendar months of the run window), unit
+ *   `mm`, columns `precipitation_sum` + `precipitation_sum_member01..50`.
+ * - The range form is what makes the aggregation honest. `forecast_days` anchors
+ *   the daily axis on the request day, which is not the first day of the
+ *   initialization month; a calendar range anchored on the run's own months is.
+ * - Reconciled against the provider's own monthly product: the mean of the 50
+ *   per-member monthly sums reproduced `precipitation_mean` for all seven months
+ *   (ratios 0.989–1.011, i.e. the provider's 0.1 mm rounding). That is the
+ *   evidence that the daily members and the monthly quantity describe one thing.
+ * - The `precipitation_sum` column of the **daily** payload is *not* the mean of
+ *   the 50 members (191 of 193 days disagreed by more than 0.06 mm). It is never
+ *   read as a member or as the monthly mean; only the members are aggregated.
+ */
+export const SEAS5_MEMBER_ADAPTER_VERSION = "open-meteo-seasonal-seas5-member@1.0.0";
+export const SEAS5_MEMBER_DAILY_VARIABLE = "precipitation_sum";
+export const SEAS5_ENSEMBLE_MEMBERS = 50;
 
 export interface Seas5MonthlyConfig {
   readonly latitude: number;
@@ -381,6 +413,182 @@ export async function fetchEc46Daily(
       variable: EC46_DAILY_VARIABLE,
       unit: body.value.unit,
       adapterVersion: EC46_ADAPTER_VERSION,
+      attribution: config.attribution,
+      requestedLatitude: config.latitude,
+      requestedLongitude: config.longitude,
+      servedLatitude: body.value.latitude,
+      servedLongitude: body.value.longitude,
+      sourceUrl: url,
+      receivedAt: runtime.now().toISOString(),
+      rawPayloadRef: null,
+      ensembleSize: members.size,
+      days: Object.freeze(days),
+    }),
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * SEAS5 daily members — monthly aggregation basis (ADR-001 D8b)
+ * ------------------------------------------------------------------ */
+
+export interface Seas5MemberWindow {
+  /** `YYYY-MM-01` of the initialization month: the first day requested. */
+  readonly startDate: string;
+  /** `YYYY-MM-DD` of the last day of the seventh month. */
+  readonly endDate: string;
+  /** The seven months, in order. */
+  readonly months: readonly string[];
+  /** `endDate - startDate + 1`, computed from the calendar, not from a response. */
+  readonly days: number;
+}
+
+function pad(value: number, width: number): string {
+  return String(value).padStart(width, "0");
+}
+
+/**
+ * The daily range that covers the run's seven monthly rows.
+ *
+ * The window is derived from `initializedAt` — the same configured instant the
+ * monthly request already uses — so the daily members and the monthly means are
+ * asked about the same months. It is not derived from the clock: re-ingesting an
+ * old run must request that run's window, not today's.
+ */
+export function seas5MemberWindow(initializedAt: string): Seas5MemberWindow | null {
+  const instant = Date.parse(initializedAt);
+  if (Number.isNaN(instant)) return null;
+  const first = parseCalendarMonth(new Date(instant).toISOString().slice(0, 7));
+  if (first === null) return null;
+
+  const months: string[] = [];
+  let days = 0;
+  let last: CalendarMonth = first;
+  for (let offset = 0; offset < SEAS5_EXPECTED_MONTHS; offset += 1) {
+    const month = addMonths(first, offset);
+    months.push(formatMonthKey(month));
+    days += daysInMonth(month);
+    last = month;
+  }
+
+  return Object.freeze({
+    startDate: formatMonthKey(first),
+    endDate: `${pad(last.year, 4)}-${pad(last.month, 2)}-${pad(daysInMonth(last), 2)}`,
+    months: Object.freeze(months),
+    days,
+  });
+}
+
+/** Deterministic: fixed parameter order, the run's own calendar range. */
+export function buildSeas5MemberDailyUrl(config: Seas5MonthlyConfig): string | null {
+  const window = seas5MemberWindow(config.initializedAt);
+  if (window === null) return null;
+  const baseUrl = config.baseUrl ?? SEAS5_DEFAULT_BASE_URL;
+  const params = new URLSearchParams();
+  params.set("latitude", String(config.latitude));
+  params.set("longitude", String(config.longitude));
+  params.set("models", "ecmwf_seas5");
+  params.set("daily", SEAS5_MEMBER_DAILY_VARIABLE);
+  params.set("start_date", window.startDate);
+  params.set("end_date", window.endDate);
+  return `${baseUrl.replace(/\/$/, "")}/v1/seasonal?${params.toString()}`;
+}
+
+/**
+ * SEAS5 daily precipitation per member, over the run's seven-month window.
+ *
+ * Four things are refused rather than repaired:
+ *
+ * 1. A day count other than the calendar count of the window — a short answer
+ *    would silently shorten the last month and turn an incomplete mean into an
+ *    apparent one.
+ * 2. An axis that does not begin exactly on `startDate`, or that skips a day.
+ * 3. A member set other than exactly 50 unique identifiers in `1..50`.
+ * 4. Any column that is neither the mean nor a member identifier.
+ *
+ * The mean column is excluded here as it is for EC46: the monthly
+ * `precipitation_mean` is already stored as its own row, and a daily mean that is
+ * not the member mean (see the module note) must never be summed as one.
+ */
+export async function fetchSeas5MemberDaily(
+  config: Seas5MonthlyConfig,
+  runtime: AdapterRuntime,
+): Promise<AdapterOutcome<DailyProviderPayload>> {
+  const configError = validateConfig(config);
+  if (configError !== null) return failure("invalid_config", configError);
+
+  const window = seas5MemberWindow(config.initializedAt);
+  const url = buildSeas5MemberDailyUrl(config);
+  if (window === null || url === null) {
+    return failure("invalid_config", "initializedAt does not name a calendar month");
+  }
+
+  const body = await fetchDailyBlock("seas5-member", url, config, runtime);
+  if (!body.ok) return body;
+
+  const time = body.value.time;
+  if (time.length !== window.days) {
+    return failure(
+      time.length < window.days ? "incomplete_horizon" : "provider_changed",
+      `expected ${window.days} daily rows for ${window.startDate}…${window.endDate}, received ${time.length}`,
+    );
+  }
+
+  let previous: number | null = null;
+  for (const [index, date] of time.entries()) {
+    const parsed = Date.parse(`${date}T00:00:00.000Z`);
+    if (Number.isNaN(parsed)) {
+      return failure("provider_changed", `seas5 daily.time[${index}] is not a calendar day`);
+    }
+    if (previous !== null && parsed - previous !== DAY_MS) {
+      return failure(
+        "provider_changed",
+        `seas5 daily.time[${index}] is ${date}, not the day after ${String(time[index - 1])}`,
+      );
+    }
+    previous = parsed;
+  }
+
+  if (time[0] !== window.startDate) {
+    return failure(
+      "provider_changed",
+      `seas5 daily axis starts at ${String(time[0])}, expected ${window.startDate}`,
+    );
+  }
+
+  if (!body.value.columns.some((column) => column.name === SEAS5_MEMBER_DAILY_VARIABLE)) {
+    return failure(
+      "provider_changed",
+      `seas5 returned no ${SEAS5_MEMBER_DAILY_VARIABLE} mean column`,
+    );
+  }
+
+  const collected = collectMembers(
+    "seas5",
+    SEAS5_MEMBER_DAILY_VARIABLE,
+    body.value.columns,
+    SEAS5_ENSEMBLE_MEMBERS,
+  );
+  if (!collected.ok) return collected;
+  const members = collected.value;
+
+  const days: ProviderDay[] = [];
+  for (const [index, values] of [...members.entries()].sort((a, b) => a[0] - b[0])) {
+    for (let day = 0; day < time.length; day += 1) {
+      const date = time[day];
+      if (date === undefined) continue;
+      days.push({ date, value: values[day] ?? null, member: index });
+    }
+  }
+
+  return {
+    ok: true,
+    value: Object.freeze({
+      provider: "open-meteo",
+      model: "ecmwf_seas5",
+      product: "seasonal",
+      variable: SEAS5_MEMBER_DAILY_VARIABLE,
+      unit: body.value.unit,
+      adapterVersion: SEAS5_MEMBER_ADAPTER_VERSION,
       attribution: config.attribution,
       requestedLatitude: config.latitude,
       requestedLongitude: config.longitude,

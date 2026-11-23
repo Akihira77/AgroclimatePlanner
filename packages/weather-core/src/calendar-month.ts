@@ -48,3 +48,26 @@ export function isConsecutiveMonth(previous: string, current: string): boolean {
   if (before === null || after === null) return false;
   return after.year * 12 + after.month - (before.year * 12 + before.month) === 1;
 }
+
+/** Days in a calendar month: 28–31, with the Gregorian leap-year rule. */
+export function daysInMonth(month: CalendarMonth): number {
+  if (month.month === 2) {
+    const leap = month.year % 4 === 0 && (month.year % 100 !== 0 || month.year % 400 === 0);
+    return leap ? 29 : 28;
+  }
+  return month.month === 4 || month.month === 6 || month.month === 9 || month.month === 11
+    ? 30
+    : 31;
+}
+
+/** `{year, month}` shifted by `offset` months, normalised across year boundaries. */
+export function addMonths(month: CalendarMonth, offset: number): CalendarMonth {
+  const ordinal = month.year * 12 + (month.month - 1) + offset;
+  return { year: Math.floor(ordinal / 12), month: (ordinal % 12) + 1 };
+}
+
+/** `YYYY-MM-DD` → `YYYY-MM-01`. A non-day string yields `null`. */
+export function monthKeyOfDay(day: string): string | null {
+  const calendarMonth = parseCalendarMonth(day.slice(0, 7));
+  return calendarMonth === null ? null : formatMonthKey(calendarMonth);
+}

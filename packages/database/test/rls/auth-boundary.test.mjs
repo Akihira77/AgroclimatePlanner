@@ -254,12 +254,18 @@ describe("app_auth tenant context", () => {
 });
 
 describe("app_auth catalogue enumeration", () => {
-  it("derives exactly the 21 non-authentication tables", () => {
+  it("derives exactly the 23 non-authentication tables", () => {
     // A shrinking list would silently drop probes; the count is the guard.
+    //
+    // 23 = 26 tables in `app` − users, sessions, `_prisma_migrations`. The
+    // count moved 21 → 23 in Phase 5.5, when `climatology_baselines` and
+    // `climatology_normals` were added; both are probed below like any other
+    // table. Adjust this number when the catalogue changes — never exclude a
+    // table to keep the old count.
     assert.equal(
       enumerableTables.length,
-      21,
-      `expected 21 non-authentication app tables, got ${enumerableTables.length}: ${enumerableTables.join(", ")}`,
+      23,
+      `expected 23 non-authentication app tables (26 minus users, sessions and _prisma_migrations), got ${enumerableTables.length}: ${enumerableTables.join(", ")}`,
     );
   });
 

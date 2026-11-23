@@ -115,24 +115,78 @@ function seas5Body(latitude, longitude, { months, values } = {}) {
 }
 
 /**
- * One transport for both products. `servedOffset` moves the answered
- * coordinate away from the grid node; `status` / `memberValues` / `truncate`
- * force the failure the calling test is about.
+ * SEAS5 daily members over the range the handler asks for. The range is taken
+ * from the request itself, as the provider does, so the fixture cannot silently
+ * disagree with `seas5MemberWindow`.
+ *
+ * Every member-day is `1.0` unless `memberNull` says otherwise, so a monthly
+ * total equals the number of days in that calendar month (31/28/30) and a
+ * 30-day block cannot pass as one.
  */
-function transportFor({ servedOffset = 0, status = 200, onRequest, ...bodyOptions } = {}) {
+function seas5MemberBody(latitude, longitude, { startDate, endDate }, { memberNull } = {}) {
+  const dates = [];
+  const last = Date.parse(`${endDate}T00:00:00.000Z`);
+  for (
+    let cursor = Date.parse(`${startDate}T00:00:00.000Z`);
+    cursor <= last;
+    cursor += 86_400_000
+  ) {
+    dates.push(new Date(cursor).toISOString().slice(0, 10));
+  }
+  // Deliberately not the member mean: the adapter must never read this column.
+  const daily = { time: dates, precipitation_sum: dates.map(() => 999) };
+  for (let memberId = 1; memberId <= 50; memberId += 1) {
+    const name = `precipitation_sum_member${String(memberId).padStart(2, "0")}`;
+    daily[name] = dates.map((date) => (memberNull?.(memberId, date) ? null : 1));
+  }
+  return { latitude, longitude, daily_units: { precipitation_sum: "mm" }, daily };
+}
+
+/**
+ * One transport for both products and both SEAS5 answers. `servedOffset` moves
+ * the monthly answer away from the grid node, `memberServedOffset` moves only
+ * the daily member answer; `status` / `memberNull` force the failure the calling
+ * test is about.
+ */
+function transportFor({
+  servedOffset = 0,
+  memberServedOffset = 0,
+  status = 200,
+  memberNull,
+  onRequest,
+  ...bodyOptions
+} = {}) {
   return {
     async get({ url }) {
       await onRequest?.();
       const requested = new URL(url);
       const latitude = Number(requested.searchParams.get("latitude"));
       const longitude = Number(requested.searchParams.get("longitude"));
-      const servedLat = Math.round((latitude + servedOffset) * 1e6) / 1e6;
-      const servedLon = Math.round((longitude + servedOffset) * 1e6) / 1e6;
       const model = requested.searchParams.get("models");
-      const body =
-        model === "ecmwf_seas5"
-          ? seas5Body(servedLat, servedLon)
-          : ec46Body(servedLat, servedLon, bodyOptions);
+      const daily = requested.searchParams.get("daily");
+      const at = (offset) => ({
+        latitude: Math.round((latitude + offset) * 1e6) / 1e6,
+        longitude: Math.round((longitude + offset) * 1e6) / 1e6,
+      });
+      let body;
+      if (model === "ecmwf_seas5" && daily === "precipitation_sum") {
+        const point = at(memberServedOffset);
+        body = seas5MemberBody(
+          point.latitude,
+          point.longitude,
+          {
+            startDate: requested.searchParams.get("start_date"),
+            endDate: requested.searchParams.get("end_date"),
+          },
+          { memberNull },
+        );
+      } else if (model === "ecmwf_seas5") {
+        const point = at(servedOffset);
+        body = seas5Body(point.latitude, point.longitude);
+      } else {
+        const point = at(servedOffset);
+        body = ec46Body(point.latitude, point.longitude, bodyOptions);
+      }
       return {
         ok: true,
         response: { status, bodyText: status === 200 ? JSON.stringify(body) : "" },
@@ -430,7 +484,8 @@ describe("ingest.climate — SEAS5 seasonal", () => {
     const job = await jobFor(key("seas5-happy"));
     assert.equal(job.status, "succeeded");
 
-    const rows = await rowsFor(run);
+    const all = await rowsFor(run);
+    const rows = all.filter((row) => row.variable === "precipitation_mean");
     assert.equal(rows.length, 7);
     assert.ok(rows.every((row) => row.dataClass === "seasonal_forecast"));
     assert.ok(rows.every((row) => row.variable === "precipitation_mean"));
@@ -445,16 +500,79 @@ describe("ingest.climate — SEAS5 seasonal", () => {
     assert.equal(rows.at(-1).value, 225.1);
   });
 
-  it("keeps a null month null rather than zero", async () => {
+  it("aggregates the 50 daily members into per-member calendar-month totals", async () => {
     const run = await seasonalRun({
       model: "ecmwf_seas5",
       initializedAt: new Date("2026-12-05T01:00:00.000Z"),
+    });
+    const runner = runnerFor(transportFor());
+    await enqueueFor(run, { suffix: "seas5-members" });
+
+    assert.equal(await runner.runOnce(), "handled");
+
+    const all = await rowsFor(run);
+    const members = all.filter((row) => row.variable === "precipitation_sum");
+    // 50 members × 7 months, beside the 7 provider means.
+    assert.equal(members.length, 350);
+    assert.equal(all.length, 357);
+
+    assert.ok(members.every((row) => row.dataClass === "seasonal_forecast"));
+    assert.ok(members.every((row) => row.unit === "mm"));
+    assert.ok(members.every((row) => row.temporalResolution === "monthly"));
+    assert.ok(members.every((row) => row.aggregationLevel === "monthly_sum"));
+    assert.ok(members.every((row) => row.ensembleSize === 50));
+    assert.ok(members.every((row) => row.ensembleMember !== null && row.ensembleMember < 50));
+
+    // One value per member per month, and every member total equals the number
+    // of days in that calendar month: 31/31/28/31/30/31/30, never a 30-day block.
+    const byMonth = new Map();
+    for (const row of members) {
+      const month = row.validAt.slice(0, 10);
+      if (!byMonth.has(month)) byMonth.set(month, []);
+      byMonth.get(month).push(row);
+    }
+    const expected = new Map([
+      ["2026-12-01", 31],
+      ["2027-01-01", 31],
+      ["2027-02-01", 28],
+      ["2027-03-01", 31],
+      ["2027-04-01", 30],
+      ["2027-05-01", 31],
+      ["2027-06-01", 30],
+    ]);
+    assert.deepEqual(
+      [...byMonth.keys()],
+      [...expected.keys()].map((month) => month),
+    );
+    for (const [month, days] of expected) {
+      const rows = byMonth.get(month);
+      assert.equal(rows.length, 50, `${month} has one row per member`);
+      assert.deepEqual(
+        [...new Set(rows.map((row) => row.ensembleMember))].sort((a, b) => a - b),
+        Array.from({ length: 50 }, (_, index) => index),
+        `${month} carries exactly members 0..49`,
+      );
+      assert.ok(
+        rows.every((row) => row.value === days),
+        `${month} sums ${days} daily 1.0 mm values per member`,
+      );
+    }
+
+    // The provider's 999 mean column is never summed into a member total.
+    assert.ok(members.every((row) => row.value !== 999));
+  });
+
+  it("keeps a null month null rather than zero", async () => {
+    const run = await seasonalRun({
+      model: "ecmwf_seas5",
+      initializedAt: new Date("2026-12-05T02:00:00.000Z"),
     });
     const transport = transportFor();
     const runner = runnerFor({
       async get(input) {
         const result = await transport.get(input);
         const body = JSON.parse(result.response.bodyText);
+        if (body.monthly === undefined) return result;
         body.monthly.precipitation_mean[2] = null;
         return { ...result, response: { ...result.response, bodyText: JSON.stringify(body) } };
       },
@@ -463,9 +581,14 @@ describe("ingest.climate — SEAS5 seasonal", () => {
 
     await runner.runOnce();
 
-    const rows = await rowsFor(run);
+    const all = await rowsFor(run);
+    const rows = all.filter((row) => row.variable === "precipitation_mean");
     assert.equal(rows.length, 7);
     assert.equal(rows[2].value, null);
+    // A null mean does not null the members: they are a separate answer.
+    const members = all.filter((row) => row.variable === "precipitation_sum");
+    assert.equal(members.length, 350);
+    assert.ok(members.every((row) => row.value !== null));
     const job = await jobFor(key("seas5-null"));
     assert.equal(job.status, "succeeded");
     const ingestion = await owner.$queryRaw`
@@ -473,7 +596,80 @@ describe("ingest.climate — SEAS5 seasonal", () => {
         FROM app.ingestion_runs WHERE forecast_run_id = ${run.id}::uuid
     `;
     assert.equal(ingestion[0].status, "partial");
-    assert.equal(ingestion[0].coveragePercent, 85.71);
+    // 356 of 357 values are non-null (one monthly mean).
+    assert.equal(ingestion[0].coveragePercent, 99.72);
+  });
+
+  it("nulls only the member-month with a missing day, never zero-filling it", async () => {
+    const run = await seasonalRun({
+      model: "ecmwf_seas5",
+      initializedAt: new Date("2026-12-05T03:00:00.000Z"),
+    });
+    const runner = runnerFor(
+      transportFor({ memberNull: (memberId, date) => memberId === 8 && date === "2027-02-10" }),
+    );
+    await enqueueFor(run, { suffix: "seas5-member-null" });
+
+    await runner.runOnce();
+
+    const members = (await rowsFor(run)).filter((row) => row.variable === "precipitation_sum");
+    assert.equal(members.length, 350);
+
+    const broken = members.filter(
+      (row) => row.ensembleMember === 7 && row.validAt.startsWith("2027-02-01"),
+    );
+    assert.equal(broken.length, 1);
+    assert.equal(broken[0].value, null, "an incomplete month is null, not a partial sum");
+
+    // The same member in every other month, and every other member in February,
+    // is still a full total.
+    assert.equal(members.filter((row) => row.ensembleMember === 7 && row.value !== null).length, 6);
+    assert.equal(members.filter((row) => row.value === null).length, 1);
+    const february = members.filter((row) => row.validAt.startsWith("2027-02-01"));
+    assert.equal(february.filter((row) => row.value === 28).length, 49);
+  });
+
+  it("is idempotent over the same logical SEAS5 ingestion and supersedes its predecessor", async () => {
+    const run = await seasonalRun({
+      model: "ecmwf_seas5",
+      initializedAt: new Date("2026-12-05T04:00:00.000Z"),
+    });
+    const runner = runnerFor(transportFor());
+    const first = await enqueueFor(run, { suffix: "seas5-idempotent" });
+    const second = await enqueueFor(run, { suffix: "seas5-idempotent" });
+    assert.equal(first.enqueued, true);
+    assert.equal(second.enqueued, false);
+
+    await runner.runOnce();
+    assert.equal(await liveCount(run), 357);
+
+    await enqueueFor(run, { suffix: "seas5-renorm", normalizerVersion: "renormalized@1" });
+    await runner.runOnce();
+
+    assert.equal(await liveCount(run), 357);
+    const total = await owner.$queryRaw`
+      SELECT count(*)::int AS total,
+             count(*) FILTER (WHERE superseded_by_id IS NOT NULL)::int AS linked
+        FROM app.weather_records WHERE forecast_run_id = ${run.id}::uuid
+    `;
+    assert.equal(total[0].total, 357 * 2);
+    assert.equal(total[0].linked, 357);
+  });
+
+  it("refuses a member series answered at a coordinate that is not the grid node", async () => {
+    const run = await seasonalRun({
+      model: "ecmwf_seas5",
+      initializedAt: new Date("2026-12-05T05:00:00.000Z"),
+    });
+    const runner = runnerFor(transportFor({ memberServedOffset: 0.01 }));
+    await enqueueFor(run, { suffix: "seas5-member-coord" });
+
+    await runner.runOnce();
+
+    const job = await jobFor(key("seas5-member-coord"));
+    assert.equal(job.status, "dead");
+    assert.equal(job.last_error.code, "provider_coordinate_mismatch");
+    assert.equal(await liveCount(run), 0);
   });
 });
 
@@ -616,7 +812,8 @@ describe("ingest.climate — gates and identity", () => {
       SELECT count(*)::int AS n FROM app.weather_records
        WHERE forecast_run_id = ${run.id}::uuid
     `;
-    assert.equal(readable[0].n, 7);
+    // 7 provider months + 50 members × 7 months.
+    assert.equal(readable[0].n, 357);
 
     await assert.rejects(
       api.$queryRaw`
