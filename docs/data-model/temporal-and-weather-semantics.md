@@ -205,6 +205,14 @@ past day 14 — that is the horizon, not a fetch failure.
 `value` is never interpolated, never filled forward, and never defaulted to 0. A
 zero is a measurement (a dry day); absence is not.
 
+The exact cause of a null member-month is **not recoverable from the row**. Raw
+member payloads are not retained (`OPEN-05` stays closed), and `weather_records`
+stores only the null. A read layer must therefore not infer `provider_null`,
+`member_incomplete` or `axis_incomplete` from the stored null: those names describe
+a normalization-time observation that is gone. Phase 5.7 must derive its reason
+from evidence it still has (the run/ingestion status, coverage) or report the
+generic fallback below; it must never fabricate a specific cause.
+
 ### In `monthly_outlooks`
 
 | State | `value_mm` | `data_class` | `missing_reason` |
@@ -214,9 +222,16 @@ zero is a measurement (a dry day); absence is not.
 | climatology month with no forecast axis | set | `climatology` | `beyond_horizon` |
 | ingest pending | `NULL` | `NULL` | `pending` |
 | ingest failed / provider down | `NULL` | `NULL` | `ingest_failed` / `provider_unavailable` |
+| stored member-month null, cause unrecoverable | `NULL` | `NULL` | `provider_unavailable` — generic; no specific cause is claimed |
 | cell not in scope | `NULL` | `NULL` | `not_requested` |
 | baseline missing | `NULL` | `NULL` | `insufficient_history` |
 | coverage too low to claim a month | `NULL` | `NULL` | `below_coverage_threshold` |
+
+`provider_unavailable` on a stored member-month null is a **fallback, not an inference**:
+it claims only that the provider supplied no complete value, which is the one thing
+the persisted null still supports. Distinguishing the three normalization-time causes
+at the read layer would need retained evidence and a dedicated `missing_reason` value
+with its own migration; neither exists in Phase 5.6.
 
 Two invariants of this table:
 

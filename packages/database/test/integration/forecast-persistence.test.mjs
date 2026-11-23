@@ -552,9 +552,16 @@ describe("cross-product member identity — the variable is part of the key", ()
   }
 
   async function persistInto(seed, records, overrides) {
-    return system.$transaction((tx) =>
-      persistForecastRun(tx, persistInput(seed, records, overrides)),
-    );
+    return system.$transaction(async (tx) => {
+      // `persistForecastRun` requires the caller to hold the write scope. One
+      // footprint per `(cellKey, variable)` is the same derivation the worker
+      // uses; `lockForecastFootprint` de-duplicates and sorts the keys.
+      await lockForecastWriteScope(tx, {
+        forecastRunId: seed.run.id,
+        footprints: records.map(({ cellKey, variable }) => ({ cellKey, variable })),
+      });
+      return persistForecastRun(tx, persistInput(seed, records, overrides));
+    });
   }
 
   it("keeps an EC46 member row and a SEAS5 aggregate live on the same instant", async () => {

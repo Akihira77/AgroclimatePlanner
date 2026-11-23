@@ -188,6 +188,8 @@ So: `attempt` records *how many times we tried the same logical ingest*. `ingest
 4. Job idempotency keys use `forecastRunId` and `ingestionVersion`, never wall-clock time: `ingest:{queue}:{forecastRunId}:{ingestionVersion}`. Naming `ingestionVersion` rather than `targetSelectorHash` is what makes an adapter or normalizer bump produce a distinct job; the selector hash is already inside the version. A `dead` job keeps its key permanently (§3, `background-processing.md`), so replaying it is an explicit operator action or a new `ingestionVersion`, never an accidental duplicate enqueue.
 5. At-least-once delivery is assumed. Every consumer is safe to run twice.
 
+**Derived steps inside one ingest.** Some rows are produced by a separate, versioned algorithm inside the same job — the SEAS5 per-member monthly totals are `monthly-member-aggregation@…`. That version is written to the **row's** `normalizer_version` but is deliberately not an input to `ingestionVersion`: identity continues to hash the job payload's `adapterVersion`, `normalizerVersion` and `targetSelectorHash`. An algorithm change is therefore a re-normalisation and must bump the payload's `normalizerVersion` in the same release. Bumping only the row-level constant changes nothing observable: the idempotency key is unchanged, no new job is enqueued, and stored rows keep the old algorithm's values. Adding the aggregation version to ingestion identity is an ADR-level change, not a rename or a wiring detail.
+
 ### Why this matters
 
 Without the split, a bug fix in unit conversion would rewrite `initializedAt`-derived ids, invalidate every derived artifact, and show users a "new forecast" that is the same forecast interpreted differently. The split makes reprocessing a normalizer event, not a forecast event.
@@ -550,7 +552,7 @@ type MissingReason =
   | "not_requested"       // cell not in scope for this run
   | "pending"             // ingest queued or running
   | "ingest_failed"       // adapter/job failed
-  | "provider_unavailable"// provider down
+  | "provider_unavailable"// provider supplied no complete value; also the generic fallback when no cause is stored
   | "insufficient_history"// baseline could not be computed
   | "below_coverage_threshold";
 ```
@@ -561,6 +563,14 @@ type MissingReason =
 | `pending` | A run exists and is being ingested | `pending`; do **not** show climatology as a substitute in the same slot |
 | `ingest_failed` / `provider_unavailable` | We have no value and no basis to claim one | `unavailable`; previous value may be shown as `stale` with the failure reason; never replaced by climatology |
 | `insufficient_history` | Baseline missing for the cell | `unavailable` on both axes; say so |
+
+**`MissingReason` is a derived-layer value, not a stored one.** `weather_records`
+stores nulls without a cause, and the seasonal normalizer's `provider_null` /
+`member_incomplete` / `axis_incomplete` exist only in its in-memory result. When
+5.7 cannot recover a cause from surviving evidence — raw payloads are not retained,
+`OPEN-05` stays closed — it uses the generic `provider_unavailable` ("we have no
+value and no basis to claim one") and must never guess one of the three.
+`ingest_failed` remains reserved for a failed ingestion run.
 
 The API therefore carries **two parallel axes** for every month/day, and the value itself is a discriminated union:
 
