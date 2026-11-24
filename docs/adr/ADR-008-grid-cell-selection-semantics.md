@@ -82,7 +82,9 @@ the endpoint returned, not a provider statement of its grid.
 **Two identifiers, one word of overlap.** `GridSpec.cellSelection` is the resolver's
 ownership rule (`lower-edge` / `nearest-centre`) and is a proposed *spec* field that
 participates in `gridSpecHash`. The provider's `cell_selection` is a *request parameter*
-(`nearest` / `land` / `sea`) and belongs in the proposed `requestParametersHash`. The
+(`nearest` / `land` / `sea`) and belongs in the proposed `requestParametersHash` for
+workflows that create an `IngestionRun`; a climatology baseline creates none and stores
+the same pinned parameters in `climatology_baselines.source_reference` instead (§9.5). The
 measured product uses both words; neither identifier may be read as the other, and the
 correspondence between their values is a provider-specific claim (§6.6).
 
@@ -141,9 +143,11 @@ provider cells). `UNIQUE (provider, model, cell_key)` detects neither.
 
 **P2 — a provider request parameter changes cell identity invisibly.** The provider
 parameter `cell_selection` (`nearest` / `land` / `sea`) moves the served cell for a fixed
-`(provider, model, coordinate)` and appears in no identity: not in `GridSpec`,
+`(provider, model, coordinate)` and appears in no forecast identity: not in `GridSpec`,
 `gridSpecHash`, `ForecastRun`, `IngestionRun`, or `WeatherRecord`. It is not
-`GridSpec.cellSelection`, which is the resolver field of P1 (§6.6).
+`GridSpec.cellSelection`, which is the resolver field of P1 (§6.6). A climatology baseline
+is the exception where it *is* recorded, inside `source_reference` (§9.5); the gap is the
+forecast/seasonal path, which has no equivalent.
 
 **P3 — the seam rule is implied, not decided.** Reproducing the measured provider
 requires a top-of-axis clamp for a nearest-centre grid, and the exact input `180` still
@@ -249,7 +253,7 @@ All items are recommendations. "Status" is the decision's state, not its priorit
 | **D4** | `cellSelection` participates in `gridSpecHash` **unconditionally**; the five literal fixtures are regenerated once, in the same commit as the preimage change. | Recommended |
 | **D5** | `GRID_RESOLUTION_ALGORITHM_VERSION` becomes `"grid-resolve/2"`. | Recommended (a strict `/1` reading is defensible; see §8) |
 | **D6** | `SpatialResolution` gains `cellSelection`, so a result says whether its anchor is a corner or a centre. | Recommended; low risk, may be deferred |
-| **D7** | Ingest identity gains a `requestParametersHash` inside `ingestionVersion`; the adapter pins the provider's `cell_selection=nearest` and refuses `land`/`sea` on a nearest-centre spec. | Recommended; separate task (§9) |
+| **D7** | **Workflows that create an `IngestionRun` only.** Ingest identity gains a `requestParametersHash` inside `ingestionVersion`; every such adapter must pin the provider's `cell_selection=nearest` explicitly and refuse `land`/`sea` on a nearest-centre spec. A climatology baseline creates no `IngestionRun` and keeps its existing `source_reference` identity unchanged (§9.5); D7 adds no hash and no migration there. | Recommended; separate task (§9) |
 | **D8** | The exact input `180` keeps the documented fold to the `originLon` column. The measured provider divergence is documented, not encoded in the resolver. | Recommended; owner may prefer an exception |
 | **D9** | `spatialResolutionKm` stays in the preimage; its own question is not bundled with this ADR. | Unchanged |
 | **D10** | Changing the selection mode on an existing `(provider, model)` requires a new `model` string, like any configuration change that alters identity. | Recommended |
@@ -257,8 +261,9 @@ All items are recommendations. "Status" is the decision's state, not its priorit
 **Two fields, deliberately separate.** `GridSpec.cellSelection` (D1) is the resolver's
 ownership rule and lives inside `GridSpec` and its `gridSpecHash`. The Open-Meteo request
 parameter `cell_selection` (D7) is a provider fetch option and lives inside
-`requestParametersHash`. D1 and D7 look alike and are not exchangeable; §6.6 states the
-mapping and its provider-specific limit.
+`requestParametersHash` **only where an `IngestionRun` exists**; a climatology baseline
+stores the pinned parameters in `source_reference` (§9.5). D1 and D7 look alike and are
+not exchangeable; §6.6 states the mapping and its provider-specific limit.
 
 If accepted, this is a **breaking contract change**: `CONTRACTS_VERSION` and the package
 version move (`0.2.0 → 0.3.0`). It is not implemented by this document.
@@ -363,10 +368,10 @@ subsection exists to prevent.
 | Layer | resolver contract | provider fetch option |
 | Values | `"lower-edge"` \| `"nearest-centre"` | `nearest` \| `land` \| `sea` (Open-Meteo) |
 | Answers | which node owns a coordinate | which selection rule the endpoint applies |
-| Lives in | `GridSpec`, therefore `gridSpecHash` (§7) | `requestParametersHash` inside `ingestionVersion` (§9.3) |
-| Scope | one `(provider, model)` binding, per `ADR-001` D8 | one logical ingest of one run |
+| Lives in | `GridSpec`, therefore `gridSpecHash` (§7) | `requestParametersHash` inside `ingestionVersion` when the workflow opens an `IngestionRun` (§9.3); `climatology_baselines.source_reference` when it does not (§9.5) |
+| Scope | one `(provider, model)` binding, per `ADR-001` D8 | one logical ingest of one run (forecast/seasonal); one immutable baseline version (climatology) |
 | Changes when | the reviewed lattice definition changes | the fetch configuration changes |
-| Absent today | the field does not exist; `lower-edge` is implicit | no forecast/seasonal adapter sends it, so the provider default applies; only the archive adapter pins `cell_selection=nearest` (`open-meteo-archive.ts:149`, `:168`); no value appears in any identity |
+| Absent today | the field does not exist; `lower-edge` is implicit | no forecast/seasonal adapter sends it, so the provider default applies; the archive adapter pins `cell_selection=nearest` and records it in `source_reference` (`open-meteo-archive.ts:149`, `:163-171`); only the baseline path stores the value, and only inside that string |
 
 **The mapping is a provider-specific contract, not a translation table.** For the
 measured Open-Meteo product, resolver mode `nearest-centre` is expected to correspond to
@@ -377,6 +382,15 @@ run establishes it, because no nearest-centre spec exists yet. The adapter must 
 send `cell_selection=nearest` explicitly and validate the pairing for each `(provider,
 model)` before the first ingest; a future provider whose `nearest` means something else
 must not inherit this row.
+
+**One provider, two products, two bindings.** The archive adapter's pinned
+`cell_selection=nearest` is a request-time choice for `open-meteo/era5` on the archive
+endpoint (`open-meteo-archive.ts:149`). It says nothing about `open-meteo/ecmwf_ifs025` on
+the forecast endpoint: ERA5 reanalysis and IFS 0.25 are separate `(provider, model)`
+bindings, made by different endpoints, each with its own evidence grade. The existence of
+a pinned `nearest` in the archive adapter is therefore **not** evidence that a production
+`ecmwf_ifs025` registry entry is valid, and `nearest` on one product does not transfer to
+the other. §9.5 states what the archive path actually proves.
 
 **`land` and `sea` are not representable.** They select by a 90 m DEM search the resolver
 cannot model, so a nearest-centre `GridSpec` cannot stand in for them. Approximating
@@ -444,20 +458,27 @@ hash describes a configuration; `ingestionVersion` describes one logical ingest.
 
 ### 9.1 The layers (VERIFIED)
 
-| Layer | Identifies | Where | Changes when |
-|---|---|---|---|
-| Configuration | one reviewed lattice + resolver selection rule (`cellSelection`) | `gridSpecHash` | any preimage field changes |
-| Algorithm | the mapping rule set | `GRID_RESOLUTION_ALGORITHM_VERSION` | index arithmetic, domain, wrapping, anchor derivation, or key format changes |
-| Provider binding | which product a configuration describes | registry `(provider, model)` | the product or grid changes |
-| Request configuration | provider parameters that change what a request returns, including the provider's `cell_selection` | **new** `requestParametersHash`, inside `ingestionVersion` | such a parameter changes |
-| Ingestion | one logical ingest of one run | `ingestionVersion` | any component changes |
-| Record | one value at one cell/variable/instant/member | `(forecastRunId, cellKey, variable, validAt, ensembleMember)` | a re-normalisation supersedes; never duplicates |
+Two workflows reach a provider. Only one of them has an `IngestionRun`; the identity layers
+below say which mechanism covers which.
+
+| Layer | Identifies | Where | Changes when | Applies to |
+|---|---|---|---|---|
+| Configuration | one reviewed lattice + resolver selection rule (`cellSelection`) | `gridSpecHash` | any preimage field changes | both |
+| Algorithm | the mapping rule set | `GRID_RESOLUTION_ALGORITHM_VERSION` | index arithmetic, domain, wrapping, anchor derivation, or key format changes | both |
+| Provider binding | which product a configuration describes | registry `(provider, model)` | the product or grid changes | both |
+| Request configuration | provider parameters that change what a request returns, including the provider's `cell_selection` | **new** `requestParametersHash`, inside `ingestionVersion` | such a parameter changes | forecast/seasonal (`IngestionRun`) |
+| Ingestion | one logical ingest of one run | `ingestionVersion` | any component changes | forecast/seasonal (`IngestionRun`) |
+| Baseline source | one immutable baseline's dataset, provider/model, route reference, period and algorithm revision | `climatology_baselines` columns, including `source_reference` | any of those differs under the same `baseline_version` → conflict, not an update | climatology (no `IngestionRun`) |
+| Record | one value at one cell/variable/instant/member | `(forecastRunId, cellKey, variable, validAt, ensembleMember)` | a re-normalisation supersedes; never duplicates | forecast/seasonal |
+| Baseline normal | one monthly normal for one cell in one version | `(baseline_version, outlook_cell_id, month)` | never overwritten; a change needs a new `baseline_version` | climatology |
 
 ### 9.2 Where the provider request parameter `cell_selection` does **not** belong
 
 This table is about the **provider request parameter** — `nearest` / `land` / `sea` — not
 about `GridSpec.cellSelection`, which is the resolver field and *is* hashed (§7). The two
-are mapped in §6.6.
+are mapped in §6.6. It answers for both workflows: the parameter never goes into a lattice
+identity. Only the *storage* differs — `requestParametersHash` where an `IngestionRun`
+exists, `climatology_baselines.source_reference` where none does (§9.5).
 
 | Location | Verdict | Reason |
 |---|---|---|
@@ -466,9 +487,15 @@ are mapped in §6.6.
 | `targetSelectorHash` | No | it names the requested `(cellKey, variable)` set; folding a fetch parameter in makes the selector unreproducible from the selector rows |
 | `WeatherRecord` key | No | a new component duplicates every value when the flag changes; the row already stores `ingestion_run_id`, requested/served coordinates |
 | `outlook_cells` column | No | a cell's meaning is pinned by its model binding; a per-row flag would either sit outside the unique key (re-labelling in place) or duplicate the binding |
+| `ingestionVersion` for a climatology job | No — and it does not exist | the handler opens no `IngestionRun` (`apps/worker/src/ingest/climatology.ts:218`) and settlement refuses one (`:344-348`); inventing a run to carry a hash would fabricate an ingestion that never happened |
+| A second hash column beside `climatology_baselines.source_reference` | No | the pinned parameters are already inside that string (`open-meteo-archive.ts:163-171`), and the version row compares it as identity (`packages/database/src/climatology.ts:325-333`). A second value would be a duplicate with no second reader |
 | `adapterVersion` string | No (rejected) | one column would then carry two meanings — a code change and a configuration change — with no canonical form |
 
-### 9.3 Recommended mechanism
+### 9.3 Recommended mechanism — workflows that create an `IngestionRun`
+
+Scope: forecast and seasonal ingestion, i.e. the handlers whose `opensIngestionRun` is
+true. Climatology is out of scope and has its own mechanism (§9.5); this subsection does
+not propose a hash for it.
 
 - **`requestParametersHash`**: canonical JSON of the *effective* request parameters with
   defaults resolved — endpoint, `models`, `cell_selection`, `elevation` presence/value,
@@ -486,7 +513,11 @@ are mapped in §6.6.
   it is not a generic rule. `land` and `sea` cannot be modelled by a nearest-centre spec
   and must be refused rather than approximated.
 
-### 9.4 Idempotency and supersession after the change
+### 9.4 Idempotency and supersession after the change (forecast/seasonal)
+
+If `requestParametersHash` enters `ingestionVersion`, these are the expected effects for a
+workflow that opens an `IngestionRun`. Nothing here changes a climatology baseline, which
+is append-only by `baseline_version` and never supersedes a row (§9.5).
 
 | Event | Expected effect |
 |---|---|
@@ -503,6 +534,65 @@ holds no values, so nothing is overwritten there, but a user who resolved it und
 flag was shown a mapping the later ingest does not honour. That is a resolution-history
 inconsistency, not data loss. Removing the guard, or writing records before resolving
 cells, would reopen the hole.
+
+### 9.5 Climatology baselines: `source_reference`, not `ingestionVersion` (VERIFIED)
+
+A climatology build is a **baseline**, not a forecast. The handler declares
+`opensIngestionRun: false` (`apps/worker/src/ingest/climatology.ts:218`), and settlement
+refuses any job that carries an `ingestion_run_id` (`:344-348`). There is therefore no
+`IngestionRun` for `requestParametersHash` to enter, and D7 proposes nothing for this
+path: **no hash change, no schema change, no migration, no duplicate identity column.**
+
+**The existing mechanism, read from the code** (`db` = `packages/database/src/climatology.ts`,
+`worker` = `apps/worker/src/ingest/climatology.ts`):
+
+| Step | Where | What it pins |
+|---|---|---|
+| The adapter pins the parameters | `open-meteo-archive.ts:142-150` | `daily`, `models=era5`, `precipitation_unit=mm`, `cell_selection=nearest`, `timezone=UTC` on every request |
+| A coordinate-free reference is built from the same parameters | `open-meteo-archive.ts:163-171` | the route plus the pinned parameters, without coordinates or dates |
+| The payload carries it per cell | `open-meteo-archive.ts:313` | `sourceReference` alongside `requested*`/`served*` |
+| The handler takes one reference for the version | `worker:294-296` | every cell comes from the same pinned route, so one string describes the version |
+| Persistence writes the version row once | `db:281-300` | insert, `ON CONFLICT (baseline_version) DO NOTHING` |
+| Then it compares identity under a row lock | `db:304-333` | `baseline_dataset`, `provider`, `model`, `source_reference`, `period_from`, `period_to`, `algorithm_version` |
+| A mismatch is terminal | `db:107-117`; caught at `worker:409-411` | `ClimatologySourceConflictError` → `baseline_source_conflict` |
+
+So a changed `cell_selection`, model, unit, timezone or route under an existing
+`baseline_version` already fails loudly. The value is inside `source_reference`, which is
+compared as identity — the requirement D7 satisfies for forecasts is already satisfied
+here by a different, narrower field. That is why this ADR adds nothing to it.
+
+**Deliberately not identity.** `adapter_version` and `attribution` are stored and compared
+nowhere (`db:265-271`): a patch release that changes neither the source nor a value must
+not force a version bump. That is the same principle as D7's exclusion of variables,
+applied to a different row.
+
+**Baseline limits, recorded as concerns, not redesigned here:**
+
+1. **Two parallel URL builders.** `buildArchiveDailyUrl` (`open-meteo-archive.ts:139-152`)
+   and `buildArchiveSourceReference` (`:163-171`) list the parameters independently, and no
+   test asserts the two parameter sets agree. A parameter added to the request but not to
+   the reference would be invisible to baseline identity — and to
+   `ClimatologySourceConflictError`. This is a real coupling risk, not a defect in current
+   behaviour: today the two sets differ only by coordinates and dates.
+2. **One reference per version.** `source_reference` is a single string on the version row,
+   so a baseline assembled from two different routes cannot be expressed. The handler
+   assumes one pinned route (`worker:294-296`); that assumption is documented, not
+   enforced.
+3. **Comparison happens only on re-presentation.** Identity is checked when the *same*
+   `baseline_version` is built again. A differing source that also ships a new
+   `baseline_version` is a new version by design and is never compared with the old one —
+   the version-bump rule, not a gap.
+4. **The gate is still `validated`.** The handler resolves cells through
+   `registry.requireValidated` (`worker:240-243`), and the shipped registry has no
+   `open-meteo/era5` entry, so a production baseline job terminates `grid_not_validated`
+   today. A pinned `nearest` in the archive adapter does not change that.
+
+**ERA5 is not `ecmwf_ifs025`.** The archive adapter's `nearest` is evidence for one
+binding — `open-meteo/era5` on `archive-api.open-meteo.com`, reanalysis, daily
+precipitation — and for nothing else. It does not validate `open-meteo/ecmwf_ifs025`, does
+not satisfy §5.2.6's grade A + B for the forecast product, and does not promote any
+registry row. Each `(provider, model)` still carries its own evidence, and §9.5 does not
+merge the two archive and forecast contracts (§6.6).
 
 ---
 
@@ -542,7 +632,9 @@ Nothing historical is re-interpreted. That is the property Option B cannot offer
 - **Grants, RLS, tenant isolation: untouched.** No new table, no new column, no policy.
 - **`requestParametersHash` (§9.3) does require a migration** — one column, one `CHECK`,
   and a rewritten `ingestionVersion` preimage. It is scheduled after the resolver
-  decision, not with it.
+  decision, not with it. **Forecast/seasonal only:** the climatology path opens no
+  `IngestionRun`, and its pinned parameters are already inside
+  `climatology_baselines.source_reference` (§9.5), so it needs no column and no migration.
 
 ---
 
@@ -720,7 +812,8 @@ owner-facing items, plus the questions this validation could not decide.
 | Hash preimage (D4) | Include unconditionally; regenerate 5 literals once | `grid.ts:186-218`; `grid.test.ts:100-130`; no stored hash | Recommended | **Yes** |
 | Resolver version (D5) | `grid-resolve/2` | `grid.ts:595-608`; no persisted resolution | Recommended | **Yes** |
 | `SpatialResolution` field (D6) | Add `cellSelection` | `grid.ts:618-636`; result is not persisted | Recommended | **Yes** (may defer) |
-| Provider `cell_selection` in ingest identity (D7) | `requestParametersHash` inside `ingestionVersion`, stored on `ingestion_runs`; adapter pins `nearest`; `land`/`sea` refused | `climate.ts:74-92`; `provenance-contract.md:150-190`; 7/8 sites (REPORTED) | Recommended | **Yes** |
+| Provider `cell_selection` in ingest identity (D7) — forecast/seasonal only | `requestParametersHash` inside `ingestionVersion`, stored on `ingestion_runs`; adapter pins `nearest`; `land`/`sea` refused | `climate.ts:74-92`; `provenance-contract.md:150-190`; 7/8 sites (REPORTED) | Recommended | **Yes** |
+| Climatology baseline identity | **No change.** Keep `source_reference` + `ClimatologySourceConflictError`; D7 adds no hash and no migration here | `packages/database/src/climatology.ts:281-333`; `apps/worker/src/ingest/climatology.ts:218,344-348`; `packages/weather-core/src/adapters/open-meteo-archive.ts:163-171` | No change proposed | No |
 | Idempotency sufficiency of D7 | Sufficient **with** the drift guard; the guard is the backstop, not optional | `weather.ts:195-254`; `tables-climate.md:246` | Recommended | **Yes** |
 | Top-of-window clamp (D3) | Clamp `colCount → colCount − 1` in nearest mode only | measured `179.99 → 179.75` (REPORTED); arithmetic VERIFIED | Recommended | **Yes** |
 | Exact `180` (D8) | Keep the documented fold; document the divergence | `climate-data-foundation.md:931-943`; measured `180 → 179.75` | Recommended | **Yes** |
@@ -741,6 +834,8 @@ owner-facing items, plus the questions this validation could not decide.
 3. Polar and seam behaviour rest on a handful of coordinates each.
 4. Grade A for `ecmwf_ifs025` is incomplete and its identifier→product mapping is grade C;
    the geometry itself is only grade B. Nothing in this ADR changes that.
+5. The archive adapter's two URL builders are not asserted to agree parameter-for-parameter
+   (§9.5, limit 1), so baseline source identity depends on two literals staying in sync.
 
 OWNER APPROVAL IS NOT IMPLIED BY ANY "Recommended" ABOVE.
 
@@ -763,6 +858,7 @@ What was actually executed, so a reader can tell evidence from assertion:
 | The 172-request corpus re-fetched | **not run** — it is outside the repository (§16.2) |
 | Any code, contract, fixture, registry or migration modified | **none** — this ADR is documentation only |
 | Terminology pass 2026-11-24: every `cell_selection` / `cellSelection` occurrence read | separated per §6.6; §9.2 rewritten to name the provider parameter |
+| D7 scope pass 2026-11-24: `apps/worker/src/ingest/climatology.ts`, `packages/weather-core/src/adapters/open-meteo-archive.ts`, `packages/database/src/climatology.ts` read | climatology opens no `IngestionRun` (`:218`, `:344-348`); `source_reference` carries the pinned parameters and is compared as identity; §9.5 states it and adds nothing |
 
 ---
 

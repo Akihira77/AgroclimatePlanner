@@ -367,8 +367,10 @@ proposal changes no code, contract, fixture or registry entry.
 `docs/adr/ADR-008-grid-cell-selection-semantics.md` turns questions 6 and 7 into ten
 numbered decisions (D1–D10) and marks every one **Recommended**, never accepted. It
 recommends Option A, an unconditional `cellSelection` field in the `gridSpecHash`
-preimage, `grid-resolve/2`, and a `requestParametersHash` inside `ingestionVersion`
-that is stored in a separate migration. It also records two arithmetic errata rather
+preimage, `grid-resolve/2`, and a `requestParametersHash` inside `ingestionVersion` for
+workflows that create an `IngestionRun` — stored in a separate migration. Climatology
+creates no `IngestionRun` and keeps its existing `source_reference` identity, so D7 adds no
+schema change there. It also records two arithmetic errata rather
 than editing their sources: the evidence report's §5 cell interval is
 `[n − step/2, n + step/2)`, and proposal §4.5's Option B vector set is 1, 4, 6, 8, 9,
 12, 13 and 15 (vector 10 is unaffected). It distinguishes the resolver field
