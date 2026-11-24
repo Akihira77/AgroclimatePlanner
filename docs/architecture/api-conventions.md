@@ -234,6 +234,12 @@ GET    /v1/monitoring/queues
 GET    /health  |  /health/ready
 ```
 
+`GET /v1/climate/outlook` also takes `provider` and `model`, and optionally
+`firstMonth`. They are the grid identity the read path resolves through the registry,
+named by the caller rather than derived from the field: `field_outlook_cells` has no
+writer, so a field → cell mapping is still `OPEN-18`. The response echoes all three, so
+a client never has to assume which grid or which twelve months it was answered for.
+
 ## 7. Write semantics
 
 - `POST` returns `201` + `Location`.

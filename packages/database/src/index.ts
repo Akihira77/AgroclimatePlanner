@@ -141,12 +141,15 @@ export type {
 } from "./climatology.js";
 export {
   findOutlookCellId,
+  loadActiveOutlookMonths,
   loadClimatologyOutlookSource,
   OutlookBaselineNotFoundError,
   OutlookCellNotFoundError,
   persistClimatologyOutlook,
 } from "./outlook.js";
 export type {
+  ActiveOutlookMonthRow,
+  ActiveOutlookMonths,
   ClimatologyOutlookMonthRow,
   ClimatologyOutlookSource,
   PersistClimatologyOutlookInput,

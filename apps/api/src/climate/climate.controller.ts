@@ -1,0 +1,39 @@
+import type { ClimateOutlook, ClimateOutlookQuery, Envelope } from "@agroclimate/contracts";
+import { climateOutlookQuerySchema } from "@agroclimate/contracts";
+import { Controller, Get, NotFoundException, Query, Req, UseGuards } from "@nestjs/common";
+
+import type { AuthenticatedRequest } from "../auth/auth.guard.js";
+import { AuthGuard, authenticatedUserId } from "../auth/auth.guard.js";
+import { ZodValidationPipe } from "../http/zod-validation.pipe.js";
+import { ClimateService } from "./climate.service.js";
+
+/**
+ * Climate read routes (`api-conventions.md` §5).
+ *
+ * `GET /v1/climate/outlook` answers the twelve-month horizon Phase 5.7A
+ * materialised: lead months 8–12 labelled `climatology` where a normal exists, and
+ * lead months 1–7 with no value — no product materialises them in this build.
+ *
+ * Same `AuthGuard` as the Farm and Field routes, so session handling, the CSRF
+ * rule for mutations, and the `Origin` middleware apply without a second
+ * mechanism. `GET` carries no mutation, so no CSRF token is required.
+ *
+ * A field that is missing, foreign, or deleted answers `FIELD_NOT_FOUND`,
+ * identically in all three cases. The grid failures the resolver raises keep their
+ * own codes (`GRID_NOT_FOUND`, `CELL_NOT_FOUND`); see `http/resolution-errors.ts`.
+ */
+@Controller("climate")
+@UseGuards(AuthGuard)
+export class ClimateController {
+  constructor(private readonly climate: ClimateService) {}
+
+  @Get("outlook")
+  async outlook(
+    @Req() request: AuthenticatedRequest,
+    @Query(new ZodValidationPipe(climateOutlookQuerySchema)) query: ClimateOutlookQuery,
+  ): Promise<Envelope<ClimateOutlook>> {
+    const outlook = await this.climate.outlook(authenticatedUserId(request), query);
+    if (outlook === null) throw new NotFoundException({ code: "FIELD_NOT_FOUND" });
+    return { data: outlook };
+  }
+}

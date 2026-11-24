@@ -238,6 +238,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@agroclimate/climate-core':
+        specifier: workspace:*
+        version: link:../../packages/climate-core
       '@agroclimate/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts

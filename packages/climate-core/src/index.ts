@@ -31,3 +31,11 @@ export {
   type ClimatologyOutcome,
   type DailyPrecipitationInput,
 } from "./climatology.js";
+export {
+  PENDING_OUTLOOK_REASON,
+  assembleOutlookHorizon,
+  type OutlookHorizonReadInput,
+  type OutlookReadFailureKind,
+  type OutlookReadOutcome,
+  type StoredOutlookMonth,
+} from "./outlook-read.js";

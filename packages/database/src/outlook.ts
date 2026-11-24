@@ -178,6 +178,89 @@ export async function loadClimatologyOutlookSource(
   return { baselineDataset: dataset.data, normals };
 }
 
+/** One active `monthly_outlooks` row, as the read path consumes it. */
+export interface ActiveOutlookMonthRow {
+  /** First day of the calendar month, `YYYY-MM-01`. */
+  readonly month: string;
+  /** `null` when the row records an absence; the column permits it, so the type does. */
+  readonly dataClass: string | null;
+  readonly evaluationBasis: string;
+  readonly valueMm: number | null;
+  readonly missingReason: string | null;
+  readonly baselineVersion: string | null;
+  readonly anomalyKind: string | null;
+  readonly anomalyMm: number | null;
+  readonly ensembleSpreadMm: number | null;
+  readonly spreadUnavailableReason: string | null;
+  readonly derivationVersion: string;
+}
+
+export interface ActiveOutlookMonths {
+  /** `null` when no cell row exists for the identity: nothing was ever resolved. */
+  readonly outlookCellId: string | null;
+  /** Ordered by month. At most one row per month, because a month may not repeat. */
+  readonly months: readonly ActiveOutlookMonthRow[];
+}
+
+/**
+ * The materialised answer for one cell over a closed month range.
+ *
+ * **Read-only.** It never mints a cell: resolution is the caller's business, and a
+ * read that writes would turn a `GET` into a migration.
+ *
+ * `status = 'active'` is the whole of the selection, and the partial unique index
+ * `monthly_outlooks_active_key` is what makes it sufficient — at most one active
+ * row exists per `(cell, variable, month)`, so a superseded answer can never be
+ * served beside its replacement.
+ *
+ * A range rather than a month list: the caller's horizon is twelve consecutive
+ * calendar months, so `month BETWEEN $a AND $b` is the same set and lets
+ * `monthly_outlooks_cell_month_idx` do the work. A `text[]` of keys would need a
+ * cast that Postgres does not define between `text[]` and `date[]`.
+ */
+export async function loadActiveOutlookMonths(
+  tx: TenantTransaction,
+  input: {
+    readonly provider: string;
+    readonly model: string;
+    readonly cellKey: string;
+    /** First month of the horizon, first-of-month. */
+    readonly fromMonth: string;
+    /** Last month of the horizon, first-of-month, inclusive. */
+    readonly toMonth: string;
+  },
+): Promise<ActiveOutlookMonths> {
+  const rows = await tx.$queryRaw<(ActiveOutlookMonthRow & { outlookCellId: string })[]>`
+    SELECT c.id::text                        AS "outlookCellId",
+           to_char(o.month, 'YYYY-MM-DD')    AS "month",
+           o.data_class                      AS "dataClass",
+           o.evaluation_basis                AS "evaluationBasis",
+           o.value_mm                        AS "valueMm",
+           o.missing_reason                  AS "missingReason",
+           o.baseline_version                AS "baselineVersion",
+           o.anomaly_kind                    AS "anomalyKind",
+           o.anomaly_mm                      AS "anomalyMm",
+           o.ensemble_spread_mm              AS "ensembleSpreadMm",
+           o.spread_unavailable_reason       AS "spreadUnavailableReason",
+           o.derivation_version              AS "derivationVersion"
+      FROM app.outlook_cells c
+      JOIN app.monthly_outlooks o ON o.outlook_cell_id = c.id
+     WHERE c.provider = ${input.provider}
+       AND c.model = ${input.model}
+       AND c.cell_key = ${input.cellKey}
+       AND o.variable = 'precipitation'
+       AND o.status = 'active'
+       AND o.month BETWEEN ${input.fromMonth}::date AND ${input.toMonth}::date
+     ORDER BY o.month
+  `;
+
+  const first = rows[0];
+  if (first === undefined) return { outlookCellId: null, months: [] };
+
+  const months = rows.map(({ outlookCellId: _cell, ...month }) => month);
+  return { outlookCellId: first.outlookCellId, months };
+}
+
 export interface PersistClimatologyOutlookOptions {
   /**
    * `true` when the caller already holds this cell's footprint lock for the

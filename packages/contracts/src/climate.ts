@@ -6,6 +6,7 @@ import {
   weatherDataClassSchema,
   type WeatherDataClass,
 } from "./enums.js";
+import { fieldIdSchema } from "./field.js";
 import { dataInputRefSchema } from "./provenance.js";
 import { sha256Hex } from "./hash.js";
 import { canonicalJson } from "./canonical.js";
@@ -624,13 +625,54 @@ export const outlookMonthSchema = z
   });
 export type OutlookMonth = z.infer<typeof outlookMonthSchema>;
 
+/** One issue about the horizon axis, path relative to the horizon object. */
+interface HorizonIssue {
+  readonly path: (string | number)[];
+  readonly message: string;
+}
+
+/**
+ * The twelve-entry rule, in one place because two schemas apply it: entry `i` is
+ * lead month `i + 1`, and lead month `n` names `calendarMonthOf(firstMonth, n)`.
+ * A duplicate therefore also leaves a gap.
+ *
+ * An off-axis `firstMonth` is reported alone, because every entry would otherwise
+ * repeat the same consequence.
+ */
+function horizonIssues(
+  firstMonth: string,
+  months: readonly { readonly leadMonth: number; readonly month: string }[],
+): HorizonIssue[] {
+  if (firstMonth.slice(8, 10) !== "01") {
+    return [
+      { path: ["firstMonth"], message: "firstMonth must be the first day of a calendar month" },
+    ];
+  }
+
+  const issues: HorizonIssue[] = [];
+  months.forEach((month, index) => {
+    const expectedLeadMonth = index + 1;
+    if (month.leadMonth !== expectedLeadMonth) {
+      issues.push({
+        path: ["months", index, "leadMonth"],
+        message: `entry ${index} must be lead month ${expectedLeadMonth}; entries are ordered 1–12`,
+      });
+    }
+    const expectedMonth = calendarMonthOf(firstMonth, expectedLeadMonth);
+    if (month.month !== expectedMonth) {
+      issues.push({
+        path: ["months", index, "month"],
+        message: `lead month ${expectedLeadMonth} of ${firstMonth} is ${expectedMonth}`,
+      });
+    }
+  });
+  return issues;
+}
+
 /**
  * A complete rolling outlook: twelve months, lead months 1–12 in order, each
  * bound to its calendar month. The array is a **sequence**, so position carries
  * meaning and no normalisation is attempted.
- *
- * One equality per index enforces range, completeness, uniqueness, and order:
- * entry `i` must be lead month `i + 1`. A duplicate therefore also leaves a gap.
  */
 export const monthlyOutlookHorizonSchema = z
   .strictObject({
@@ -639,32 +681,9 @@ export const monthlyOutlookHorizonSchema = z
     months: z.array(outlookMonthSchema).length(12),
   })
   .superRefine((horizon, ctx) => {
-    if (horizon.firstMonth.slice(8, 10) !== "01") {
-      ctx.addIssue({
-        code: "custom",
-        path: ["firstMonth"],
-        message: "firstMonth must be the first day of a calendar month",
-      });
-      return;
+    for (const issue of horizonIssues(horizon.firstMonth, horizon.months)) {
+      ctx.addIssue({ code: "custom", ...issue });
     }
-    horizon.months.forEach((month, index) => {
-      const expectedLeadMonth = index + 1;
-      if (month.leadMonth !== expectedLeadMonth) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["months", index, "leadMonth"],
-          message: `entry ${index} must be lead month ${expectedLeadMonth}; entries are ordered 1–12`,
-        });
-      }
-      const expectedMonth = calendarMonthOf(horizon.firstMonth, expectedLeadMonth);
-      if (month.month !== expectedMonth) {
-        ctx.addIssue({
-          code: "custom",
-          path: ["months", index, "month"],
-          message: `lead month ${expectedLeadMonth} of ${horizon.firstMonth} is ${expectedMonth}`,
-        });
-      }
-    });
   });
 export type MonthlyOutlookHorizon = z.infer<typeof monthlyOutlookHorizonSchema>;
 
@@ -681,3 +700,170 @@ export const monthlyOutlookSchema = outlookMonthSchema.extend({
   supersededById: z.uuid({ version: "v7" }).nullable(),
 });
 export type MonthlyOutlook = z.infer<typeof monthlyOutlookSchema>;
+
+/* ------------------------------------------------------------------ *
+ * Monthly value estimator — Q-P5-7, resolved 2026-11-24
+ * ------------------------------------------------------------------ */
+
+/**
+ * How `valueMm` was estimated. Both estimators answer one question — the expected
+ * precipitation accumulation of a single calendar month, in mm — over different
+ * populations, and neither is a realised total.
+ *
+ * - `ensemble_mean`: the arithmetic mean of the 50 SEAS5 members' monthly totals
+ *   for one initialisation, i.e. the provider's `precipitation_mean`. Measured on
+ *   2026-11-23: the mean of the per-member monthly sums reproduces that column for
+ *   all seven months (ratios 0.989–1.011, the provider's 0.1 mm rounding), so the
+ *   provider quantity and the member series describe the same thing.
+ * - `climatological_mean`: the arithmetic mean of the baseline years' monthly
+ *   totals for one calendar month — a historical normal, never a forecast.
+ */
+export const monthlyOutlookEstimatorSchema = z.enum(["ensemble_mean", "climatological_mean"]);
+export type MonthlyOutlookEstimator = z.infer<typeof monthlyOutlookEstimatorSchema>;
+
+/**
+ * The approved mapping, and the whole of it. A class absent from this object has
+ * **no** approved estimator, so a value that claims one is unrepresentable rather
+ * than guessed.
+ *
+ * No estimator column exists: the mapping is total over the classes v1 can
+ * produce, so `data_class` determines it and a stored copy could only drift from
+ * the contract. A second estimator for the same class would need the column.
+ */
+const ESTIMATOR_BY_DATA_CLASS: Readonly<
+  Partial<Record<WeatherDataClass, MonthlyOutlookEstimator>>
+> = {
+  seasonal_forecast: "ensemble_mean",
+  climatology: "climatological_mean",
+};
+
+/** `null` when there is no class, or when the class has no approved monthly estimator. */
+export function estimatorForDataClass(
+  dataClass: WeatherDataClass | null,
+): MonthlyOutlookEstimator | null {
+  if (dataClass === null) return null;
+  return ESTIMATOR_BY_DATA_CLASS[dataClass] ?? null;
+}
+
+/* ------------------------------------------------------------------ *
+ * Monthly outlook read path — 5.7B
+ * ------------------------------------------------------------------ */
+
+/**
+ * One served month: the stored month state (`outlookMonthSchema`) plus what a
+ * consumer needs in order to read the number honestly — the estimator that
+ * produced it, the unit, and the derivation that wrote the row.
+ *
+ * `unit` is repeated per month on purpose. `valueMm` already carries mm in its
+ * name, and a consumer that has to recover a unit from a field name is one
+ * refactor away from rendering a ratio as millimetres.
+ *
+ * A month with no value carries no estimator and no derivation: nothing produced
+ * it, and naming a derivation would attribute a formula to an absence.
+ */
+export const climateOutlookMonthSchema = outlookMonthSchema
+  .extend({
+    unit: z.literal("mm"),
+    estimator: monthlyOutlookEstimatorSchema.nullable(),
+    /** The derivation that wrote the row; `null` when no row exists for the month. */
+    derivationVersion: z.string().min(1).nullable(),
+  })
+  .superRefine((month, ctx) => {
+    const expected = estimatorForDataClass(month.dataClass);
+
+    if (month.dataClass === null) {
+      if (month.estimator !== null) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["estimator"],
+          message: "a month with no value cannot carry an estimator",
+        });
+      }
+      if (month.derivationVersion !== null) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["derivationVersion"],
+          message: "a month with no value cannot name a derivation",
+        });
+      }
+      return;
+    }
+
+    if (expected === null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["dataClass"],
+        message: `dataClass "${month.dataClass}" has no approved monthly estimator`,
+      });
+      return;
+    }
+
+    if (month.estimator !== expected) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["estimator"],
+        message: `dataClass "${month.dataClass}" is estimated by "${expected}", not "${month.estimator}"`,
+      });
+    }
+
+    if (month.derivationVersion === null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["derivationVersion"],
+        message: "a month with a value must name the derivation that produced it",
+      });
+    }
+  });
+export type ClimateOutlookMonth = z.infer<typeof climateOutlookMonthSchema>;
+
+/**
+ * `GET /v1/climate/outlook` — Phase 5.7B.
+ *
+ * `provider`/`model` are the grid identity, named by the caller. The API holds no
+ * persisted field→cell mapping (`field_outlook_cells` has no writer; 5.2 defers
+ * it), so the resolution is the same explicit registry lookup
+ * `POST /v1/fields/:fieldId/resolve-cell` performs. Deriving a model from a field
+ * would be inventing a mapping.
+ *
+ * `firstMonth` is optional and is echoed in the response. There is no stored
+ * "current horizon": an outlook is materialised for the twelve months starting at
+ * the month its `aggregate` job named. Omitting it asks for the horizon beginning
+ * with the current Asia/Jakarta month — what a dashboard means — and the response
+ * states which horizon it answered, so the caller never has to assume.
+ */
+export const climateOutlookQuerySchema = z.strictObject({
+  fieldId: fieldIdSchema,
+  provider: z.string().min(1).max(64),
+  model: z.string().min(1).max(128),
+  firstMonth: isoDateSchema
+    .refine((month) => month.slice(8, 10) === "01", {
+      message: "firstMonth must be the first day of a calendar month",
+    })
+    .optional(),
+});
+export type ClimateOutlookQuery = z.infer<typeof climateOutlookQuerySchema>;
+
+/**
+ * The twelve-month horizon as served.
+ *
+ * Every month is present, including the ones with no row. A month that was never
+ * materialised is `pending` with no value: it is not zero, and it is not
+ * `ingest_failed` — nothing stores the cause of a failed outlook derivation, so
+ * the read path cannot claim one.
+ */
+export const climateOutlookSchema = z
+  .strictObject({
+    fieldId: z.uuid(),
+    provider: z.string().min(1),
+    model: z.string().min(1),
+    firstMonth: isoDateSchema,
+    /** The unit every month's `valueMm` is expressed in. */
+    unit: z.literal("mm"),
+    months: z.array(climateOutlookMonthSchema).length(12),
+  })
+  .superRefine((outlook, ctx) => {
+    for (const issue of horizonIssues(outlook.firstMonth, outlook.months)) {
+      ctx.addIssue({ code: "custom", ...issue });
+    }
+  });
+export type ClimateOutlook = z.infer<typeof climateOutlookSchema>;

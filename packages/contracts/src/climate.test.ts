@@ -3,18 +3,22 @@ import {
   LEAD_MONTHS,
   adapterResultSchema,
   calendarMonthOf,
+  climateOutlookQuerySchema,
+  climateOutlookSchema,
   coveragePercentOf,
+  estimatorForDataClass,
   forecastRunIdentitySchema,
   forecastRunSchema,
   ingestionRunIdentitySchema,
   ingestionRunSchema,
   ingestionVersionOf,
+  climateOutlookMonthSchema,
   monthlyOutlookHorizonSchema,
   monthlyOutlookSchema,
   outlookMonthSchema,
   permittedMonthlyDataClasses,
 } from "../src/climate.js";
-import { evaluationBasisSchema, weatherValueSchema } from "../src/index.js";
+import { evaluationBasisSchema, weatherDataClassSchema, weatherValueSchema } from "../src/index.js";
 import { derivationProvenanceSchema } from "../src/provenance.js";
 
 const HASH = "a".repeat(64);
@@ -893,5 +897,139 @@ describe("Monthly source capability — a month needs a monthly product", () => 
       spreadUnavailableReason: "below_coverage_threshold",
     };
     expect(outlookMonthSchema.safeParse(noMonthlyProduct).success).toBe(true);
+  });
+});
+
+describe("monthly outlook estimator — Q-P5-7", () => {
+  it("maps the two approved classes and gives every other class no estimator", () => {
+    expect(estimatorForDataClass("seasonal_forecast")).toBe("ensemble_mean");
+    expect(estimatorForDataClass("climatology")).toBe("climatological_mean");
+    expect(estimatorForDataClass(null)).toBeNull();
+
+    for (const dataClass of weatherDataClassSchema.options) {
+      if (dataClass === "seasonal_forecast" || dataClass === "climatology") continue;
+      expect(estimatorForDataClass(dataClass)).toBeNull();
+    }
+  });
+
+  const climatologyMonth = {
+    leadMonth: 9,
+    month: "2027-07-01",
+    dataClass: "climatology",
+    evaluationBasis: "climatology",
+    valueMm: 143.75,
+    missingReason: "beyond_horizon",
+    baselineVersion: "era5-1991-2020-v3",
+    anomalyKind: null,
+    ensembleSpreadMm: null,
+    spreadUnavailableReason: "climatology_has_no_ensemble",
+    unit: "mm",
+    estimator: "climatological_mean",
+    derivationVersion: "climatology-outlook@1.0.0",
+  };
+
+  it("accepts a climatology month carrying climatological_mean", () => {
+    expect(climateOutlookMonthSchema.safeParse(climatologyMonth).success).toBe(true);
+  });
+
+  it("refuses an estimator that does not follow from the data class", () => {
+    const swapped = { ...climatologyMonth, estimator: "ensemble_mean" };
+    expect(climateOutlookMonthSchema.safeParse(swapped).success).toBe(false);
+  });
+
+  it("refuses a valued month with no derivation, and a valueless month with one", () => {
+    expect(
+      climateOutlookMonthSchema.safeParse({ ...climatologyMonth, derivationVersion: null }).success,
+    ).toBe(false);
+
+    const valueless = {
+      ...climatologyMonth,
+      dataClass: null,
+      evaluationBasis: "monthly",
+      valueMm: null,
+      missingReason: "pending",
+      baselineVersion: null,
+      ensembleSpreadMm: null,
+      spreadUnavailableReason: "no_value",
+      estimator: null,
+      derivationVersion: null,
+    };
+    expect(climateOutlookMonthSchema.safeParse(valueless).success).toBe(true);
+    expect(
+      climateOutlookMonthSchema.safeParse({
+        ...valueless,
+        estimator: "climatological_mean",
+      }).success,
+    ).toBe(false);
+    expect(
+      climateOutlookMonthSchema.safeParse({ ...valueless, derivationVersion: "x@1" }).success,
+    ).toBe(false);
+  });
+
+  /** Lead 1–7 have no monthly product in this build; 8–12 carry a climatology normal. */
+  const entryFor = (leadMonth: number) => {
+    const month = calendarMonthOf("2026-11-01", leadMonth);
+    if (leadMonth >= 8) return { ...climatologyMonth, leadMonth, month };
+    return {
+      leadMonth,
+      month,
+      dataClass: null,
+      evaluationBasis: "monthly",
+      valueMm: null,
+      missingReason: "not_requested",
+      baselineVersion: null,
+      anomalyKind: null,
+      ensembleSpreadMm: null,
+      spreadUnavailableReason: "no_value",
+      unit: "mm",
+      estimator: null,
+      derivationVersion: null,
+    };
+  };
+
+  it("binds the served horizon to its firstMonth, one entry per lead month", () => {
+    const months = LEAD_MONTHS.map(entryFor);
+    const outlook = {
+      fieldId: "0192f0aa-0000-7000-8000-0000000000aa",
+      provider: "ecmwf",
+      model: "seas5",
+      firstMonth: "2026-11-01",
+      unit: "mm",
+      months,
+    };
+
+    expect(climateOutlookSchema.safeParse(outlook).success).toBe(true);
+    expect(climateOutlookSchema.safeParse({ ...outlook, firstMonth: "2026-11-15" }).success).toBe(
+      false,
+    );
+    expect(
+      climateOutlookSchema.safeParse({
+        ...outlook,
+        months: LEAD_MONTHS.map((leadMonth) => entryFor(leadMonth === 1 ? 2 : leadMonth)),
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("climate outlook query", () => {
+  it("requires a first-of-month horizon and rejects unknown keys", () => {
+    const base = {
+      fieldId: "0192f0aa-0000-7000-8000-0000000000aa",
+      provider: "ecmwf",
+      model: "seas5",
+    };
+
+    expect(climateOutlookQuerySchema.safeParse(base).success).toBe(true);
+    expect(climateOutlookQuerySchema.safeParse({ ...base, firstMonth: "2026-11-01" }).success).toBe(
+      true,
+    );
+    expect(climateOutlookQuerySchema.safeParse({ ...base, firstMonth: "2026-11-15" }).success).toBe(
+      false,
+    );
+    // A client-supplied coordinate, cell key, or baseline would be a mapping this
+    // build does not have, and the query contract refuses to accept one.
+    for (const extra of [{ lat: "-6.15" }, { cellKey: "-7.00,106.00" }, { baselineVersion: "x" }]) {
+      expect(climateOutlookQuerySchema.safeParse({ ...base, ...extra }).success).toBe(false);
+    }
   });
 });

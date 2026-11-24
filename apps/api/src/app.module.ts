@@ -9,6 +9,7 @@ import { ConfigModule } from "./config/config.module.js";
 import type { DatabaseClientFactory } from "./database/database.module.js";
 import { DatabaseModule } from "./database/database.module.js";
 import { AuthModule } from "./auth/auth.module.js";
+import { ClimateModule } from "./climate/climate.module.js";
 import { FarmModule } from "./farm/farm.module.js";
 import { FieldModule } from "./field/field.module.js";
 import { HealthModule } from "./health/health.module.js";
@@ -33,6 +34,11 @@ export interface AppDependencies {
 @Module({})
 export class AppModule {
   static register(deps: AppDependencies): DynamicModule {
+    // One value, bound twice: the resolution route and the climate read route must
+    // resolve the same coordinates to the same cell, and two constructions would be
+    // two registries that could drift apart.
+    const gridRegistry = deps.gridRegistry ?? syntheticGridRegistry;
+
     return {
       module: AppModule,
       imports: [
@@ -40,7 +46,8 @@ export class AppModule {
         DatabaseModule.register(deps.config, deps.createDatabaseClient),
         AuthModule.register(deps.config, deps.createDatabaseClient),
         FarmModule,
-        FieldModule.register(deps.gridRegistry ?? syntheticGridRegistry),
+        FieldModule.register(gridRegistry),
+        ClimateModule.register(gridRegistry),
         HealthModule,
       ],
     };

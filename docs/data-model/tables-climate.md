@@ -292,7 +292,7 @@ Notes:
 | `month` | `date` | no | — | first day of the month, `CHECK (EXTRACT(DAY FROM month) = 1)`; Asia/Jakarta calendar |
 | `data_class` | `text` | yes | — | `WeatherDataClass`; `NULL` only for a month with no value |
 | `evaluation_basis` | `text` | no | — | `CHECK (IN ('monthly','climatology'))` |
-| `value_mm` | `double precision` | yes | — | `CHECK (>= 0)`; `NULL` when nothing may be claimed |
+| `value_mm` | `double precision` | yes | — | estimated precipitation **accumulation for one calendar month, in mm** (`Q-P5-7`, resolved 2026-11-24). The estimator follows from `data_class`: `seasonal_forecast` → `ensemble_mean` (mean of the 50 members' monthly totals), `climatology` → `climatological_mean` (mean of the baseline years' monthly totals). Neither is a realised total, and no daily aggregate mean is ever stored as one. `CHECK (>= 0)`; `NULL` when nothing may be claimed |
 | `missing_reason` | `text` | yes | — | `MissingReason`; see the state table below |
 | `anomaly_kind` | `text` | yes | — | `CHECK (IN ('model_anomaly','baseline_difference'))` |
 | `anomaly_mm` | `double precision` | yes | — | primary anomaly, mm (ADR-001 D3) |
@@ -366,6 +366,15 @@ Notes:
 - No `data_availability` column: availability is computed at read time
   (`temporal-and-weather-semantics.md` §5). Storing it would let a stale value
   persist as `available`.
+- **`value_mm` is a monthly accumulation estimated by a named rule, not a provider
+  column copied across.** `Q-P5-7` settled the quantity on 2026-11-24: mm per
+  calendar month, with the estimator determined by `data_class` through
+  `estimatorForDataClass` in `packages/contracts/src/climate.ts`. There is
+  deliberately no `estimator` column — the mapping is total over the classes v1 can
+  write, and a stored copy could only drift from the contract. A second estimator
+  for one class would be the change that needs the column. `precipitation_mean`
+  keeps its own name in `weather_records`; it is the provider's cross-check, never
+  the stored outlook value.
 - Not tenant-owned. Nothing here names a field: the field→month join is
   `field_outlook_cells` + `monthly_outlooks`, resolved at read time, so a new run
   does not need to touch any tenant row.

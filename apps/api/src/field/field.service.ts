@@ -31,7 +31,7 @@ import {
 } from "@agroclimate/database";
 
 import { DATABASE_CLIENT, GRID_REGISTRY } from "../tokens.js";
-import { rethrowCellResolutionError } from "./cell-errors.js";
+import { rethrowCellResolutionError } from "../http/resolution-errors.js";
 import { rethrowFieldWriteError } from "./field-errors.js";
 
 /**

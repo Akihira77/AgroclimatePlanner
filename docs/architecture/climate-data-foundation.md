@@ -414,7 +414,9 @@ duplicate, a reversal, or an unparseable key is `provider_changed` at the adapte
 `invalid_payload` at the normalizer, naming the index and both months. The normalizer
 enforces the same rule with the same function, because it is a separate boundary and
 may later receive a monthly series from another source. This says nothing about what
-`precipitation_mean` means — that is still `F-09` / `Q-P5-7`.
+`precipitation_mean` means — that is `F-09`, resolved 2026-11-24: the mean of the 50
+per-member monthly sums is the `ensemble_mean` estimate that `value_mm` carries for a
+`seasonal_forecast` month.
 
 `initializedAt` is supplied by the
 caller and recorded as `initializedAtSource: 'request_configuration'`, because the
@@ -423,10 +425,12 @@ every freshness calculation downstream.
 
 **The adapter stops at the provider's quantity.** It returns `variable:
 'precipitation_mean'`, the provider's own `unit` string, and the untouched values. It
-does not produce `valueMm`, a monthly total, an anomaly, or a `dataClass`. The domain
-meaning of `monthly_outlooks.value_mm` for a `precipitation_mean` row is undecided
-(`F-09` / `Q-P5-7`): a mean is not an amount, and converting one into the other would be
-a scientific claim nobody has made.
+does not produce `valueMm`, a monthly total, an anomaly, or a `dataClass`; that
+division of labour is unchanged by `F-09`. What `F-09` settled (2026-11-24) is the
+downstream quantity: `monthly_outlooks.value_mm` for a `seasonal_forecast` month is the
+**mean of the members' monthly totals** — `ensemble_mean` — and never a daily mean read
+as an amount. The provider's `precipitation_mean` is the cross-check that the two agree
+(ratios 0.989–1.011), not the stored value itself.
 
 The monthly normalizer validates and orders; it converts nothing. Only `mm` is
 accepted, a null stays `provider_null` with no value, a negative or non-finite value is
@@ -1353,7 +1357,7 @@ new file, dependency, or sub-phase.
 | **F-06** | `defineGridSpec` copies and freezes `latRange`/`lonRange`, freezes the spec, and the registry stores a re-defined frozen spec rather than the caller's object |
 | **F-07** | Complete/partial is decided by `answeredCells` vs `requestedCells` only. A rounded 100 from an incomplete answer stays `partial`; the percentage is display, not status. `ingestion_runs` stores no counts, so `status` is the authority there and a `partial` row may read 100 — no migration needed |
 | **F-08** | 5.1 adds a real `@agroclimate/weather-core` package — transport, failure union, SEAS5 monthly adapter, monthly normalizer — with no dependency beyond the workspace `zod` catalogue entry. Transport owns bytes/status/timeout/body cap and nothing else; adapters classify, they never retry; the normalizer refuses instead of converting |
-| **F-09** | `precipitation_mean` is a **mean**, and `MonthlyOutlook.valueMm` reads as a monthly amount. No approved definition says they are the same quantity, so the adapter and normalizer stop at the provider-native series and populate no `valueMm`. The decision — whether a monthly outlook stores a mean, a total derived by an approved rule, or gains a separate column — is `Q-P5-7`, owner-owned and open |
+| **F-09** | **Resolved 2026-11-24 (`Q-P5-7`).** `monthly_outlooks.value_mm` is an estimated precipitation **accumulation for one calendar month, in mm**, and the estimator is named per `data_class`: `seasonal_forecast` → `ensemble_mean` (arithmetic mean of the 50 SEAS5 members' monthly totals for one initialisation), `climatology` → `climatological_mean` (mean of the qualifying baseline years' monthly totals for that calendar month). The mapping is derived in `packages/contracts/src/climate.ts` (`estimatorForDataClass`) and carried on every served month, so no client has to infer a forecast from a number; no estimator column was added. `precipitation_mean` was not renamed and is not a daily aggregate: the mean of the 50 per-member monthly sums reproduces it (ratios 0.989–1.011), which is why the member-total mean is the admissible reading. A climatology month is a historical normal, never a forecast; a seasonal month is an ensemble estimate, never a guarantee |
 | **F-10** | A seven-row monthly axis is not a seven-month forecast: strictly increasing keys can still skip a month. The adapter and the normalizer both require each key to be the calendar successor of the previous one, using one shared `year * 12 + month` adjacency check (`calendar-month.ts`) with no `Date` and no elapsed-time division. Row count alone is never completeness |
 
 Capability status after 5.2, stated so no reader infers more than exists:
@@ -1544,16 +1548,35 @@ Settlement authority is unaffected: it is checked inside the same transaction
 that holds the row lock, so the reaper cannot reclaim the row until the
 transaction ends, and a rollback leaves it reclaimable.
 
-**Not delivered, and deliberately not claimed:** `GET /v1/climate/outlook`, any
-field→cell mapping, `field_outlook_cells` writes, seasonal materialisation
-(`Q-P5-7`), mean→total conversion, ensemble spread, probabilities/terciles/
-confidence, temperature outlooks, bias correction, skill. The read path is absent
-because the data it would read is still only climatology: a 12-month response now
-would be five real months and seven empty ones, and nothing schedules `aggregate`
-yet (Phase 6 owns the fan-out).
+**Not delivered by 8.7A, and deliberately not claimed there:** the read route
+(§8.7B delivers it), any field→cell mapping, `field_outlook_cells` writes, seasonal
+materialisation, mean→total conversion, ensemble spread, probabilities/terciles/
+confidence, temperature outlooks, bias correction, skill.
 
-Phase 5.7 is therefore **not complete**. The acceptance row above remains the
-target and needs `Q-P5-7` plus the seasonal path to be met.
+Phase 5.7 is therefore **not complete**. The acceptance row above remains the target and
+needs the seasonal path to be met: with climatology alone, five months carry a value and
+seven are honestly empty.
+
+#### 8.7B Climatology-only read API (delivered 2026-11-24)
+
+`GET /v1/climate/outlook?fieldId=…&provider=…&model=…[&firstMonth=…]` serves the twelve
+months §8.7A materialised, behind the same `AuthGuard` as the Farm and Field routes.
+
+| Boundary | Rule | Why |
+|---|---|---|
+| Resolution | The field's stored geometry → `selectFieldAnchor` → registry `specFor`/`evidenceFor` → `createSpatialResolution`; the cell id is **looked up**, never created | `field_outlook_cells` has no writer (5.2 defers it), so there is no persisted mapping to read. Minting on a `GET` would make a read into a migration, and a coordinate guess would be a mapping nobody approved (`OPEN-18`) |
+| Selection | `status = 'active'`, `variable = 'precipitation'`, `month BETWEEN firstMonth AND firstMonth + 11` | `monthly_outlooks_active_key` guarantees at most one active row per cell-month, so a superseded answer can never sit beside its replacement; the range uses `monthly_outlooks_cell_month_idx` |
+| Absence | A month with no row is served with `valueMm: null`, `dataClass: null`, no estimator and no derivation — lead 1–7 → `not_requested`, lead 8–12 → `pending` | `input_refs` is `NOT NULL` with ≥ 1 ref, so a no-value month is never a row. `pending` is the weakest true claim: `ingest_failed` would need evidence nothing retains, and `insufficient_history` would need a baseline the read path never consults |
+| Zero | Never served for an absent month | A zero is a measurement. Filling one would be the fabricated value `C5` forbids |
+| Estimator | `estimatorForDataClass(data_class)` is emitted per month, with `unit: "mm"` and the row's `derivationVersion` | `Q-P5-7` says the client must not infer a forecast from a number. A row whose class has no approved estimator, or whose stored state contradicts the response contract, is a stored-state defect and surfaces as an error — not as a silently dropped month |
+| Tenancy | The field anchor is read inside `withTenant`; a foreign, missing, or soft-deleted field is `FIELD_NOT_FOUND`, identically in all three cases | Grid lookup happens after the field is resolved, so a foreign `fieldId` never becomes a registry query |
+| Horizon | `firstMonth` is optional; omitted means the current Asia/Jakarta month, and the response always states the horizon it answered | `monthly_outlooks` stores target months, not "the current answer". A caller must never have to assume which twelve months it received |
+
+Unchanged by 8.7B: seasonal materialisation, ensemble spread (investigated, not decided —
+`docs/review/seasonal-spread-investigation.md`), and the production field→cell mapping. The
+route resolves the grid the caller names, so it cannot claim end-to-end readiness for a
+mapping that does not exist.
+
 
 ### 8.8 Phase 5.8 — data quality and operations
 

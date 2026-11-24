@@ -552,10 +552,55 @@ they do not change the 29-item count in §1 or §3.
 | `Q-P5-4` | CHIRPS v3.0 is preferred as the climatology baseline once a lawful, reachable route exists; ERA5 is the labelled fallback | `data.chc.ucsb.edu` timed out on 2026-11-18, and GEE's commercial terms are unevaluated | The baseline dataset, not the schema | **External evidence** | A fetched CHIRPS month from a reachable route, with commercial terms confirmed, or a decision to ship ERA5 permanently |
 | `Q-P5-5` | A month is one source product; a month assembled from more than one product is not representable and is not permitted | `monthly_outlooks` has one `data_class` column and `MonthlyOutlook` one `dataClass` field; §5.5 rule 4 says "never blended". Supporting a mixed month needs an aggregation rule, a provenance shape for the split, and a schema change | `MONTHLY_OUTLOOK_BANDS`, `outlookMonthSchema`, `monthly_outlooks.data_class`, the aggregator in 5.7 | **Deferred** — the single-source rule is implemented and tested; mixed-source is not | A month where the only honest value needs two products, plus an owner decision on how to label and prove it |
 | `Q-P5-6` | Whether a calendar month may be aggregated from **one product's daily values** (`weather_forecast` from Open-Meteo, `subseasonal_forecast` from EC46), and at what coverage threshold | Neither product returns a monthly statistic (`models=ecmwf_ec46&monthly=…` returns 0 rows; Open-Meteo reaches 16 d), so a month from them needs a daily→monthly rule and the coverage threshold, which has no owner decision yet. `monthly_outlooks.data_coverage_percent` exists for exactly this and is currently unpopulated | `MONTHLY_OUTLOOK_BANDS` (would gain `weather_forecast` / `subseasonal_forecast`), `outlookMonthSchema.dataCoveragePercent`, `monthly_outlooks.data_coverage_percent`, the aggregator in 5.7 | **Deferred** — monthly bands accept `seasonal_forecast` (1–7) and `climatology` (8–12) only | A measured coverage distribution per product, plus an owner decision on the threshold and on whether a partial month may be labelled at all |
-| `Q-P5-7` | Whether a monthly outlook stores **`precipitation_mean`** (a provider mean), a month **total** derived by an approved rule, or a separate column per quantity (`F-09`) | SEAS5's only verified monthly precipitation variable is `precipitation_mean`, and `monthly_outlooks.value_mm` reads as an amount. A mean silently stored in an amount column is a wrong number with a right-looking unit, and no approved conversion exists | `MonthlyOutlook.valueMm`, `monthly_outlooks.value_mm` (+ a possible unit/quantity column), the monthly normalizer, the UI label | **Deferred** — 5.1 stops at the provider-native series and populates no `valueMm`; the adapter and normalizer are not blocked by it | A provider-documented monthly total, or an owner decision that a mean may be labelled as one, or a schema change to carry both |
+| `Q-P5-7` | `monthly_outlooks.value_mm` holds an **estimated precipitation accumulation for one calendar month, in mm**, and the estimate's basis is named per `data_class`: `seasonal_forecast` → `ensemble_mean`, `climatology` → `climatological_mean` (`F-09`) | A single amount column is only honest if every filler of it says how the amount was estimated. Two estimators cover the two classes v1 can write, and neither is a realised total, so the read path must state the estimator rather than let a client infer a forecast from a number | `MonthlyOutlook.valueMm`, `monthly_outlooks.value_mm`, `outlookMonthSchema`, `climateOutlookSchema`, the monthly normalizer, the climatology aggregator, the UI label | **RESOLVED 2026-11-24 — owner-approved.** No estimator column was added: the mapping is total over the classes v1 can produce, so it is derived from `data_class` in `packages/contracts/src/climate.ts`; see the amendment below | A second approved estimator for the same `data_class` (needs a column), a provider-documented monthly total that makes `precipitation_mean` unnecessary, or a class with no approved estimator being written |
 
 | `Q-P5-8` | **Which** `baseline_version` an outlook materialisation uses, and when a new one replaces a stored answer | `monthly_outlooks` has a free-form `baseline_version` per row and no "current baseline" pointer. Multiple versions can coexist (`climatology_baselines` is append-only), so "latest" is not a defined rule: `computed_at` orders builds, not approvals, and silently moving every stored outlook to a newer baseline would change published numbers with no decision behind it. Phase 5.7A therefore **refuses to select**: `baselineVersion` is an explicit `aggregate` job payload field, and an unknown version is terminal `baseline_unknown` | `aggregate` job payload, `packages/database/src/outlook.ts`, the read path, any future scheduler (Phase 6) | **Deferred** — fail-closed explicit input is implemented; no selection policy exists | An owner decision naming the rule (a promotion flag on `climatology_baselines`, a config value, or an explicit operator action per baseline), plus the fan-out that would use it |
 
 Recording `Q-P5-1` was not implementing it; Phase 5.3 did that later. `app.jobs`, the
 queue module, and the runner now exist, and still no Redis or BullMQ dependency was
 added. `background-processing.md` §2.1 carries the same status.
+
+### Amendment — `Q-P5-7` resolved (2026-11-24)
+
+The owner decided the quantity, and with it the only defensible reading of the column.
+Five things are now contract, not interpretation:
+
+1. **The quantity.** `monthly_outlooks.value_mm` is an estimated precipitation
+   **accumulation for one calendar month**, expressed in **millimetres per calendar
+   month**. It is not a daily mean, not a rate, and not a monthly mean scaled by a
+   month length. A consumer that needs a different period must convert explicitly and
+   label the conversion; nothing in the contract performs one.
+2. **The estimator, per class.** `data_class = 'seasonal_forecast'` means
+   `ensemble_mean`: the arithmetic mean of the **50 SEAS5 members' monthly totals** for
+   one initialisation. `data_class = 'climatology'` means `climatological_mean`: the
+   arithmetic mean of the monthly totals of the **qualifying baseline years** for that
+   calendar month. The two are different populations answering the same question, and
+   they are never interchanged.
+3. **The mapping is deterministic and derived, not stored.** `data_class` selects the
+   estimator through one table in `packages/contracts/src/climate.ts`
+   (`estimatorForDataClass`). A class absent from that table has **no** approved monthly
+   estimator, so a value carrying one is unrepresentable rather than guessed. No
+   estimator column was added in v1: two estimators for one class — the only thing a
+   column would buy — is exactly the case the contract refuses.
+4. **Climatology is a historical normal, never a forecast.** A `climatology` month
+   answers "what this month usually brings", computed from complete baseline years. It
+   is not a prediction for the coming year and must not be labelled as one. This is why
+   `monthly_outlooks_beyond_horizon_check` and `MONTHLY_OUTLOOK_BANDS` keep it out of
+   lead months 1–7.
+5. **A seasonal value is an ensemble estimate, not a guarantee.** The mean of 50 members
+   describes the centre of the ensemble's distribution for that initialisation. It says
+   nothing about spread, and nothing about what will be realised; the spread columns
+   exist and stay unpopulated until the spread policy is decided (see
+   `docs/review/seasonal-spread-investigation.md`).
+
+The repository evidence is why the estimator is the mean of member monthly totals and
+not the provider column's daily shape: measured 2026-11-23, the mean of the 50 per-member
+monthly sums reproduces `precipitation_mean` for all seven months of a live
+initialisation (ratios 0.989–1.011, within the provider's 0.1 mm rounding). See
+`packages/weather-core/src/adapters/open-meteo-seasonal.ts` and
+`climate-data-foundation.md` §8.7.
+
+`Q-P5-8` is **not** affected: which `baseline_version` a materialisation uses is still
+deferred, still an explicit `aggregate` job payload field, and still fail-closed
+(`baseline_unknown`). Resolving the quantity said nothing about selecting a baseline.
+
