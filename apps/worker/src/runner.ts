@@ -285,7 +285,13 @@ export function createRunner(options: RunnerOptions): Runner {
       renewing = queue
         .renew(job, leaseMs)
         .then((owned) => {
-          if (!owned) reportLeaseLost();
+          // A renewal that resolves after `stopHeartbeat` reports "no longer
+          // running" because the handler's own transaction already settled the
+          // job — not because the lease was lost. The lease guard in that
+          // renewal (`status = 'running'`) is exactly what makes a successful
+          // handler look like a loss, so only a loss observed while the handler
+          // is still running is real.
+          if (!owned && !heartbeatStopped) reportLeaseLost();
         })
         .catch((error: unknown) => {
           log("heartbeat_error", { jobId: job.id, message: toJobError(error).message });

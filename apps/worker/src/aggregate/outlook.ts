@@ -49,10 +49,25 @@ import type { HandlerResult, JobHandler } from "../runner.js";
 /** Local, small write: the bound is for the transaction, not a provider call. */
 export const OUTLOOK_AGGREGATION_TIMEOUTS = {
   lockTimeoutMs: 5_000,
-  statementTimeoutMs: 30_000,
-  transactionTimeoutMs: 60_000,
+  statementTimeoutMs: 15_000,
+  transactionTimeoutMs: 30_000,
   maxWaitMs: 2_000,
 } as const;
+
+/**
+ * Lease this job must still hold before it is allowed to open its transaction.
+ *
+ * The heartbeat cannot extend a lease while this handler works: `renew()` is a
+ * plain `UPDATE app.jobs`, and the transaction holds that same row `FOR UPDATE`
+ * from `lockJobForSettlement` to commit, so the renewal waits for the whole
+ * transaction. When it finally runs its new term is computed from when the
+ * statement *started*, so the most it can ever grant is `start + leaseMs` — it
+ * cannot stretch the lease to cover a transaction that outlives it. The
+ * transaction must therefore fit inside the lease it was handed, and the margin
+ * covers the commit plus the gap between this check and the settle's `leaseLive`
+ * read. `RUNNER_DEFAULTS.leaseMs` is 60 s, so a freshly claimed job passes.
+ */
+export const OUTLOOK_LEASE_HEADROOM_MS = OUTLOOK_AGGREGATION_TIMEOUTS.transactionTimeoutMs + 10_000;
 
 const SUPPORTED_VARIABLE = "precipitation";
 
@@ -60,13 +75,15 @@ const SUPPORTED_VARIABLE = "precipitation";
  * A ceiling on selector size, not a throughput target.
  *
  * `targetSelectorSchema` has no maximum, and this handler does every cell in one
- * transaction: the measured cost is a few dozen statements per cell (12 normals
- * read, 5 months × read/stage/retire/promote), against a 60 s client-side
- * transaction bound and a 30 s statement bound. An unbounded selector would fail
- * as a transaction timeout on every attempt — retried until `dead`, with nothing
- * saying why. 256 cells leaves an order of magnitude of headroom over the ~1200
- * cells the 60 s bound could fit, and the fix for more is a per-cell fan-out
- * (Phase 6), not a larger number here.
+ * transaction: a few dozen statements per cell (12 normals read, 5 months ×
+ * read/stage/retire/promote) inside a 30 s client-side bound.
+ *
+ * This is a **conservative operational limit, not a measured throughput
+ * guarantee**. There is no load test behind it: it is a claim that 256 cells is
+ * far enough below any plausible cost of that statement count that an oversized
+ * selector cannot arrive as a transaction timeout, retried to `dead`, with
+ * nothing saying why. Measure before raising it; per-cell fan-out (Phase 6) is
+ * the real answer past a few hundred.
  */
 export const MAX_OUTLOOK_CELLS_PER_JOB = 256;
 
@@ -124,7 +141,20 @@ export function createOutlookAggregationHandler(
         );
       }
 
+      // Hand the lease back rather than spend an attempt on a transaction that
+      // cannot fit inside it. See `OUTLOOK_LEASE_HEADROOM_MS`.
       const computedAt = now();
+      const leaseRemainingMs = job.leaseExpiresAt.getTime() - computedAt.getTime();
+      if (leaseRemainingMs < OUTLOOK_LEASE_HEADROOM_MS) {
+        return {
+          outcome: "retryable",
+          error: {
+            code: "lease_headroom_insufficient",
+            message: `lease has ${leaseRemainingMs} ms left; this transaction is bounded at ${OUTLOOK_AGGREGATION_TIMEOUTS.transactionTimeoutMs} ms and needs ${OUTLOOK_LEASE_HEADROOM_MS} ms of lease`,
+            retryable: true,
+          },
+        };
+      }
 
       try {
         const counts = await context.db.$transaction(

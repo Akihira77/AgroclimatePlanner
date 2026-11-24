@@ -1529,6 +1529,21 @@ Boundaries this sub-phase holds:
 | Identity | `(outlook_cell_id, variable, month)` + `derivation_version` + `input_snapshot_hash` + `baseline_version` | A retry of identical inputs writes nothing; changed inputs or baseline supersede |
 | Baseline | Explicit `baselineVersion` in the payload; unknown ⇒ terminal `baseline_unknown` | No `latest` rule exists (`Q-P5-8`); an implicit one would move published numbers silently |
 
+**Concurrency.** The job row is locked `FOR UPDATE` first, then the complete
+footprint set in one `lockForecastFootprint` call — that function sorts and
+de-duplicates, so two jobs naming the same cells in any payload order acquire the
+same keys in the same order. Taking one footprint per cell would make the order a
+property of the selector array and deadlock (`40P01`). Because that row lock is
+held for the whole transaction, heartbeat renewal cannot run inside it: an
+`UPDATE` projects its target list before it waits, so a renewal that waits past
+expiry still succeeds and extends the lease only to `statementStart + leaseMs`.
+The transaction is therefore bounded by the lease it was handed — 30 s bound
+against `OUTLOOK_LEASE_HEADROOM_MS` (40 s) of required remaining lease, with a
+shorter lease handed back as `lease_headroom_insufficient` rather than spent.
+Settlement authority is unaffected: it is checked inside the same transaction
+that holds the row lock, so the reaper cannot reclaim the row until the
+transaction ends, and a rollback leaves it reclaimable.
+
 **Not delivered, and deliberately not claimed:** `GET /v1/climate/outlook`, any
 field→cell mapping, `field_outlook_cells` writes, seasonal materialisation
 (`Q-P5-7`), mean→total conversion, ensemble spread, probabilities/terciles/

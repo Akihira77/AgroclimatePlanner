@@ -150,6 +150,14 @@ export function createPostgresQueue(options: PostgresQueueOptions): JobQueue {
       // `lease_expires_at > now()` is part of the guard: a worker that has
       // already let its lease lapse must not extend it, or a stuck handler
       // could keep a job alive forever while the reaper is supposed to recover it.
+      //
+      // Both the guard and the new term are evaluated when the statement starts,
+      // *before* the row lock is waited on: an UPDATE projects its target list in
+      // the scan node, so `now()` and `clock_timestamp()` agree here even if the
+      // statement then waits for a handler that holds the row `FOR UPDATE`. A
+      // renewal therefore can never extend a lease by more than `leaseMs` from
+      // the moment it began, which is what bounds a long transaction
+      // (`OUTLOOK_LEASE_HEADROOM_MS`).
       const rows = await db.$queryRaw<{ id: string }[]>`
         UPDATE app.jobs
            SET lease_expires_at = now() + (${leaseMs}::int * interval '1 millisecond'),

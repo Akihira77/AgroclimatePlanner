@@ -17,6 +17,7 @@ import { createPrismaClient } from "@agroclimate/database";
 
 import {
   MAX_OUTLOOK_CELLS_PER_JOB,
+  OUTLOOK_LEASE_HEADROOM_MS,
   createOutlookAggregationHandler,
 } from "../../dist/aggregate/outlook.js";
 import { createPostgresQueue } from "../../dist/queue/postgres.js";
@@ -271,6 +272,30 @@ describe("aggregate — climatology materialisation", () => {
       assert.equal(rows.length, 5, `${cellKey} has five climatology months`);
       assert.ok(rows.every((row) => row.status === "active"));
     }
+  });
+
+  it("hands back a lease too short to cover its own transaction", async () => {
+    // Both values are compared against the real clock, so this handler must not
+    // be given the fixed one.
+    const queue = createPostgresQueue({ db: system, defaultMaxAttempts: 1 });
+    const runner = createRunner({
+      db: system,
+      queue,
+      handlers: [createOutlookAggregationHandler()],
+      leaseMs: OUTLOOK_LEASE_HEADROOM_MS - 1,
+      heartbeatMs: 60_000,
+      reaperIntervalMs: 600_000,
+      pollIntervalMs: 60_000,
+    });
+    const { id } = await enqueue(queue, payloadFor());
+    const before = await outlookRows(CELL);
+
+    assert.equal(await runOnly(runner, id), "handled");
+
+    const job = await jobRow(id);
+    assert.equal(job.status, "dead");
+    assert.equal(job.lastError.code, "lease_headroom_insufficient");
+    assert.deepEqual(await outlookRows(CELL), before, "nothing was written under that lease");
   });
 
   it("refuses a selector above the per-job cell ceiling instead of timing out", async () => {
