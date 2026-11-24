@@ -61,10 +61,11 @@ The corpus is not in the repository and was not re-measured.
 | `gridSpecHash` is never persisted: no column, no table, no `SELECT` | searched all `*.sql`, `*.prisma`, non-test `*.ts` |
 | Eighteen synthetic golden vectors and five literal hash fixtures pin the above | `grid.test.ts:98-205`, `:207-357`; `registry.test.ts:26` |
 
-### 1.2 What the provider does, as measured (REPORTED)
+### 1.2 What the provider does, as measured (REPORTED, grade B)
 
 From `open-18-open-meteo-ifs025-evidence.md` (`api.open-meteo.com/v1/forecast`,
-`models=ecmwf_ifs025`, 2026-11-24):
+`models=ecmwf_ifs025`, 2026-11-24). Every row below is **grade B (measured)**: it is what
+the endpoint returned, not a provider statement of its grid.
 
 | Property | Result |
 |---|---|
@@ -73,10 +74,17 @@ From `open-18-open-meteo-ifs025-evidence.md` (`api.open-meteo.com/v1/forecast`,
 | Endpoint | snaps: identical served coordinate **and** identical value across one cell |
 | Selection | nearest node, ties toward `+∞`; 41/41 vs 14/41 for the floor rule |
 | Served coordinate | the centre of the selected cell, i.e. a node |
-| `cell_selection` | a request parameter; default `land` is not `nearest`; changed the cell at 7 of 8 probed sites |
+| Provider request parameter `cell_selection` | default `land` is not `nearest`; changed the cell at 7 of 8 probed sites. **Not** the resolver field `GridSpec.cellSelection` — see §6.6 and §9.2 |
 | `elevation` | the DEM value at the **requested** point; six values for one served cell; not a cell property |
 | `180` vs `−180` | different cells with different values (`179.75` vs `−180`) |
 | Request domain | latitude outside `[−90, 90]` and longitude outside `[−180, 180]` return `400` |
+
+**Two identifiers, one word of overlap.** `GridSpec.cellSelection` is the resolver's
+ownership rule (`lower-edge` / `nearest-centre`) and is a proposed *spec* field that
+participates in `gridSpecHash`. The provider's `cell_selection` is a *request parameter*
+(`nearest` / `land` / `sea`) and belongs in the proposed `requestParametersHash`. The
+measured product uses both words; neither identifier may be read as the other, and the
+correspondence between their values is a provider-specific claim (§6.6).
 
 ### 1.3 Evidence quality
 
@@ -91,10 +99,17 @@ From `open-18-open-meteo-ifs025-evidence.md` (`api.open-meteo.com/v1/forecast`,
 | `ecmwf_ifs025` names the documented "IFS 0.25 Open-Data" row | UNVERIFIED (grade C) | The identifier appears on neither documentation page |
 | `spatialResolutionKm = 25` | UNVERIFIED (grade C) | The provider says "~25 km"; the field is nominal |
 
-**Consequence.** This ADR can decide the *contract shape* on measured grade B geometry,
-because the lattice is measured. It cannot make `ecmwf_ifs025` a `validated` registry
-entry: the identifier mapping is still grade C, and §5.2.6 requires grade A + B for that
-state. Those are different gates and this ADR does not merge them.
+**Consequence.** This ADR can decide the *contract shape* on measured **grade B**
+geometry, because the lattice is measured. It cannot make `ecmwf_ifs025` a `validated`
+registry entry: the grade A requirement is only partially met (the provider documents
+spacing and the global extent, not this product identifier), and the identifier→product
+mapping is still **grade C**, so §5.2.6's grade A + B condition is not satisfied. Those
+are different gates and this ADR does not merge them.
+
+**This ADR does not upgrade the provider evidence grade.** Geometry remains grade B, the
+identifier remains grade C, and no row of the evidence report is reclassified here. A
+`validated` registry entry stays blocked independently of D1–D10 and of any approval this
+ADR may receive.
 
 ### 1.4 Two documentation defects found during validation (CONCERN)
 
@@ -124,9 +139,11 @@ configured: the same lattice, read with the wrong ownership rule, mismatched 27 
 measured requests, in both directions (one provider cell under two keys; one key over two
 provider cells). `UNIQUE (provider, model, cell_key)` detects neither.
 
-**P2 — a request parameter changes cell identity invisibly.** `cell_selection` moves the
-served cell for a fixed `(provider, model, coordinate)` and appears in no identity:
-not in `GridSpec`, `gridSpecHash`, `ForecastRun`, `IngestionRun`, or `WeatherRecord`.
+**P2 — a provider request parameter changes cell identity invisibly.** The provider
+parameter `cell_selection` (`nearest` / `land` / `sea`) moves the served cell for a fixed
+`(provider, model, coordinate)` and appears in no identity: not in `GridSpec`,
+`gridSpecHash`, `ForecastRun`, `IngestionRun`, or `WeatherRecord`. It is not
+`GridSpec.cellSelection`, which is the resolver field of P1 (§6.6).
 
 **P3 — the seam rule is implied, not decided.** Reproducing the measured provider
 requires a top-of-axis clamp for a nearest-centre grid, and the exact input `180` still
@@ -232,10 +249,16 @@ All items are recommendations. "Status" is the decision's state, not its priorit
 | **D4** | `cellSelection` participates in `gridSpecHash` **unconditionally**; the five literal fixtures are regenerated once, in the same commit as the preimage change. | Recommended |
 | **D5** | `GRID_RESOLUTION_ALGORITHM_VERSION` becomes `"grid-resolve/2"`. | Recommended (a strict `/1` reading is defensible; see §8) |
 | **D6** | `SpatialResolution` gains `cellSelection`, so a result says whether its anchor is a corner or a centre. | Recommended; low risk, may be deferred |
-| **D7** | Ingest identity gains a `requestParametersHash` inside `ingestionVersion`; the adapter pins `cell_selection=nearest` and refuses `land`/`sea` on a nearest-centre spec. | Recommended; separate task (§9) |
+| **D7** | Ingest identity gains a `requestParametersHash` inside `ingestionVersion`; the adapter pins the provider's `cell_selection=nearest` and refuses `land`/`sea` on a nearest-centre spec. | Recommended; separate task (§9) |
 | **D8** | The exact input `180` keeps the documented fold to the `originLon` column. The measured provider divergence is documented, not encoded in the resolver. | Recommended; owner may prefer an exception |
 | **D9** | `spatialResolutionKm` stays in the preimage; its own question is not bundled with this ADR. | Unchanged |
 | **D10** | Changing the selection mode on an existing `(provider, model)` requires a new `model` string, like any configuration change that alters identity. | Recommended |
+
+**Two fields, deliberately separate.** `GridSpec.cellSelection` (D1) is the resolver's
+ownership rule and lives inside `GridSpec` and its `gridSpecHash`. The Open-Meteo request
+parameter `cell_selection` (D7) is a provider fetch option and lives inside
+`requestParametersHash`. D1 and D7 look alike and are not exchangeable; §6.6 states the
+mapping and its provider-specific limit.
 
 If accepted, this is a **breaking contract change**: `CONTRACTS_VERSION` and the package
 version move (`0.2.0 → 0.3.0`). It is not implemented by this document.
@@ -330,9 +353,45 @@ and `grid.ts:549` (`createGridRegistry`); six in `grid.test.ts` (`:36`, `:167`, 
 `:202`, `:203`, `:363`); one in `registry.test.ts:47`. Making the field required is a
 compile-time break, deliberately: no spec can acquire a silent default.
 
+### 6.6 `GridSpec.cellSelection` versus the provider's `cell_selection`
+
+Two identifiers, two layers, one shared word. Reading one as the other is the defect this
+subsection exists to prevent.
+
+| | `GridSpec.cellSelection` | Provider request `cell_selection` |
+|---|---|---|
+| Layer | resolver contract | provider fetch option |
+| Values | `"lower-edge"` \| `"nearest-centre"` | `nearest` \| `land` \| `sea` (Open-Meteo) |
+| Answers | which node owns a coordinate | which selection rule the endpoint applies |
+| Lives in | `GridSpec`, therefore `gridSpecHash` (§7) | `requestParametersHash` inside `ingestionVersion` (§9.3) |
+| Scope | one `(provider, model)` binding, per `ADR-001` D8 | one logical ingest of one run |
+| Changes when | the reviewed lattice definition changes | the fetch configuration changes |
+| Absent today | the field does not exist; `lower-edge` is implicit | no forecast/seasonal adapter sends it, so the provider default applies; only the archive adapter pins `cell_selection=nearest` (`open-meteo-archive.ts:149`, `:168`); no value appears in any identity |
+
+**The mapping is a provider-specific contract, not a translation table.** For the
+measured Open-Meteo product, resolver mode `nearest-centre` is expected to correspond to
+request value `nearest`: the evidence report measured 41/41 request→served pairs under
+that combination. "Expected" is the strongest claim this ADR can make, and the
+correspondence is **not verified at the contract level** — no test, fixture, or committed
+run establishes it, because no nearest-centre spec exists yet. The adapter must therefore
+send `cell_selection=nearest` explicitly and validate the pairing for each `(provider,
+model)` before the first ingest; a future provider whose `nearest` means something else
+must not inherit this row.
+
+**`land` and `sea` are not representable.** They select by a 90 m DEM search the resolver
+cannot model, so a nearest-centre `GridSpec` cannot stand in for them. Approximating
+either would change values without changing identity (§9.3). No generic rule assigns them
+to `nearest-centre`, and no other provider gets a mapping here without its own grade A and
+grade B evidence.
+
 ---
 
 ## 7. Grid identity and hashing
+
+`GridSpec.cellSelection` belongs **inside `GridSpec` and therefore inside
+`gridSpecHash`**. It is a property of the reviewed lattice definition, not of a request —
+the provider's request parameter `cell_selection` is the opposite case and is excluded
+here by §9.2.
 
 - **Include `cellSelection` unconditionally.** Two configurations that differ only by mode
   produce different keys for the same coordinate; a hash that omitted the field would
@@ -387,18 +446,22 @@ hash describes a configuration; `ingestionVersion` describes one logical ingest.
 
 | Layer | Identifies | Where | Changes when |
 |---|---|---|---|
-| Configuration | one reviewed lattice + selection rule | `gridSpecHash` | any preimage field changes |
+| Configuration | one reviewed lattice + resolver selection rule (`cellSelection`) | `gridSpecHash` | any preimage field changes |
 | Algorithm | the mapping rule set | `GRID_RESOLUTION_ALGORITHM_VERSION` | index arithmetic, domain, wrapping, anchor derivation, or key format changes |
 | Provider binding | which product a configuration describes | registry `(provider, model)` | the product or grid changes |
-| Request configuration | provider parameters that change what a request returns | **new** `requestParametersHash`, inside `ingestionVersion` | such a parameter changes |
+| Request configuration | provider parameters that change what a request returns, including the provider's `cell_selection` | **new** `requestParametersHash`, inside `ingestionVersion` | such a parameter changes |
 | Ingestion | one logical ingest of one run | `ingestionVersion` | any component changes |
 | Record | one value at one cell/variable/instant/member | `(forecastRunId, cellKey, variable, validAt, ensembleMember)` | a re-normalisation supersedes; never duplicates |
 
-### 9.2 Where `cell_selection` does **not** belong
+### 9.2 Where the provider request parameter `cell_selection` does **not** belong
+
+This table is about the **provider request parameter** — `nearest` / `land` / `sea` — not
+about `GridSpec.cellSelection`, which is the resolver field and *is* hashed (§7). The two
+are mapped in §6.6.
 
 | Location | Verdict | Reason |
 |---|---|---|
-| `GridSpec` / `gridSpecHash` | No | not a lattice property; `land`/`sea` are DEM searches the resolver cannot model. Two specs whose cells agree would hash differently for a request-only reason |
+| `GridSpec` / `gridSpecHash` | No — for the request flag | It is not a lattice property. It must not be folded into the spec: two grids whose cells agree would hash differently for a request-only reason. `GridSpec.cellSelection` is the reverse case — a spec field that belongs in the hash |
 | `ForecastRun` natural key | No | it identifies the provider's model output; the flag does not change the output |
 | `targetSelectorHash` | No | it names the requested `(cellKey, variable)` set; folding a fetch parameter in makes the selector unreproducible from the selector rows |
 | `WeatherRecord` key | No | a new component duplicates every value when the flag changes; the row already stores `ingestion_run_id`, requested/served coordinates |
@@ -416,10 +479,12 @@ hash describes a configuration; `ingestionVersion` describes one logical ingest.
 - **Stored** on `app.ingestion_runs` beside `target_selector_hash`, with
   `^[0-9a-f]{64}$`. That is a migration and a contract change: a separate task (§11), and
   it must not be bundled with the resolver change.
-- **Adapter obligation:** send an explicit `cell_selection`, never rely on the provider
-  default; refuse to operate against a nearest-centre spec with any value other than
-  `nearest`. `land` and `sea` cannot be modelled by a nearest-centre spec and must be
-  refused rather than approximated.
+- **Adapter obligation:** send an explicit provider `cell_selection`, never rely on the
+  provider default; on a `nearest-centre` spec send `nearest` and refuse any other value.
+  The pairing `nearest-centre ↔ nearest` is expected for the measured Open-Meteo product
+  and remains a **provider-specific contract to validate per `(provider, model)`** (§6.6);
+  it is not a generic rule. `land` and `sea` cannot be modelled by a nearest-centre spec
+  and must be refused rather than approximated.
 
 ### 9.4 Idempotency and supersession after the change
 
@@ -427,7 +492,7 @@ hash describes a configuration; `ingestionVersion` describes one logical ingest.
 |---|---|
 | Retry, same effective parameters | same hash → same `ingestionVersion` → same `IngestionRun`; `attempt` increments; no new rows |
 | Adapter code change | new `adapterVersion` → new `IngestionRun`; records supersede |
-| `cell_selection` changed on an existing binding | new `requestParametersHash` → new ingest; **and** the drift guard refuses a moved served coordinate for every already-served key → terminal `provider_changed`. The two signals together say "configuration changed", not "the provider re-gridded" |
+| Provider `cell_selection` changed on an existing binding | new `requestParametersHash` → new ingest; **and** the drift guard refuses a moved served coordinate for every already-served key → terminal `provider_changed`. The two signals together say "configuration changed", not "the provider re-gridded" |
 | Provider re-grids | served coordinate moves under the same key → drift guard → `provider_changed`; continuing needs a new `model` string |
 | `elevation` override added | new hash → new ingest. Precipitation was measured unaffected; temperature is downscaled and would not be — never assume variables are inert |
 
@@ -655,7 +720,7 @@ owner-facing items, plus the questions this validation could not decide.
 | Hash preimage (D4) | Include unconditionally; regenerate 5 literals once | `grid.ts:186-218`; `grid.test.ts:100-130`; no stored hash | Recommended | **Yes** |
 | Resolver version (D5) | `grid-resolve/2` | `grid.ts:595-608`; no persisted resolution | Recommended | **Yes** |
 | `SpatialResolution` field (D6) | Add `cellSelection` | `grid.ts:618-636`; result is not persisted | Recommended | **Yes** (may defer) |
-| `cell_selection` in ingest identity (D7) | `requestParametersHash` inside `ingestionVersion`, stored on `ingestion_runs`; adapter pins `nearest`; `land`/`sea` refused | `climate.ts:74-92`; `provenance-contract.md:150-190`; 7/8 sites (REPORTED) | Recommended | **Yes** |
+| Provider `cell_selection` in ingest identity (D7) | `requestParametersHash` inside `ingestionVersion`, stored on `ingestion_runs`; adapter pins `nearest`; `land`/`sea` refused | `climate.ts:74-92`; `provenance-contract.md:150-190`; 7/8 sites (REPORTED) | Recommended | **Yes** |
 | Idempotency sufficiency of D7 | Sufficient **with** the drift guard; the guard is the backstop, not optional | `weather.ts:195-254`; `tables-climate.md:246` | Recommended | **Yes** |
 | Top-of-window clamp (D3) | Clamp `colCount → colCount − 1` in nearest mode only | measured `179.99 → 179.75` (REPORTED); arithmetic VERIFIED | Recommended | **Yes** |
 | Exact `180` (D8) | Keep the documented fold; document the divergence | `climate-data-foundation.md:931-943`; measured `180 → 179.75` | Recommended | **Yes** |
@@ -663,7 +728,7 @@ owner-facing items, plus the questions this validation could not decide.
 | `spatialResolutionKm` in preimage (D9) | Leave unchanged; not coupled to this ADR | `OPEN-18` question 5 | **Open** | **Yes** |
 | Mode change on an existing binding (D10) | New `model` string | `grid.ts:521-563`; `ADR-007` D1 | Recommended | **Yes** |
 | Implement now? | No — separate implementation task after approval | this ADR | **Deferred** | **Yes** |
-| Grade A for `ecmwf_ifs025` | Unchanged blocker: identifier→product mapping is grade C | evidence §2.3, §4 | **Open** | **Yes** |
+| Grade A for `ecmwf_ifs025` | Unchanged blocker: geometry is grade B, the identifier→product mapping is grade C, so grade A + B is not met and no `validated` entry is possible | evidence §2.3, §4; `climate-data-foundation.md` §5.2.6 | **Open** | **Yes** |
 | Does the provider clamp at the region or only near `180`? | Needs `179.90` (and `179.875`, `180.01`) | §12.7 | **Open** | Measurement first |
 | Live database inventory | Assume zero rows; verify before any provider rollout | code + `CHECK` read; **no live DB inspected** | **UNVERIFIED** | Operator |
 
@@ -672,9 +737,10 @@ owner-facing items, plus the questions this validation could not decide.
 1. The raw 172-request corpus is outside the repository; only tables and aggregates are
    committed. The 41-pair extract reproduces arithmetically but is not a committed
    dataset, so the ADR cannot treat it as a rerunnable fixture until it is.
-2. The 7-of-8 `cell_selection` claim has five locations in the document.
+2. The 7-of-8 provider `cell_selection` claim has five locations in the document.
 3. Polar and seam behaviour rest on a handful of coordinates each.
-4. Grade A for `ecmwf_ifs025` is still missing; nothing here changes that.
+4. Grade A for `ecmwf_ifs025` is incomplete and its identifier→product mapping is grade C;
+   the geometry itself is only grade B. Nothing in this ADR changes that.
 
 OWNER APPROVAL IS NOT IMPLIED BY ANY "Recommended" ABOVE.
 
@@ -696,6 +762,7 @@ What was actually executed, so a reader can tell evidence from assertion:
 | A live database queried for existing cell rows | **not run** — no database was inspected; §11 states the inference explicitly |
 | The 172-request corpus re-fetched | **not run** — it is outside the repository (§16.2) |
 | Any code, contract, fixture, registry or migration modified | **none** — this ADR is documentation only |
+| Terminology pass 2026-11-24: every `cell_selection` / `cellSelection` occurrence read | separated per §6.6; §9.2 rewritten to name the provider parameter |
 
 ---
 
