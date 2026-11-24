@@ -1507,6 +1507,39 @@ column — never by inventing the value.
 | Dependencies | 5.2, 5.5 (minimum), 5.4 and 5.6 (for a complete timeline) |
 | Risks | shipping a read API before the data exists and calling it done; the acceptance criterion above is written to prevent exactly that. **Missing-reason boundary:** a stored seasonal member-month null carries no cause, and raw payloads are not retained (`OPEN-05` closed), so 5.7 must not invent `provider_null`/`member_incomplete`/`axis_incomplete`. With no surviving evidence it reports the generic `provider_unavailable`; a finer reason needs a new contract value and migration, not a guess |
 
+#### 8.7A Climatology-only materialisation (delivered 2026-11-24)
+
+5.7 was split because two of its inputs are still blocked, and shipping the whole
+thing would have meant inventing them.
+
+**Delivered.** `packages/climate-core/src/aggregate.ts` assembles the 12-month
+horizon from stored normals only (`assembleClimatologyOutlook`), and
+`apps/worker/src/aggregate/outlook.ts` (`aggregate`, `opensIngestionRun: false`)
+persists its climatology months through `persistClimatologyOutlook`. The
+`aggregate` job kind already existed, so no queue, kind or migration was added.
+
+Boundaries this sub-phase holds:
+
+| Boundary | Rule | Why |
+|---|---|---|
+| Band | Only lead months 8–12 carry a value; 1–7 are explicit no-value entries | `permittedMonthlyDataClasses` refuses a climatology class outside that band, and nothing may be shifted forward to fill the grid |
+| Source | Only `climatology_normals` | `value_mm` there is a mean of monthly totals; a provider mean read as an amount is the wrong number `Q-P5-7` exists to prevent |
+| Provenance | `input_refs` = one `baseline` ref (`role: climatology`), `inputSnapshotHash` = `hashDerivationDescriptor({ artifact: "monthly_outlook", inputRefs, derivationVersion })`, `baselineHash` = `hashBaselineNormals` over the consumed subset | Reuses the existing canonical hashing; no second format |
+| Persistence | Only months with a real normal become rows | `MonthlyOutlook` requires ≥ 1 `inputRef`; a `not_requested` or `insufficient_history` month has none, so it is synthesised by the read path instead of persisted with a fabricated ref |
+| Identity | `(outlook_cell_id, variable, month)` + `derivation_version` + `input_snapshot_hash` + `baseline_version` | A retry of identical inputs writes nothing; changed inputs or baseline supersede |
+| Baseline | Explicit `baselineVersion` in the payload; unknown ⇒ terminal `baseline_unknown` | No `latest` rule exists (`Q-P5-8`); an implicit one would move published numbers silently |
+
+**Not delivered, and deliberately not claimed:** `GET /v1/climate/outlook`, any
+field→cell mapping, `field_outlook_cells` writes, seasonal materialisation
+(`Q-P5-7`), mean→total conversion, ensemble spread, probabilities/terciles/
+confidence, temperature outlooks, bias correction, skill. The read path is absent
+because the data it would read is still only climatology: a 12-month response now
+would be five real months and seven empty ones, and nothing schedules `aggregate`
+yet (Phase 6 owns the fan-out).
+
+Phase 5.7 is therefore **not complete**. The acceptance row above remains the
+target and needs `Q-P5-7` plus the seasonal path to be met.
+
 ### 8.8 Phase 5.8 — data quality and operations
 
 | | |

@@ -370,6 +370,37 @@ Notes:
   `field_outlook_cells` + `monthly_outlooks`, resolved at read time, so a new run
   does not need to touch any tenant row.
 
+### 5.1 The climatology write path (Phase 5.7A)
+
+The first writer of this table is `packages/database/src/outlook.ts`
+(`persistClimatologyOutlook`, called by the `aggregate` worker handler). Four rules
+shape which rows exist:
+
+| Rule | Consequence |
+|---|---|
+| A row needs real provenance | `input_refs` is `NOT NULL`, array-shaped, and the contract requires **≥ 1** ref. A month with no input has no honest ref, so it has **no row** |
+| Only climatology months are materialised | Lead months 8–12. Lead 1–7 exist as no-value entries in the assembled horizon (`packages/climate-core/src/aggregate.ts`) and are synthesised by the read path, not stored |
+| A missing normal is a horizon gap, not a row | A cell-baseline with no normal for that calendar month emits `insufficient_history` in the in-memory horizon. No `pending` / `not_requested` row is written to stand for it |
+| The baseline is an explicit input | `baselineVersion` comes from the job payload. No `latest` query exists, and an unknown version is a terminal `baseline_unknown`, never a silent fallback (`Q-P5-8`) |
+
+Write order, forced by this table's own constraints:
+
+1. `monthly_outlooks_active_key` forbids inserting a new active row while the old
+   one is active.
+2. `monthly_outlooks_superseded_fkey` forbids retiring the old row before its
+   successor exists.
+3. So the new row is inserted as `status = 'failed'` (a status that needs no
+   successor and no `superseded_by_id`), the old active row is set to
+   `superseded` pointing at it, then the new row is promoted to `active`. All of
+   it is one transaction, so no intermediate state is ever visible.
+
+Idempotency is by identity, not by timestamp: `(outlook_cell_id, variable, month)`
+plus `derivation_version`, `input_snapshot_hash` and `baseline_version`. An
+identical recompute writes nothing (`unchanged`); changed inputs or a changed
+baseline produce a new derivation that supersedes the old one. A failed
+recompute rolls the whole transaction back and leaves the previous active row
+intact.
+
 ---
 
 ## 6. `app.climatology_normals`

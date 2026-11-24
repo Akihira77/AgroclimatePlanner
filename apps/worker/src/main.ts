@@ -2,6 +2,7 @@ import { CONTRACTS_VERSION } from "@agroclimate/contracts";
 import { createPrismaClient } from "@agroclimate/database";
 import { syntheticGridRegistry } from "@agroclimate/weather-core";
 
+import { createOutlookAggregationHandler } from "./aggregate/outlook.js";
 import { createClimatologyHandler } from "./ingest/climatology.js";
 import { createForecastHandler } from "./ingest/forecast.js";
 import { createSeasonalHandler, isSeasonalJobPayload } from "./ingest/seasonal.js";
@@ -62,7 +63,16 @@ const climate: JobHandler = {
       : climatology.handle(job, context),
 };
 
+/**
+ * `aggregate` carries the derived-artifact path, not an ingest. Phase 5.7A
+ * registers the climatology outlook materialiser; nothing enqueues it yet
+ * (there is no scheduler, and Phase 6 owns the fan-out), so it is reachable by
+ * an operator or a test with an explicit baseline version and first month.
+ */
+const outlook = createOutlookAggregationHandler();
+
 const handlers = [
+  outlook,
   createForecastHandler({
     registry: syntheticGridRegistry,
     attribution: process.env["OPEN_METEO_ATTRIBUTION"] ?? "Open-Meteo.com (CC BY 4.0)",

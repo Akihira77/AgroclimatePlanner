@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { isoInstantSchema } from "./enums.js";
+import { isoDateSchema, isoInstantSchema } from "./enums.js";
 import { targetSelectorSchema } from "./climate.js";
 
 /**
@@ -93,6 +93,41 @@ export const climatologyJobPayloadSchema = z.strictObject({
   targetSelector: targetSelectorSchema,
 });
 export type ClimatologyJobPayload = z.infer<typeof climatologyJobPayloadSchema>;
+
+/**
+ * The payload of an `aggregate` job that materialises a climatology outlook —
+ * Phase 5.7A.
+ *
+ * The `aggregate` queue already exists (`jobs_kind_check`), so no kind and no
+ * migration are added. The payload names the baseline version **explicitly**:
+ * this system has no "latest baseline" rule, and an implicit one would silently
+ * move every stored outlook to a different 1991–2020 baseline. Choosing the
+ * version is the enqueuer's decision; the handler validates that it exists and
+ * refuses an unknown one.
+ *
+ * `provider`/`model` name the grid identity that owns the normals
+ * (`outlook_cells` is unique on `(provider, model, cell_key)`), so no cell_key is
+ * ever resolved by guessing across models.
+ */
+export const outlookAggregationJobPayloadSchema = z.strictObject({
+  provider: z.string().min(1),
+  model: z.string().min(1),
+  baselineVersion: z.string().min(1),
+  /**
+   * The calendar month lead month 1 describes, first-of-month, Asia/Jakarta.
+   *
+   * Carried in the payload rather than read from the clock at execution: a job
+   * retried across a month boundary must materialise the same horizon it was
+   * enqueued for, or a retry becomes a second derivation with five different
+   * month keys.
+   */
+  firstMonth: isoDateSchema.refine((month) => month.slice(8, 10) === "01", {
+    message: "firstMonth must be the first day of a calendar month",
+  }),
+  targetSelectorHash: z.string().regex(/^[0-9a-f]{64}$/),
+  targetSelector: targetSelectorSchema,
+});
+export type OutlookAggregationJobPayload = z.infer<typeof outlookAggregationJobPayloadSchema>;
 
 /**
  * One persisted job.

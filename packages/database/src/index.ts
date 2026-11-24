@@ -139,6 +139,19 @@ export type {
   PersistClimatologyBaselineInput,
   PersistClimatologyBaselineResult,
 } from "./climatology.js";
+export {
+  findOutlookCellId,
+  loadClimatologyOutlookSource,
+  OutlookBaselineNotFoundError,
+  OutlookCellNotFoundError,
+  persistClimatologyOutlook,
+} from "./outlook.js";
+export type {
+  ClimatologyOutlookMonthRow,
+  ClimatologyOutlookSource,
+  PersistClimatologyOutlookInput,
+  PersistClimatologyOutlookResult,
+} from "./outlook.js";
 
 export interface DatabaseOptions {
   /** `postgresql://…` connection string. Validated by `pg`, not by us. */

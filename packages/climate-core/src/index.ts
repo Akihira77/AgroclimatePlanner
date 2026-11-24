@@ -1,4 +1,21 @@
 export {
+  CLIMATOLOGY_FIRST_LEAD_MONTH,
+  CLIMATOLOGY_LAST_LEAD_MONTH,
+  CLIMATOLOGY_OUTLOOK_DERIVATION_VERSION,
+  MISSING_BASELINE_REASON,
+  NO_FORECAST_SOURCE_REASON,
+  SPREAD_REASON_CLIMATOLOGY,
+  SPREAD_REASON_NO_VALUE,
+  assembleClimatologyOutlook,
+  type ClimatologyOutlook,
+  type ClimatologyOutlookDerivation,
+  type ClimatologyOutlookFailureKind,
+  type ClimatologyOutlookInput,
+  type ClimatologyOutlookMonth,
+  type ClimatologyOutlookOutcome,
+  type StoredBaselineNormal,
+} from "./aggregate.js";
+export {
   BASELINE_PERIOD,
   BASELINE_UNIT,
   CLIMATOLOGY_ALGORITHM_VERSION,
