@@ -1194,11 +1194,13 @@ baseline and the two seasonal products (the payload decides). It adds **no
 migration** — the existing CHECKs already permitted `seasonal`, both data classes
 and member rows. Ensemble spread itself, probability and any confidence figure are
 **not** computed; the aggregates exist so a later phase can compute spread from real
-members, and neither mean column is ever stored as a member. 5.7A is **started and
-partial**: climatology months 8–12 are assembled and persisted, nothing seasonal
-is, and the field-facing read API is not written. 5.8 is **not started**. Nothing
-here claims a served coordinate on a real grid, a seasonal month, an anomaly, a
-spread, or a `field_outlook_cells` row.
+members, and neither mean column is ever stored as a member. 5.7A and 5.7B are
+**delivered**: climatology months 8–12 are assembled, persisted, and served by
+`GET /v1/climate/outlook`; nothing seasonal is written, and the spread columns stay
+`NULL` with a reason. 5.7's seasonal half is **not started** and its three open
+decisions are recorded in `climate-data-foundation.md` §8.7C. 5.8 is **not started**.
+Nothing here claims a served coordinate on a real grid, a seasonal month, an anomaly,
+a spread, or a `field_outlook_cells` row.
 
 Implementation evidence after the Phase 5.6 corrective pass (2026-11-23), all
 executed in this working tree: contracts **413** tests, weather-core **118** (13
@@ -1229,7 +1231,7 @@ implemented without an owner signature.
 | Reconciliation of the 13 existing authorities | designed (§2), with three documented-but-absent items (§3.5) |
 | Implementation sequence, 9 sub-phases | §8; 5.0–5.3 delivered, 5.4, 5.5 and 5.6 implemented behind their gates, 5.7A implemented (climatology materialisation) and 5.7B (climatology read API) implemented, 5.7 seasonal materialisation and 5.8 not started |
 | Verification strategy | specified (§7); the 5.0–5.6, 5.7A and 5.7B portions are executed (evidence above), 5.7's seasonal path and 5.8 not written |
-| Decision register | 8 `OPEN-*` items assessed; 7 `Q-P5-*` decisions recorded; `D15`/`D15a`/`D15d`/`D15e` (the settlement contract) are implemented on the consolidated text and still await an owner signature; `D21` and `D15c` are owner-approved |
+| Decision register | 8 `OPEN-*` items assessed; 10 `Q-P5-*` decisions recorded, of which `Q-P5-7` is resolved (2026-11-24) and `Q-P5-RUN`/`Q-P5-SPREAD` are deferred; `D15`/`D15a`/`D15d`/`D15e` (the settlement contract) are implemented on the consolidated text and still await an owner signature; `D21` and `D15c` are owner-approved |
 | Owner decisions | 7 recorded as approvals, plus `D21` and `D15c` in Phase 5.4; provider grid configuration, BMKG permission, the Open-Meteo commercial evaluation, and a CHIRPS route still need **external evidence**; `Q-P5-7` (the `value_mm` quantity) was resolved by the owner on 2026-11-24, and `Q-P5-8` (baseline selection) remains open |
 | Migration | three additive migrations: `20261122000000_jobs` (5.3), `20261123000000_weather_supersession` (5.4: `weather_records.superseded_by_id` → `DEFERRABLE INITIALLY DEFERRED`, plus `weather_records_no_self_supersession`), and `20261123010000_climatology_baselines` (5.5 corrective: one new table for baseline source metadata; `climatology_normals` unchanged). **5.6 adds no migration**: the existing `forecast_runs_product_check`, `weather_records_data_class_check` and `weather_records_ensemble_check` already admit the seasonal product, both seasonal data classes and member rows. No existing column, grant, policy or row was altered by 5.5 or 5.6 |
 
@@ -1402,6 +1404,26 @@ and the read API needs both. 5.7A delivered the climatology half; 5.7B later del
 | Known risk — lease | The row lock makes lease expiry unobservable *during* a transaction, so a job that exceeds its lease is discovered only after it ends. For this handler that is a retry, never a partial write: the transaction rolls back, the previous active rows survive, and the reaper recovers the abandoned lease. A large selector is therefore limited by `MAX_OUTLOOK_CELLS_PER_JOB`, not by lease arithmetic |
 | Known risk | `recordCount` reports months affirmed (including `unchanged`), not rows written; the settle log now names `monthsInserted` / `monthsSuperseded` / `monthsUnchanged` / `monthsAffirmed` beside it. There is no coverage percentage to report in this phase because no forecast axis exists to be partially covered; `data_coverage_percent` stays `NULL` |
 | Tests | climate-core **33** (19 new `aggregate` cases: 12-entry horizon, lead order, month mapping and Dec→Jan rollover, lead 8–12 values and baseline, lead 1–7 never filled, per-month baseline gap, empty baseline ⇒ no derivation, unknown `sampleYears` refused, ref/hash shape, canonical hashes, reorder determinism, baseline-version sensitivity, five refusals); database integration **134** (10 `outlook-persistence` cases: 5 rows with real refs, no row for a no-value month, idempotent repeat, supersede on changed snapshot, changed baseline is a new derivation, failed recompute preserves the active row, two racing writers leave one active row per month, unresolvable cell refuses, `app_api` write denied, climatology row without a baseline refused; plus 2 `outlook-lock-order` cases); worker **14** new integration cases: 10 `aggregate` (materialise + settle with no ingestion run, idempotent rerun, multi-cell selector, selector ceiling, lease headroom refusal, no normal ⇒ no rows, unknown baseline, unknown cell, digest mismatch, unsupported variable), 3 `aggregate-outlook-concurrency` (reverse-order pair, conflicting snapshots, no spurious `lease_lost`), 2 `job-lease-row-lock` (renewal blocks on the job row; a blocked renewal cannot extend past `start + leaseMs`) |
+
+### Phase 5 roadmap reconciliation — 2026-11-24
+
+**No new phase is introduced, and no phase is renumbered.** The official sequence remains
+5.0–5.8 as `climate-data-foundation.md` §8 defines it; Phase 6 is the next product phase
+(`docs/PROJECT.md` §3). Optional architecture reconciliation is supporting work inside the
+current phase, not a phase of its own.
+
+| Milestone | Official definition | Verified state (2026-11-24) | Gate |
+|---|---|---|---|
+| 5.0–5.6 | §8.0–§8.6 | implemented as their rows record; 5.4–5.6 not live pipelines | `OPEN-18`, `OPEN-03` |
+| 5.7A | §8.7A | climatology materialisation delivered | none beyond 5.5 |
+| 5.7B | §8.7B | climatology read route delivered | none beyond 5.7A |
+| 5.7 seasonal half | §8.7 acceptance, §8.7C | **not started** — no `seasonal_forecast` row is ever written to `monthly_outlooks` | `Q-P5-RUN` (run selection, freshness, supersession), `Q-P5-SPREAD` (spread descriptor), unresolved lead-band/missing-reason reading, `OPEN-18`, `OPEN-03`, `OPEN-05` |
+| 5.8 | §8.8 data quality and operations | **not started** — no `climate-core/audit.ts`, no `apps/worker/src/maintenance/`, no operations runbook | prerequisite 5.7 is incomplete, and its acceptance needs a week of scheduled runs; no scheduler exists |
+| Phase 6 | PROJECT.md §3; `docs/research/agronomic-reference-matrix.md` §6 | planning only — DDL and provenance contracts exist, no agronomy package, no crop rows, no suitability route | `OPEN-18`, `OPEN-26`, `OPEN-27`, catalog seeding, agronomist review; see `docs/review/phase-6-readiness.md` |
+
+Seasonal materialisation is **5.7 work**, not 5.8 work: 5.8 audits and operates what 5.7
+produces. Declaring Phase 5 complete before that half exists would make the 5.7 acceptance
+row false; 5.8 cannot begin in a meaningful way before it.
 
 ### Phase 5.0 — contracts and grid resolver — 2026-11-21
 

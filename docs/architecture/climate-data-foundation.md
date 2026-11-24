@@ -4,7 +4,9 @@ Status: **Phase 5.0 implemented; 5.1 partially implemented; 5.2 implemented;
 5.3 implemented; 5.4 implemented behind its gates; 5.5 implemented behind its
 gates; 5.6 implemented behind its gates — values, storage, and the SEAS5
 per-member monthly aggregates required by ADR-001 D8b; ensemble **spread itself
-is not computed**); 5.7–5.8 not started.**
+is not computed**); 5.7A (climatology materialisation) and 5.7B (climatology read
+route) implemented; 5.7's seasonal half is not written and is blocked on the
+decisions recorded in §8.7C; 5.8 not started.**
 5.2.1–5.2.8 are complete as of `8a6f2ec` (2026-11-22): generic grid resolution, a
 synthetic registry instance, the tenant-scoped field centroid read, cell identity
 persistence, and `POST /v1/fields/:fieldId/resolve-cell`. 5.3 is complete as of the
@@ -131,13 +133,14 @@ the request and response shape of the one route that uses them (5.2).
 
 ### 3.3 Application
 
-`apps/api/src` contains `auth`, `farm`, `field`, `health`, `http`, `database`,
-`config`. There is no `climate` module and no `/v1/climate` route; the only climate
-route is `POST /v1/fields/:fieldId/resolve-cell`, mounted in `field` (5.2.7).
-`packages/database/src` contains `auth-*`, `farms`, `fields`, `tenant`, and `climate`
-— the last holding only the cell-identity helpers (`upsertCell`, its input type, its
-error). `apps/worker/src/main.ts` is a
-stub with no dependencies beyond `@agroclimate/contracts`.
+`apps/api/src` contains `auth`, `farm`, `field`, `climate`, `health`, `http`,
+`database`, `config`. Two climate-facing routes exist: `POST
+/v1/fields/:fieldId/resolve-cell`, mounted in `field` (5.2.7), and `GET
+/v1/climate/outlook`, mounted in `climate` (5.7B). `packages/database/src` contains
+`auth-*`, `farms`, `fields`, `tenant`, `climate` (the cell-identity helpers),
+`weather`, `climatology`, `outlook`, `settlement`, and `run-errors`. `apps/worker/src/main.ts`
+registers three handlers — `ingest.forecast`, `ingest.climate`, and `aggregate` —
+against `syntheticGridRegistry`; nothing enqueues `aggregate` yet (5.7A).
 
 ### 3.4 Therefore
 
@@ -264,11 +267,12 @@ Two rules that shape every file above:
    aggregation take data and return data. That is what lets the whole pipeline be
    tested from recorded fixtures with no network and no clock (§7).
 
-`climate-core` now exists as a workspace package, but only the climatology builder
-is written (§8.5); the aggregation, anomaly and outlook-assembly modules of §8.7
-are not. `weather-core` exists as a package since 5.1, but only the daily and
-seasonal adapters, the transport, and the normalizers are written; cells, the other
-adapters, and record assembly are not (§5.1.2). The
+`climate-core` exists as a workspace package. Its climatology builder (§8.5), the
+climatology-only outlook assembler (§8.7A), and the read-path assembler (§8.7B) are
+written; the seasonal assembler, anomaly computation, and spread derivation are not.
+`weather-core` exists as a package since 5.1, and holds the daily, seasonal and
+archive adapters, the transport, the normalizers, and one synthetic grid registry;
+provider grids and record assembly for other products are not written (§5.1.2). The
 alternative — putting adapters inside `apps/worker` —
 was rejected because `packages/contracts` cannot import from an app, and the
 `WeatherValue` contract is the type these functions must return.
@@ -285,8 +289,9 @@ climatology, outlook assembly", and two edges are forbidden —
 - The worker owns every write. An adapter cannot reach `@agroclimate/database`.
 - `climate` asks `weather` for a normalized series through a service; it does not
   query `weather_records` itself.
-- Neither package exists yet. They are deliverables of 5.1 and 5.7, and adding them
-  is the only new-package work in Phase 5.
+- Both packages now exist: `weather-core` from 5.1 and `climate-core` from 5.5. They
+  were the only new-package work in Phase 5, which is why the dependency directions
+  were fixed before either was created.
 
 ### 5.1 Provider adapter boundary
 
@@ -1595,6 +1600,56 @@ Unchanged by 8.7B: seasonal materialisation, ensemble spread (investigated, not 
 route resolves the grid the caller names, so it cannot claim end-to-end readiness for a
 mapping that does not exist.
 
+#### 8.7C Seasonal materialisation — not delivered, and why (2026-11-24)
+
+Seasonal outlook materialisation belongs to **5.7**, not to 5.8. 5.8 consumes 5.7's
+output; it cannot define it. The 5.7 acceptance row requires that "with seasonal data
+present, lead months change class", and that half is still missing: no code writes a
+`seasonal_forecast` row into `app.monthly_outlooks`.
+
+**What is already in place (verified):**
+
+| Piece | Where | Why it is not enough |
+|---|---|---|
+| The quantity | `Q-P5-7` resolved 2026-11-24 | `seasonal_forecast` → `ensemble_mean`, the arithmetic mean of the 50 SEAS5 members' monthly totals for one initialisation; `estimatorForDataClass` derives it (`packages/contracts/src/climate.ts`) |
+| The member inputs | `weather_records` rows `precipitation_sum` / `monthly_sum` / `ensemble_member 1..50` / `ensemble_size 50`, written by 5.6 (`normalize/monthly.ts`, `ingest/seasonal.ts`) | 50 member totals exist per month, so the mean is computable without the provider's `precipitation_mean` |
+| The storage | `monthly_outlooks` already admits `seasonal_forecast`, `evaluation_basis = 'monthly'`, `value_mm`, `input_refs`, `input_snapshot_hash` | no writer, no payload, no read-path branch |
+| The provenance shape | `dataInputRefSchema` kind `forecast` already carries `forecastRunIds`, `ingestionRunIds`, `recordSetHash` (`packages/contracts/src/provenance.ts`) | unused by the outlook path |
+
+**Three decisions are open, and each changes what would be written:**
+
+1. **Run selection, freshness and supersession (`Q-P5-RUN`).** `outlookAggregationJobPayloadSchema`
+   carries an explicit `baselineVersion` and no run identity; `forecast_runs` has no
+   status column and no code performs a "latest run" query. An explicit `forecastRunId`
+   in the payload would refuse to select, but it would not answer the two questions the
+   read path needs: how old a seasonal initialisation may be before the month is
+   `stale`, and whether a later aggregation of a different run may supersede the active
+   row. Those are product semantics, not mechanics.
+2. **Ensemble spread (`Q-P5-SPREAD`).** `ensemble_spread_mm` and
+   `spread_unavailable_reason` exist, but the descriptor, member floor, member-count
+   provenance and reason vocabulary are undecided
+   (`docs/review/seasonal-spread-investigation.md` §8). The column may stay `NULL` with
+   a reason, so a value-only month is representable — but the reason vocabulary and the
+   "mean and spread share one population" rule cannot be chosen by the writer.
+3. **Which lead months the writer may fill.** Three texts disagree, and none of them is a
+   bug to be silently fixed: `packages/contracts/src/climate.ts` (`MONTHLY_OUTLOOK_BANDS`)
+   admits `seasonal_forecast` at lead months **1–7**; `docs/PROJECT.md` §3 says "months
+   2–7 seasonal"; this document's 5.7 acceptance row and §8.9 say lead months **3–7**
+   change class. The three readings produce different row sets for leads 1–2, and they
+   imply different missing reasons once seasonal rows exist: 5.7B emits `not_requested`
+   for an absent lead 1–7 month on the ground that "no product materialises them", which
+   stops being true the moment a seasonal writer exists. Settling which band is meant is
+   an owner decision, not a writer's default.
+
+**Provider gates, unchanged:** `OPEN-18` still means the shipped registry has no
+`validated` provider grid, so no real seasonal job can run; `OPEN-03` still blocks
+commercial ingestion; `OPEN-05` means no raw payload is retained. Implementing the
+writer would therefore be exercised only by fixture registries and fixture rows.
+
+**Not written, deliberately:** no seasonal assembler in `climate-core`; no
+`forecastRunId` payload field; no `persistSeasonalOutlook`; no change to the read
+path's `not_requested`/`pending` split; no spread derivation. Writing any of them now
+would pick one side of decisions 1–3 without a record.
 
 ### 8.8 Phase 5.8 — data quality and operations
 
@@ -1718,18 +1773,19 @@ What this document itself does not change:
   to mark its queue tables as proposed. Where another document is wrong (§3.5), the
   divergence is recorded here for a separate correction, not silently overridden.
 
-What 5.0–5.2 have already changed, recorded here rather than proposed:
+What 5.0–5.7 have already changed, recorded here rather than proposed:
 
 - One contract family in `packages/contracts`: the resolver, the `(provider, model)`
-  registry, `SpatialResolution`, and `cellResolutionRequestSchema` (§5.2).
-- One route: `POST /v1/fields/:fieldId/resolve-cell`, mounted in the Field module
-  (5.2.7); there is still no `/v1/climate` route.
+  registry, `SpatialResolution`, the monthly outlook and estimator contracts, the job
+  payloads, and `cellResolutionRequestSchema` (§5.2, §8.7).
+- Two climate-facing routes: `POST /v1/fields/:fieldId/resolve-cell` (5.2.7) and
+  `GET /v1/climate/outlook` (5.7B, climatology-only).
 - One workspace dependency edge: `apps/api` → `@agroclimate/weather-core`, because the
   production registry instance lives there (§8.2, 5.2.4).
-- Two database helpers: `upsertCell` and `selectFieldAnchor` (5.2.5–5.2.6).
+- Database helpers for cell identity, forecast persistence, settlement, climatology,
+  and monthly-outlook persistence (§8.3–§8.7).
 
-5.3 has since added `app.jobs`, the queue and runner modules, and the run-lifecycle
-helpers; its row in §8.3 is the record. Phases 5.4–5.8 remain pending: their rows in
-§8 are plans, and this reconciliation does not start them. A future change to an
-authoritative document still goes through that document's own review, exactly as
-before.
+5.3–5.7B are implemented and recorded in §8.3–§8.7B. 5.7's seasonal half and 5.8
+remain plans: their rows in §8 are the specification, and this reconciliation does
+not start them. A future change to an authoritative document still goes through that
+document's own review, exactly as before.

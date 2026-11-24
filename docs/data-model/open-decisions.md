@@ -605,9 +605,11 @@ is inside a hash.
 
 ## 6. Phase 5 architecture decisions
 
-Seven decisions were made during the Phase 5 design review and its 5.1 continuation. They are **not** `OPEN-*`
-items — they are recorded here so this file remains the single decision register, and
-they do not change the 29-item count in §1 or §3.
+Ten decisions are recorded in this section: `Q-P5-1`…`Q-P5-8` from the Phase 5 design
+review and its 5.1 continuation, and `Q-P5-RUN`/`Q-P5-SPREAD` from the 2026-11-24 audit of the
+seasonal half of 5.7. They are **not** `OPEN-*` items — they are recorded here so this
+file remains the single decision register, and they do not change the 29-item count in
+§1 or §3.
 
 | ID | Decision | Rationale | Scope | Status | Revisit condition |
 |---|---|---|---|---|---|
@@ -620,6 +622,8 @@ they do not change the 29-item count in §1 or §3.
 | `Q-P5-7` | `monthly_outlooks.value_mm` holds an **estimated precipitation accumulation for one calendar month, in mm**, and the estimate's basis is named per `data_class`: `seasonal_forecast` → `ensemble_mean`, `climatology` → `climatological_mean` (`F-09`) | A single amount column is only honest if every filler of it says how the amount was estimated. Two estimators cover the two classes v1 can write, and neither is a realised total, so the read path must state the estimator rather than let a client infer a forecast from a number | `MonthlyOutlook.valueMm`, `monthly_outlooks.value_mm`, `outlookMonthSchema`, `climateOutlookSchema`, the monthly normalizer, the climatology aggregator, the UI label | **RESOLVED 2026-11-24 — owner-approved.** No estimator column was added: the mapping is total over the classes v1 can produce, so it is derived from `data_class` in `packages/contracts/src/climate.ts`; see the amendment below | A second approved estimator for the same `data_class` (needs a column), a provider-documented monthly total that makes `precipitation_mean` unnecessary, or a class with no approved estimator being written |
 
 | `Q-P5-8` | **Which** `baseline_version` an outlook materialisation uses, and when a new one replaces a stored answer | `monthly_outlooks` has a free-form `baseline_version` per row and no "current baseline" pointer. Multiple versions can coexist (`climatology_baselines` is append-only), so "latest" is not a defined rule: `computed_at` orders builds, not approvals, and silently moving every stored outlook to a newer baseline would change published numbers with no decision behind it. Phase 5.7A therefore **refuses to select**: `baselineVersion` is an explicit `aggregate` job payload field, and an unknown version is terminal `baseline_unknown` | `aggregate` job payload, `packages/database/src/outlook.ts`, the read path, any future scheduler (Phase 6) | **Deferred** — fail-closed explicit input is implemented; no selection policy exists | An owner decision naming the rule (a promotion flag on `climatology_baselines`, a config value, or an explicit operator action per baseline), plus the fan-out that would use it |
+| `Q-P5-RUN` | **Which** `ForecastRun` a `seasonal_forecast` outlook month uses, how old an initialisation may be before the month is labelled stale, and whether a later aggregation of a different run may supersede the active row | `forecast_runs` has no status column, `outlookAggregationJobPayloadSchema` carries only `provider`/`model`/`baselineVersion`/`firstMonth`/selector, and no code performs a "latest run" query. A payload field carrying an explicit run id would refuse to select but would not answer the freshness or supersession question, and the read path currently emits `not_requested` for an absent lead 1–7 month on the ground that no product materialises one. No seasonal `monthly_outlooks` writer exists (5.7C) | a seasonal aggregate payload, a seasonal assembler and writer in `packages/climate-core` / `packages/database/src/outlook.ts`, `apps/worker/src/aggregate/`, the read path's missing-reason and freshness rules | **Deferred** — no selection rule, no freshness rule, no supersession rule, and therefore no writer | An owner decision naming the run-selection rule (explicit run id per job, a current-run pointer, or an operator action), the freshness bound and its stale label, and the supersession rule; then a payload field, a writer, and read-path tests |
+| `Q-P5-SPREAD` | **Which** descriptor of the 50-member SEAS5 ensemble's monthly totals is stored in `monthly_outlooks.ensemble_spread_mm`, over which member population, and how the descriptor is named | Population SD, sample SD, min–max, P10–P90 and IQR all fit one non-negative scalar except the interval endpoints; the column has no CHECK on `spread_unavailable_reason`, no member-count column, and no descriptor column. Computing a spread from the members is possible, but choosing one now would put an unapproved statistic behind a generic name. No code computes any dispersion statistic today | `monthly_outlooks.ensemble_spread_mm`, `spread_unavailable_reason`, `outlookMonthSchema`, any seasonal assembler, the API response, possibly one migration | **Deferred** — the columns exist and are always `NULL` with a reason; the options and consequences are in `docs/review/seasonal-spread-investigation.md` §2–§8 | An owner decision on descriptor, member floor, member-count storage, descriptor naming, and admissible reason tokens; a percentile interval stored as two endpoints needs a schema change |
 
 Recording `Q-P5-1` was not implementing it; Phase 5.3 did that later. `app.jobs`, the
 queue module, and the runner now exist, and still no Redis or BullMQ dependency was
@@ -655,7 +659,7 @@ Five things are now contract, not interpretation:
 5. **A seasonal value is an ensemble estimate, not a guarantee.** The mean of 50 members
    describes the centre of the ensemble's distribution for that initialisation. It says
    nothing about spread, and nothing about what will be realised; the spread columns
-   exist and stay unpopulated until the spread policy is decided (see
+   exist and stay unpopulated until the spread policy is decided (`Q-P5-SPREAD`, and
    `docs/review/seasonal-spread-investigation.md`).
 
 The repository evidence is why the estimator is the mean of member monthly totals and
