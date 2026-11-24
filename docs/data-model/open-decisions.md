@@ -352,6 +352,17 @@ the five above:**
    the ingest identity? Today it could move a stored cell without changing
    `(provider, model, cell_key)`.
 
+**Design proposal 2026-11-24 — question 6 analysed, not decided.**
+`docs/review/open-18-grid-selection-architecture-proposal.md` evaluates the two
+architectures in full: **Option A**, a declared `cellSelection` (`lower-edge` /
+`nearest-centre`) on `GridSpec`; and **Option B**, redefining `cellKey` as the nearest
+node for every grid. It also analyses question 7 (a `requestParametersHash` inside
+`ingestionVersion`, with the served-coordinate drift guard kept as the storage backstop)
+and the antimeridian anomaly. Its recommendation is A, because `ADR-001` D8 and the
+2026-11-21 owner decision make the rounding rule **per model**, while B imposes one
+universal rule and re-interprets every existing key. No option is chosen here, and the
+proposal changes no code, contract, fixture or registry entry.
+
 **Decided, not open:** `cellKey` stays `nodeLat,nodeLon`, because
 `UNIQUE (provider, model, cell_key)` already carries the other two components;
 `gridId` stays in the hash preimage; the hash algorithm does not change.
