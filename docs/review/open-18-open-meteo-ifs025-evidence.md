@@ -5,6 +5,11 @@ added, no `gridSpecHash` is computed or pinned, and no resolver, contract, migra
 golden vector is changed.** The last section is a list of decisions an owner has to make,
 not a record of decisions made.
 
+> **Follow-up 2026-11-24:** the decisions this report lists are analysed in
+> `docs/adr/ADR-008-grid-cell-selection-semantics.md` (status **Proposed**, not accepted).
+> §5 carries a dated erratum for its cell interval; §3.4 was correct. This report is
+> otherwise unchanged.
+
 **Question:** does Open-Meteo's `ecmwf_ifs025` product have enough documented and measured
 evidence to define a production `GridSpec`, and can the current resolver represent what
 the provider actually does without approximation?
@@ -267,6 +272,13 @@ This is the finding that decides the task.
 **Provider model.** Node `n` is the **centre** of a cell covering
 `(n - 0.125, n + 0.125]`. Nodes are `{…, -34.00, -33.75, …}` at 0.25°, including `-90`,
 `+90` and the antimeridian.
+
+> **Erratum 2026-11-24 — not applied to the text above.** The interval as written here
+> contradicts this report's own §3.4, where `-0.125 → 0.00` and `0.125 → 0.25`. With ties
+> toward `+∞` the cell is `[n - step/2, n + step/2)`, i.e. `[n - 0.125, n + 0.125)` at
+> `0.25°`; §3.4 is the authoritative statement and the formula is
+> `floorDiv(2·δ + step, 2·step)`. Recorded and analysed in
+> `docs/adr/ADR-008-grid-cell-selection-semantics.md` §1.4. No measurement changes.
 
 **Resolver model.** `§5.2.2` rule 3: "a cell owns `[node, node + step)` on both axes", and
 `resolveGridCell` computes `i = floorDiv(latµ - originLatµ, stepLatµ)` (`grid.ts:418`). Node

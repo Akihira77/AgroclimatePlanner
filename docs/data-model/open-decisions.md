@@ -73,7 +73,7 @@ part of it.
 | `OPEN-13` | P1 | authentication | after Phase 3 | **none** — resolved 2026-11-20 | nothing: PostgreSQL `app.sessions` was selected (`ADR-005`) and shipped in S5 | nothing on the storage question; the request path that uses the table arrived with `S8`, closing `OPEN-01` | everything — the table exists, is granted, and is verified on canonical |
 | `OPEN-17` | P1 | field snapshot | after Phase 3 | **hard**, for point-shaped fields only | what `areaHa` means for a `POINT`-shaped field | field snapshot creation for point-shaped fields, and every artifact derived from one | the DDL (a `POINT` row is still storable); `POLYGON`/`MULTIPOLYGON` fields end to end |
 | `OPEN-21` | P1 | field snapshot | after Phase 3 | **hard** | the `irrigationAvailable` boolean mapping and three field vocabularies | field → snapshot construction | the DDL — the columns stay unconstrained `text`; every non-snapshot path |
-| `OPEN-18` | P1 | cell resolution | after Phase 3 | **conditional** — generic resolver, literal hash fixtures, the `(provider, model)` registry, the `SpatialResolution` result contract, and a synthetic-only registry instance implemented 2026-11-22 (5.2.1–5.2.4); per-`(provider, model)` grid configuration pending graded evidence; `ecmwf_ifs025` measured 2026-11-24 (grade A partial + B) and still unconfigurable, because the resolver cannot express nearest-centre cell selection (`docs/review/open-18-open-meteo-ifs025-evidence.md`) | the per-provider/model grid origin, spacing, orientation, longitude convention, and revision | cell identity, and field → cell resolution, for a model whose grid configuration is unvalidated | the DDL (`cell_key` is `text` for exactly this reason), the catalog, every query that reads an already-keyed cell, and the now-implemented generic resolver, registry and result contract |
+| `OPEN-18` | P1 | cell resolution | after Phase 3 | **conditional** — generic resolver, literal hash fixtures, the `(provider, model)` registry, the `SpatialResolution` result contract, and a synthetic-only registry instance implemented 2026-11-22 (5.2.1–5.2.4); per-`(provider, model)` grid configuration pending graded evidence; `ecmwf_ifs025` measured 2026-11-24 (grade A partial + B) and still unconfigurable, because the resolver cannot express nearest-centre cell selection (`docs/review/open-18-open-meteo-ifs025-evidence.md`); the candidate decisions are recorded as `docs/adr/ADR-008-grid-cell-selection-semantics.md`, status **Proposed** and not accepted | the per-provider/model grid origin, spacing, orientation, longitude convention, and revision | cell identity, and field → cell resolution, for a model whose grid configuration is unvalidated | the DDL (`cell_key` is `text` for exactly this reason), the catalog, every query that reads an already-keyed cell, and the now-implemented generic resolver, registry and result contract |
 | `OPEN-26` | P1 | window write | after Phase 3 | **hard** | the six-check `EvidenceSegment` partition validator | persisting a `planting_windows` row | the table, its index, every read path, `suitability_runs`, `ai_briefings` |
 | `OPEN-27` | P1 | worker | after Phase 3 | **hard** | how the worker learns which fields a cell serves | `recompute.windows` — the job that delivers a new forecast to a dashboard | the DDL **and** the grants, which ship the documented default: no `app_system` grant on a tenant-owned table |
 | `OPEN-11` | P1 | AI slice | after Phase 3 | **hard** | the `ClimateBriefing` body shape | writing or validating an `ai_briefings` row | the `ai_briefings` DDL; the table is createable exactly as specified, it simply cannot yet hold a valid document |
@@ -363,6 +363,18 @@ and the antimeridian anomaly. Its recommendation is A, because `ADR-001` D8 and 
 universal rule and re-interprets every existing key. No option is chosen here, and the
 proposal changes no code, contract, fixture or registry entry.
 
+**ADR 2026-11-24 — `ADR-008` records the decisions still owed, status `Proposed`.**
+`docs/adr/ADR-008-grid-cell-selection-semantics.md` turns questions 6 and 7 into ten
+numbered decisions (D1–D10) and marks every one **Recommended**, never accepted. It
+recommends Option A, an unconditional `cellSelection` field in the `gridSpecHash`
+preimage, `grid-resolve/2`, and a `requestParametersHash` inside `ingestionVersion`
+that is stored in a separate migration. It also records two arithmetic errata rather
+than editing their sources: the evidence report's §5 cell interval is
+`[n − step/2, n + step/2)`, and proposal §4.5's Option B vector set is 1, 4, 6, 8, 9,
+12, 13 and 15 (vector 10 is unaffected). None of it is implemented. **This entry stays
+`BLOCKED_EXTERNAL_INPUT`:** approval of `ADR-008` and grade A for `ecmwf_ifs025` are
+both still outstanding, and questions 1–5 are untouched.
+
 **Decided, not open:** `cellKey` stays `nodeLat,nodeLon`, because
 `UNIQUE (provider, model, cell_key)` already carries the other two components;
 `gridId` stays in the hash preimage; the hash algorithm does not change.
@@ -543,7 +555,7 @@ and "deferred" were doing too much work:
 | `OPEN-01` | **RESOLVED** | — | both halves met: the owner confirmed the `app_auth` boundary as final (`docs/review/phase-3.2-owner-decisions.md` *Amendment 3*), and `POST /v1/auth/login` now reads `password_hash` through it, proven by `packages/database/test/integration/session.test.mjs` (`current_user = app_auth`, `app.user_id` unset, `app_api` still refused `42501`) |
 | `OPEN-13` | **RESOLVED** | — | not applicable now: `ADR-005` accepted, S5 applied canonically, and the S6 `auth-boundary` suite green (49 cases) |
 | `OPEN-17` | **BLOCKED_EXTERNAL_INPUT** | product decision, then the snapshot path | a `POINT` row is storable; only its snapshot is impossible |
-| `OPEN-18` | **BLOCKED_EXTERNAL_INPUT** | 5.0/5.2: pinned hash, provider/model registry, then provider grid validation — now also an owner decision on cell-selection semantics (nearest-centre row vs lower-edge resolver) | the generic resolver contract is approved (2026-11-21); `cell_key` is `text` and no constraint depends on its content; the field-mapping boundary is resolved (5.2 defers `field_outlook_cells`); `ecmwf_ifs025` geometry measured 2026-11-24 |
+| `OPEN-18` | **BLOCKED_EXTERNAL_INPUT** | 5.0/5.2: pinned hash, provider/model registry, then provider grid validation — now also an owner decision on cell-selection semantics (nearest-centre row vs lower-edge resolver), analysed in `docs/adr/ADR-008-grid-cell-selection-semantics.md` (`Proposed`, not accepted) | the generic resolver contract is approved (2026-11-21); `cell_key` is `text` and no constraint depends on its content; the field-mapping boundary is resolved (5.2 defers `field_outlook_cells`); `ecmwf_ifs025` geometry measured 2026-11-24 |
 | `OPEN-21` | **BLOCKED_EXTERNAL_INPUT** | agronomic decision, then snapshot construction | the columns stay unconstrained `text` |
 | `OPEN-26` | **DEFERRED** | the window engine that produces segments | the table, plus a `jsonb_typeof` array check, is all the schema can honestly do |
 | `OPEN-27` | **BLOCKED_EXTERNAL_INPUT** | worker phase, with a security review of the narrowest read shape | grants ship the default: nothing to `app_system` |

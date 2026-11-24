@@ -350,6 +350,13 @@ literal fixture changes anyway. `GRID_RESOLUTION_ALGORITHM_VERSION` **must** bum
 
 ### 4.5 Vectors and keys
 
+> **Erratum 2026-11-24 — not applied to the text below.** Vector 10 is **unaffected**:
+> longitude is wrapped into `[originLon, originLon + 360)` *before* rounding
+> (`grid.ts:396-400`), so `−0.5` becomes `359.5` and both inputs still resolve to one
+> cell. Recomputing every vector's inputs puts the Option B set at **1, 4, 6, 8, 9, 12,
+> 13 and 15**, not 1, 4, 6, 9, 10, 12, 15. Recorded in
+> `docs/adr/ADR-008-grid-cell-selection-semantics.md` §1.4; no measurement changes.
+
 The eighteen vectors are the executable definition of the current rule. Under Option B,
 vectors 1, 4, 6, 9, 10, 12 and 15 change their expected `(i, j, key)` or their prose.
 Vector 1's `(0.5, 0.5)` is exactly a tie and rounds to `1.00`; `0.999999 → 1.00` no
