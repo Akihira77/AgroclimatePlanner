@@ -178,6 +178,21 @@ export async function loadClimatologyOutlookSource(
   return { baselineDataset: dataset.data, normals };
 }
 
+export interface PersistClimatologyOutlookOptions {
+  /**
+   * `true` when the caller already holds this cell's footprint lock for the
+   * current transaction.
+   *
+   * A multi-cell job must take the **whole** footprint set in one
+   * `lockForecastFootprint` call *before* any cell is written: that function
+   * sorts and de-duplicates what it is given, so one call is a global ordering,
+   * while one call per cell is an ordering decided by the selector array — two
+   * jobs with the same cells in opposite order would then wait on each other.
+   * Set this only after that acquisition, or the write is unprotected.
+   */
+  readonly footprintLockHeld?: boolean | undefined;
+}
+
 /**
  * Write the climatology months of one derivation.
  *
@@ -187,6 +202,7 @@ export async function loadClimatologyOutlookSource(
 export async function persistClimatologyOutlook(
   tx: TenantTransaction,
   input: PersistClimatologyOutlookInput,
+  options: PersistClimatologyOutlookOptions = {},
 ): Promise<PersistClimatologyOutlookResult> {
   if (input.inputRefs.length === 0) {
     throw new InvariantViolationError("a persisted outlook month needs at least one input ref");
@@ -213,7 +229,11 @@ export async function persistClimatologyOutlook(
 
   // The same slot `weather_records` writes serialise on. Over-serialising two
   // writers of one cell costs a wait; under-serialising costs two live rows.
-  await lockForecastFootprint(tx, [{ cellKey: input.cellKey, variable: input.variable }]);
+  // A multi-cell caller passes `footprintLockHeld` instead, having taken the
+  // complete set in its own globally ordered call.
+  if (options.footprintLockHeld !== true) {
+    await lockForecastFootprint(tx, [{ cellKey: input.cellKey, variable: input.variable }]);
+  }
 
   let inserted = 0;
   let superseded = 0;

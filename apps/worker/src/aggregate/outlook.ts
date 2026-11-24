@@ -7,6 +7,7 @@ import {
   InvariantViolationError,
   LeaseLostError,
   loadClimatologyOutlookSource,
+  lockForecastFootprint,
   lockJobForSettlement,
   OutlookBaselineNotFoundError,
   OutlookCellNotFoundError,
@@ -33,6 +34,12 @@ import type { HandlerResult, JobHandler } from "../runner.js";
  * rolls back to the previous active row, so a broken recomputation never removes
  * the last valid answer.
  *
+ * **Lock order is global, not per cell.** Every cell's footprint is locked in one
+ * `lockForecastFootprint` call before the first write; that function sorts and
+ * de-duplicates the set it is given. Taking the locks cell by cell would make the
+ * order a property of the selector array, and two jobs holding the same cells in
+ * opposite order would wait on each other (PostgreSQL `40P01`).
+ *
  * Triggering is deliberately absent: nothing in this repository schedules an
  * `aggregate` job yet (there is no scheduler, and Phase 6 owns the fan-out). An
  * operator or a test enqueues it with an explicit `baselineVersion` and
@@ -48,6 +55,20 @@ export const OUTLOOK_AGGREGATION_TIMEOUTS = {
 } as const;
 
 const SUPPORTED_VARIABLE = "precipitation";
+
+/**
+ * A ceiling on selector size, not a throughput target.
+ *
+ * `targetSelectorSchema` has no maximum, and this handler does every cell in one
+ * transaction: the measured cost is a few dozen statements per cell (12 normals
+ * read, 5 months × read/stage/retire/promote), against a 60 s client-side
+ * transaction bound and a 30 s statement bound. An unbounded selector would fail
+ * as a transaction timeout on every attempt — retried until `dead`, with nothing
+ * saying why. 256 cells leaves an order of magnitude of headroom over the ~1200
+ * cells the 60 s bound could fit, and the fix for more is a per-cell fan-out
+ * (Phase 6), not a larger number here.
+ */
+export const MAX_OUTLOOK_CELLS_PER_JOB = 256;
 
 export interface OutlookAggregationHandlerOptions {
   readonly now?: (() => Date) | undefined;
@@ -96,6 +117,13 @@ export function createOutlookAggregationHandler(
         );
       }
 
+      if (payload.targetSelector.cells.length > MAX_OUTLOOK_CELLS_PER_JOB) {
+        return terminal(
+          "selector_too_large",
+          `a single aggregate job materialises at most ${MAX_OUTLOOK_CELLS_PER_JOB} cells; this selector names ${payload.targetSelector.cells.length}`,
+        );
+      }
+
       const computedAt = now();
 
       try {
@@ -120,7 +148,19 @@ export function createOutlookAggregationHandler(
               );
             }
 
+            // One call, one global order: `lockForecastFootprint` sorts and
+            // de-duplicates the complete set, so two jobs with the same cells in
+            // any payload order acquire the same keys in the same order.
+            await lockForecastFootprint(
+              tx,
+              payload.targetSelector.cells.map((entry) => ({
+                cellKey: entry.cellKey,
+                variable: SUPPORTED_VARIABLE,
+              })),
+            );
+
             let inserted = 0;
+            let superseded = 0;
             let unchanged = 0;
             let persistedMonths = 0;
 
@@ -159,19 +199,24 @@ export function createOutlookAggregationHandler(
                 continue;
               }
 
-              const written = await persistClimatologyOutlook(tx, {
-                provider: payload.provider,
-                model: payload.model,
-                cellKey: entry.cellKey,
-                variable: SUPPORTED_VARIABLE,
-                derivationVersion: derivation.derivationVersion,
-                inputRefs: derivation.inputRefs,
-                inputSnapshotHash: derivation.inputSnapshotHash,
-                computedAt,
-                months: derivation.months,
-              });
+              const written = await persistClimatologyOutlook(
+                tx,
+                {
+                  provider: payload.provider,
+                  model: payload.model,
+                  cellKey: entry.cellKey,
+                  variable: SUPPORTED_VARIABLE,
+                  derivationVersion: derivation.derivationVersion,
+                  inputRefs: derivation.inputRefs,
+                  inputSnapshotHash: derivation.inputSnapshotHash,
+                  computedAt,
+                  months: derivation.months,
+                },
+                { footprintLockHeld: true },
+              );
 
               inserted += written.inserted;
+              superseded += written.superseded;
               unchanged += written.unchanged;
               persistedMonths += derivation.months.length;
 
@@ -181,9 +226,9 @@ export function createOutlookAggregationHandler(
                 baselineVersion: payload.baselineVersion,
                 firstMonth: payload.firstMonth,
                 months: derivation.months.length,
-                inserted: written.inserted,
-                superseded: written.superseded,
-                unchanged: written.unchanged,
+                monthsInserted: written.inserted,
+                monthsSuperseded: written.superseded,
+                monthsUnchanged: written.unchanged,
                 inputSnapshotHash: derivation.inputSnapshotHash,
               });
             }
@@ -199,7 +244,7 @@ export function createOutlookAggregationHandler(
               mode: { mode: "succeed", to: "succeeded", recordCount, coveragePercent },
             });
 
-            return { recordCount, coveragePercent };
+            return { recordCount, coveragePercent, inserted, superseded, unchanged };
           },
           {
             timeout: OUTLOOK_AGGREGATION_TIMEOUTS.transactionTimeoutMs,
@@ -211,6 +256,13 @@ export function createOutlookAggregationHandler(
           jobId: job.id,
           firstMonth: payload.firstMonth,
           baselineVersion: payload.baselineVersion,
+          cells: payload.targetSelector.cells.length,
+          monthsInserted: counts.inserted,
+          monthsSuperseded: counts.superseded,
+          monthsUnchanged: counts.unchanged,
+          // `recordCount` is the settlement contract's number: months affirmed,
+          // not rows written. The three above are the write detail.
+          monthsAffirmed: counts.recordCount,
           recordCount: counts.recordCount,
         });
 

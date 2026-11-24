@@ -15,7 +15,10 @@ import { after, before, describe, it } from "node:test";
 import { targetSelectorHashOf } from "@agroclimate/contracts";
 import { createPrismaClient } from "@agroclimate/database";
 
-import { createOutlookAggregationHandler } from "../../dist/aggregate/outlook.js";
+import {
+  MAX_OUTLOOK_CELLS_PER_JOB,
+  createOutlookAggregationHandler,
+} from "../../dist/aggregate/outlook.js";
 import { createPostgresQueue } from "../../dist/queue/postgres.js";
 import { createRunner } from "../../dist/runner.js";
 import { roleConnectionString } from "../../../../packages/database/scripts/lib/connections.mjs";
@@ -28,6 +31,7 @@ const PROVIDER = "open-meteo";
 const MODEL = `p57aw_${token}`;
 const CELL = `p57aw-${token}`;
 const MISSING_CELL = `p57aw-missing-${token}`;
+const CELL_TWO = `p57aw-two-${token}`;
 const BASELINE = `ERA5:1991-2020:p57aw${token}`;
 const UNKNOWN_BASELINE = `ERA5:1991-2020:p57aw${token}unknown`;
 const FIRST_MONTH = "2026-08-01";
@@ -105,7 +109,7 @@ async function jobRow(id) {
   return rows[0];
 }
 
-async function outlookRows() {
+async function outlookRows(cellKey = CELL) {
   return owner.$queryRaw`
     SELECT c.cell_key AS "cellKey",
            to_char(o.month, 'YYYY-MM-DD') AS month,
@@ -121,7 +125,9 @@ async function outlookRows() {
            o.status
       FROM app.monthly_outlooks o
       JOIN app.outlook_cells c ON c.id = o.outlook_cell_id
-     WHERE c.provider = ${PROVIDER} AND c.model = ${MODEL}
+     WHERE c.provider = ${PROVIDER}
+       AND c.model = ${MODEL}
+       AND c.cell_key = ${cellKey}
      ORDER BY o.month, o.created_at
   `;
 }
@@ -134,6 +140,7 @@ before(async () => {
 
   const cells = [
     { cellKey: CELL, ratio: 1 },
+    { cellKey: CELL_TWO, ratio: 1 },
     // A cell whose baseline exists but holds no normal for this month-of-year.
     { cellKey: MISSING_CELL, ratio: 0 },
   ];
@@ -246,6 +253,41 @@ describe("aggregate — climatology materialisation", () => {
     assert.ok(rows.every((row) => row.status === "active"));
   });
 
+  it("materialises every cell of a multi-cell selector in one job", async () => {
+    const { queue, runner } = makeRunner();
+    const selector = {
+      cells: [
+        { cellKey: CELL, variable: "precipitation" },
+        { cellKey: CELL_TWO, variable: "precipitation" },
+      ],
+    };
+    const { id } = await enqueue(queue, payloadFor({ targetSelector: selector }));
+
+    assert.equal(await runOnly(runner, id), "handled");
+    assert.equal((await jobRow(id)).status, "succeeded");
+
+    for (const cellKey of [CELL, CELL_TWO]) {
+      const rows = await outlookRows(cellKey);
+      assert.equal(rows.length, 5, `${cellKey} has five climatology months`);
+      assert.ok(rows.every((row) => row.status === "active"));
+    }
+  });
+
+  it("refuses a selector above the per-job cell ceiling instead of timing out", async () => {
+    const { queue, runner } = makeRunner();
+    const cells = Array.from({ length: MAX_OUTLOOK_CELLS_PER_JOB + 1 }, (_unused, index) => ({
+      cellKey: `${CELL}-${index}`,
+      variable: "precipitation",
+    }));
+    const { id } = await enqueue(queue, payloadFor({ targetSelector: { cells } }));
+
+    assert.equal(await runOnly(runner, id), "handled");
+
+    const job = await jobRow(id);
+    assert.equal(job.status, "dead");
+    assert.equal(job.lastError.code, "selector_too_large");
+  });
+
   it("persists nothing for a cell whose baseline holds no normal", async () => {
     const { queue, runner } = makeRunner();
     const { id } = await enqueue(queue, payloadFor({ targetSelector: selectorFor(MISSING_CELL) }));
@@ -255,8 +297,8 @@ describe("aggregate — climatology materialisation", () => {
     const job = await jobRow(id);
     assert.equal(job.status, "succeeded");
 
-    const rows = await outlookRows();
-    assert.ok(!rows.some((row) => row.cellKey === MISSING_CELL));
+    const rows = await outlookRows(MISSING_CELL);
+    assert.equal(rows.length, 0);
   });
 });
 

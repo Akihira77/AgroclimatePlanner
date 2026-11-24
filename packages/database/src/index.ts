@@ -150,6 +150,7 @@ export type {
   ClimatologyOutlookMonthRow,
   ClimatologyOutlookSource,
   PersistClimatologyOutlookInput,
+  PersistClimatologyOutlookOptions,
   PersistClimatologyOutlookResult,
 } from "./outlook.js";
 

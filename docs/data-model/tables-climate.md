@@ -394,6 +394,13 @@ Write order, forced by this table's own constraints:
    `superseded` pointing at it, then the new row is promoted to `active`. All of
    it is one transaction, so no intermediate state is ever visible.
 
+Lock order is global, not per cell. The complete footprint set of a job is
+acquired in **one** `lockForecastFootprint` call, which sorts and de-duplicates
+the keys; a per-cell call would make the order a property of the selector array,
+and two jobs holding the same cells in opposite order would deadlock (`40P01`)
+on the second key each. The job row is still locked first, and only then the
+footprints.
+
 Idempotency is by identity, not by timestamp: `(outlook_cell_id, variable, month)`
 plus `derivation_version`, `input_snapshot_hash` and `baseline_version`. An
 identical recompute writes nothing (`unchanged`); changed inputs or a changed
