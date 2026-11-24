@@ -7,8 +7,9 @@ per-member monthly aggregates required by ADR-001 D8b; ensemble **spread itself
 is not computed**); 5.7A (climatology materialisation) and 5.7B (climatology read
 route) implemented; 5.7C (seasonal source-selection and materialisation contract)
 documented with nothing implemented; 5.7's seasonal half is not written and 5.7D is
-blocked on two owner decisions (§8.7C.2 lead-month anchor, §8.7C.4 freshness
-representation); 5.8 not started.**
+partially blocked — the lead-month anchor (§8.7C.2) gates month selection, while run
+identity, the freshness field and member-count storage gate enforcement, labelling and
+provenance respectively (§8.7C.9); 5.8 not started.**
 5.2.1–5.2.8 are complete as of `8a6f2ec` (2026-11-22): generic grid resolution, a
 synthetic registry instance, the tenant-scoped field centroid read, cell identity
 persistence, and `POST /v1/fields/:fieldId/resolve-cell`. 5.3 is complete as of the
@@ -1609,11 +1610,12 @@ schema, migration or test was changed to produce this section. 5.7D is the imple
 phase this section authorises; it is not started and nothing here may be cited as runtime
 behaviour.
 
-**Two items block it, and both are owner decisions, not engineering details.** §8.7C.2:
-the approved sentence for lead month 1 and the provider's seven-month window cannot both
-hold. §8.7C.4: freshness has no representation anywhere — no column, no response field.
-Everything else in this section is either approved, verified, or recorded as a
-recommendation with the evidence behind it.
+**5.7D is partially blocked, not wholly blocked** (§8.7C.9 classifies each dependency). The
+lead-month anchor is the only item that gates the value: without it the writer cannot decide
+which calendar month a run fills. Run-identity storage gates enforceable supersession, the
+response field gates the `stale` label, and member-count storage gates provenance
+completeness — none of them gates the payload branch, run validation, the population read, the
+assembler, or the read-path switch.
 
 ##### 8.7C.1 What the source actually is (verified)
 
@@ -1621,10 +1623,10 @@ recommendation with the evidence behind it.
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | SEAS5 arrives through Open-Meteo's seasonal endpoint, `models=ecmwf_seas5`                                                                                                                                                      | `buildSeas5MonthlyUrl`, `buildSeas5MemberDailyUrl` (`packages/weather-core/src/adapters/open-meteo-seasonal.ts`) |
 | The daily payload carries `precipitation_sum` plus exactly `precipitation_sum_member01`…`_member50`                                                                                                                             | measured live 2026-11-23 at `-6.2,106.8`, recorded in that module's note                                         |
-| The member set is verified, not counted: every identifier in `1..50` must be present and unique, the mean column is excluded by name, and any other column is `provider_changed`                                                | `collectMembers` (`adapters/open-meteo-daily.ts`), called with `SEAS5_ENSEMBLE_MEMBERS = 50`                     |
+| The member set is verified, not counted: every provider identifier `member01`…`member50` must be present and unique, the mean column is excluded by name, and any other column is `provider_changed`. The adapter converts each provider identifier to a **zero-based internal index** (`memberId - 1`), so the population it hands on is `0..49` | `collectMembers` (`adapters/open-meteo-daily.ts`), called with `SEAS5_ENSEMBLE_MEMBERS = 50` |
 | The member window is the run's own seven consecutive calendar months, starting with the month of `initializedAt`                                                                                                                | `seas5MemberWindow` (offset 0…6)                                                                                 |
 | A member-month is stored only as a full-month sum: every calendar day of the month must be present for that member and carry a value, or the row is stored with `value = NULL` and an **unpersisted** normalizer reason         | `aggregateMonthlyMemberTotals` (`normalize/monthly.ts`)                                                          |
-| Stored member rows are `variable='precipitation_sum'`, `temporal_resolution='monthly'`, `aggregation_level='monthly_sum'`, `ensemble_member 1..50`, `ensemble_size 50`, `normalizer_version='monthly-member-aggregation@1.0.0'` | `apps/worker/src/ingest/seasonal.ts`, `persistForecastRun` (`packages/database/src/weather.ts`)                  |
+| Stored member rows are `variable='precipitation_sum'`, `temporal_resolution='monthly'`, `aggregation_level='monthly_sum'`, `ensemble_member 0..49`, `ensemble_size 50`, `normalizer_version='monthly-member-aggregation@1.0.0'`. `ensemble_size` is derived as the number of distinct member indices in the payload, not a constant; the database enforces `ensemble_member >= 0` and `ensemble_member < ensemble_size` | `apps/worker/src/ingest/seasonal.ts`, `aggregateMonthlyMemberTotals` (`normalize/monthly.ts`), `weather_records_ensemble_check` / `weather_records_ensemble_member_check` (`20261118030000_domain_tables`) |
 | The provider's own monthly product uses `forecast_days=217` from the **request day**, so its month keys are anchored on the ingestion day, not the run                                                                          | `buildSeas5MonthlyUrl`                                                                                           |
 | No seasonal writer exists; `monthly_outlooks` is written only by `persistClimatologyOutlook`                                                                                                                                    | `packages/database/src/outlook.ts`; module note in `packages/climate-core/src/outlook-read.ts`                   |
 
@@ -1633,9 +1635,23 @@ Two consequences follow, and both shape the contract:
 1. The provider's `precipitation_mean` rows are **not** the source for a seasonal outlook
    month, and their request-day anchoring is the reason: the member aggregates are the
    only run-anchored monthly quantity. `Q-P5-7` already requires the member mean.
-2. Because the adapter refuses any member set other than `1..50`, a provider change to 51
-   columns fails ingestion loudly (`provider_changed`) instead of silently changing the
-   population under a stored `ensemble_size`.
+2. Because the adapter refuses any member set other than `member01…member50`, a provider
+   change to a 51st member column fails ingestion loudly (`provider_changed`) instead of
+   silently changing the population under a stored `ensemble_size`.
+
+**Member identity, stated precisely.** Three layers use three vocabularies, and conflating
+them is what makes a population predicate wrong:
+
+| Layer | Vocabulary | Evidence |
+|---|---|---|
+| Provider payload | string column names `precipitation_sum_member01` … `precipitation_sum_member50`, 1-based in the name | `collectMembers` |
+| Adapter in memory | integer `0..49`, produced by `memberId - 1`; adapter messages quote the provider identifier, while normalizer messages print `member + 1` back into provider numbering | `collectMembers`, `aggregateMonthlyMemberTotals` error paths |
+| `weather_records` | `ensemble_member` `0..49` with `ensemble_size = 50` | `normalize/monthly.ts`, `ingest/seasonal.ts`, DDL checks |
+
+So "all 50 **required** members" means all 50 member columns this adapter currently
+exposes — not proof that ECMWF's 51 physical SEAS5 members are represented. The physical
+mapping stays unresolved (§8.7C.10), and no count, index or `ensemble_size` value implies
+which physical member is missing.
 
 ##### 8.7C.2 Lead month and the seasonal band (blocking)
 
@@ -1687,22 +1703,61 @@ the current Asia/Jakarta month (`apps/api/src/climate/climate.service.ts`), whic
 coincides with the initialisation month of a run ingested in that month, and under B is one
 month short of the first month such a run can fill.
 
-**Unresolved; owner decision required.** Reading B makes the approved band unrepresentable
-from an approved seven-month horizon and would move `climatology` to lead 7, which is a
-different band rather than a detail. Reading A contradicts the owner's stated example.
-**Recommendation: A**, because it preserves the approved 1–7 band, matches the seven-month
-window, matches ECMWF's forecast-month convention, and keeps `climatology` starting at
-lead 8 — the first month no SEAS5 run supplies. Adopting A is a documentation change to
-one sentence, not to the band.
+**Unresolved; owner decision required. The owner's direction is not adopted by this
+contract, and it is not overridden by it either.** The approved direction — lead month 1 is
+the calendar month after the initialisation month — is the one that must be implemented
+unless the owner changes it. What this section records is that it cannot be implemented
+against the seven-month window as things stand:
+
+| Consequence | Reading A (lead 1 = initialisation month) | Reading B (owner direction: lead 1 = month after) |
+|---|---|---|
+| Months one run can fill | 7 (forecast months 1–7) | 6 (leads 1–6) |
+| Band 1–7 fully filled | yes | no — lead 7 has no input from any run |
+| `climatology` would begin at | lead 8 (unchanged) | lead 7 (a different band) |
+| Consistent with `MONTHLY_OUTLOOK_BANDS` | yes | no, unless the band is restated as 1–6 |
+| Consistent with the owner's stated example | no | yes |
+
+So the conflict is not a wording problem to be tidied. Choosing B is a **band change**
+(1–6 seasonal, 7–12 climatology, `MONTHLY_OUTLOOK_BANDS` edited, §8.9 restated); choosing A
+is a **direction change** (the owner's sentence restated as forecast-month numbering).
+Neither happens in this task, and no implementation may assume either: 5.7D's month
+selection stays blocked until the owner picks, and any interim code must take the anchor as
+an explicit input rather than defaulting to one reading.
+
+For completeness, the engineering case for A: it keeps the approved band representable, it
+matches ECMWF's forecast-month numbering, it keeps `climatology` at the first month no SEAS5
+run supplies, and the read API's `firstMonth` default (current Asia/Jakarta month, verified
+in `apps/api/src/climate/climate.service.ts`) coincides with the initialisation month of a
+run ingested in that month. That case is a recommendation to the owner, not a decision, and
+it does not make the owner's direction wrong — it makes it expensive.
 
 What this does **not** block: the quantity, the population rule, the payload shape, the
 persistence order, the read-path rules, and the provenance mapping.
 
 ##### 8.7C.3 The member population (approved: all 50, or nothing)
 
-A seasonal monthly value exists only when the month's population is **complete**: the 50
-stored member rows for that `(forecastRunId, cellKey, month)`, every one of them carrying
-a stored total.
+A seasonal monthly value exists only when the month's population is **complete**. Completeness
+is a conjunction, not a count: 50 rows that are the right 50, from one run, one ingestion, one
+cell, one month, one variable, one resolution, one aggregation level, all live, all valued.
+
+| # | Condition on the live rows for one `(cellKey, month)` | Why it is separate |
+|---|---|---|
+| 1 | exactly 50 rows satisfy the member predicate | a count alone is not identity (§8.7C.1) |
+| 2 | their `ensemble_member` values are unique and the set is exactly `0..49` | 50 rows with a duplicate and a hole would pass a count |
+| 3 | every `value` (the monthly total) is non-null | one null is an incomplete member (table below) |
+| 4 | every row has `ensemble_size = 50` | the stored population statement must match the rows it summarises |
+| 5 | all rows share one `forecast_run_id` | mixing initialisations mixes two forecasts |
+| 6 | all rows share one `ingestion_run_id` | mixing ingestions mixes two conversions of the same run |
+| 7 | all rows share the requested `cell_key` | the month belongs to one cell; the registry may serve several |
+| 8 | all rows share one target month (`valid_at`, first-of-month) | a month is the unit of the value |
+| 9 | `variable = 'precipitation_sum'` | the member product's own name (§8.7C.1); never the provider mean |
+| 10 | `temporal_resolution = 'monthly'` | a daily member row is not a monthly total |
+| 11 | `aggregation_level = 'monthly_sum'` | a different aggregation is a different quantity |
+| 12 | every row is live (`superseded_at IS NULL`) | a superseded row is not part of the current population |
+
+Condition 4 is not redundant with condition 1: `ensemble_size` is derived at ingest as the
+number of distinct member indices in the payload, so a payload carrying 50 members writes
+`50`, while a payload carrying 49 writes `49` — and the adapter is what refuses the latter.
 
 | Valid member totals           | Result                                                          |
 | ----------------------------- | --------------------------------------------------------------- |
@@ -1720,18 +1775,33 @@ Refused under this contract, without exception:
 Selection is per month and **one ingestion run**. Verified basis: a retry reuses the same
 `ingestion_runs` row (`attempt` increments, `created_at` does not), so a second row exists
 only when `ingestion_version` changes — and live `weather_records` already hold one winner
-per `(cell, variable, valid_at, member)` across runs of the same initialisation
-(`persistForecastRun`). The population is therefore a read of live rows, not a merge:
+per `(cell_key, variable, valid_at, ensemble_member)` across runs of the same initialisation
+(`persistForecastRun`, `weather_records_live_key`). The population is therefore a read of
+live rows, not a merge:
 
 ```
-live member rows for (forecast_run_id, cell_key, 'precipitation_sum', 'monthly',
-                      'monthly_sum', month) where ensemble_member is not null
-  AND superseded_at IS NULL
-  => require exactly 50 rows, every value_mm not null, and one distinct ingestion_run_id
+FROM app.weather_records
+WHERE forecast_run_id  = :runId
+  AND cell_key         = :cellKey
+  AND variable         = 'precipitation_sum'
+  AND temporal_resolution = 'monthly'
+  AND aggregation_level   = 'monthly_sum'
+  AND valid_at         = :month          -- first-of-month
+  AND ensemble_member IS NOT NULL
+  AND superseded_at   IS NULL
+-- complete iff
+--   count(*) = 50
+--   AND the ensemble_member set is exactly {0,…,49}
+--   AND every value is NOT NULL
+--   AND every ensemble_size = 50
+--   AND count(DISTINCT ingestion_run_id) = 1
 ```
 
-`ensemble_size` on each row is already `50`, so the expected population is a stored fact
-rather than a constant the reader has to trust.
+The mean is then `avg(value)` over those 50 rows — the arithmetic mean of the 50 monthly
+totals, per `Q-P5-7`. Two different columns carry the word: `weather_records.value` is the
+member's monthly total, `monthly_outlooks.value_mm` is where the mean is written. Nothing
+else in the query is negotiable: a relaxed variant of any single line is a different
+product.
 
 **The cause of a missing member is not stored.** `weather_records` has no reason column;
 `member_incomplete` / `provider_null` / `axis_incomplete` exist only in memory at ingest
@@ -1756,20 +1826,43 @@ Provider schedule, verified externally rather than assumed:
 | Open-Meteo seasonal API documentation (<https://open-meteo.com/en/docs/seasonal-forecast-api>, retrieved 2026-11-24) | "Seasonal SEAS5 forecast update every month on the 5th"; "Forecasts for all 51 individual members are only kept for one month"                                                                                                                                                                           | yes — this integration's delivery day and member retention |
 | `docs/adr/ADR-001` follow-up 6        | "SEAS5 refreshes on the 5th"                                                                                                                                                                                                                                                                             | consistent, but it was a note, not a source                |
 
-Derived rule — arithmetic on the provider's own schedule, not a chosen TTL:
+**Four instants stand between a model run and a served month, and only the first is stated
+with a time of day.**
 
-| State         | Definition                                                                                      | May be served       |
-| ------------- | ----------------------------------------------------------------------------------------------- | ------------------- |
-| `fresh`       | now is before the next scheduled release, `(M+1)-05 12Z UTC` for a run initialised in month `M` | yes                 |
-| `stale`       | now is at or past that release and no newer usable run has been materialised                    | yes, labelled stale |
-| `unavailable` | no run has ever produced a usable month for this cell                                           | no value            |
+| # | Instant | Evidence | Status |
+|---|---|---|---|
+| 1 | **ECMWF publication** — 12Z UTC on the 5th of the initialisation month (a 1 November run is published 5 November 12Z; the next scheduled release is 5 December 12Z) | SEAS5 user guide §2.2.1, quoted above | verified |
+| 2 | **Open-Meteo model availability** — "Seasonal SEAS5 forecast update every month on the 5th" | Open-Meteo seasonal API documentation, retrieved 2026-11-24 | day stated, no release time stated |
+| 3 | **Open-Meteo API consistency** — "Data across all Open-Meteo servers is eventually consistent … it's recommended to wait an additional 10 minutes after the forecast update has been applied"; "please wait 10 minutes after the availability time" | `https://open-meteo.com/en/docs/model-updates` §2–§3, retrieved 2026-11-24 | verified |
+| 4 | **Ingestion and materialisation here** — from a scheduled pull to an active outlook row | no scheduler, no instrumented latency; the 30 s transaction bound is a ceiling, not a latency | unmeasured |
 
-**Grace period: zero, deliberately.** The boundary is the provider's release instant, so
-the label flips exactly when a newer forecast should have existed. Any additional buffer
-would be an invented number: the repository has no measurement of ingest-to-outlook
-latency, and the 30 s transaction bound is a ceiling, not a latency. When 5.8 instruments
-the pipeline, a p95 delay becomes a measured grace value; until then, adding one would
-mean guessing.
+A stale boundary placed at instant 1 assumes instants 2–4 take no time. That assumption is
+contradicted by the provider's own documentation for instant 3, and cannot be checked
+against instant 4 because nothing measures it.
+
+| State | Definition | May be served |
+|---|---|---|
+| `fresh` | before the chosen stale boundary — presently the next scheduled release, `(M+1)-05 12Z UTC` for a run initialised in month `M` | yes |
+| `stale` | at or past that boundary and no newer usable run has been materialised | yes, labelled stale |
+| `unavailable` | no run has ever produced a usable month for this cell | no value |
+
+**Grace period: zero — a provisional recommendation, not an operational guarantee.** The
+zero is not derived from measurement; it is the only boundary that can be stated without
+inventing a figure, because it uses an instant ECMWF does publish. Two things are known
+that it ignores:
+
+- the provider recommends waiting 10 minutes after availability for consistency across its
+  servers, so instant 3 is non-zero by the provider's own advice;
+- this pipeline is pull-based, so instants 2–4 are non-zero by construction, and a month
+  can be labelled stale before any pull has had a chance to happen.
+
+The provider's 10 minutes is therefore **evidence that zero is optimistic, not a chosen
+value for this system**: it bounds provider-side copying, not the interval between "the
+release exists" and "we have materialised a month". Adopting it here would conflate
+instants 3 and 4. Adjusting zero requires one of: a measured ingest→materialisation
+latency, or an owner decision to window the boundary by the provider's consistency advice.
+Until one of those exists, zero stays labelled provisional, and no constant is introduced
+into any runtime file.
 
 **Evaluation point: read time, derived, not stored.** Staleness is a function of the run's
 `initialized_at` and the clock, and a stored copy would be wrong the moment the clock
@@ -1928,24 +2021,40 @@ should be recorded rather than rediscovered:
 
 | Work item                                                                                             | Where                                               | Needs                                   |
 | ----------------------------------------------------------------------------------------------------- | --------------------------------------------------- | --------------------------------------- |
-| Seasonal payload branch with `forecastRunId`                                                          | `packages/contracts/src/job.ts`                     | §8.7C.6                                 |
-| Run validation including `model = 'ecmwf_seas5'`                                                      | `apps/worker/src/aggregate/`                        | §8.7C.6                                 |
-| Population read (50 live valued member rows, one ingestion run)                                       | `packages/database/src/`                            | §8.7C.3                                 |
-| Seasonal assembler + record-set hash                                                                  | `packages/climate-core/src/`                        | §8.7C.6                                 |
-| `persistSeasonalOutlook` with rank comparison and class precedence                                    | `packages/database/src/outlook.ts`                  | §8.7C.5, and the two run columns        |
-| Read path: `pending` instead of `not_requested` for an absent lead 1–7 month; keep `inconsistent_row` | `packages/climate-core/src/outlook-read.ts`         | §8.7C.7                                 |
-| Read path: freshness derivation                                                                       | `packages/database/src/outlook.ts`, response schema | §8.7C.4 — blocked on the response field |
+| Work item | Where | Needs | Blocked? |
+|---|---|---|---|
+| Seasonal payload branch with `forecastRunId` | `packages/contracts/src/job.ts` | §8.7C.6 | no |
+| Run validation including `model = 'ecmwf_seas5'` | `apps/worker/src/aggregate/` | §8.7C.6 | no |
+| Population completeness predicate, exactly as §8.7C.3 states it | `packages/database/src/` | §8.7C.3 | no |
+| Seasonal assembler + record-set hash | `packages/climate-core/src/` | §8.7C.6 | no (member-count storage only narrows the hash preimage) |
+| Month selection: map a run's initialisation month to the months it may fill | `packages/climate-core/src/`, worker | §8.7C.2 | **yes — lead-month anchor** |
+| `persistSeasonalOutlook`, class precedence and stage→retire→promote | `packages/database/src/outlook.ts` | §8.7C.5 | no for the insert path; rank comparison needs the run columns |
+| Read path: `pending` instead of `not_requested` for an absent lead 1–7 month; keep `inconsistent_row` | `packages/climate-core/src/outlook-read.ts` | §8.7C.7 | no |
+| Read path: freshness derivation and response field | `packages/database/src/outlook.ts`, `packages/contracts/src/climate.ts` | §8.7C.4 | **yes — response representation** |
 
-**Open items, and whether they block 5.7D:**
+**Blocker classification.** Four open dependencies are owner decisions, and they do not
+carry the same weight. Distinguishing them decides what 5.7D can start on:
 
-| Item                                                                   | Blocks                                                        | Evidence needed                                                                                  |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| Lead-month anchor A or B (§8.7C.2)                                     | the writer's month selection — yes                            | one owner decision                                                                               |
-| Freshness representation: response field + derivation                  | stale labelling only; a value-only writer can ship without it | owner decision on the field, then a contract change                                              |
-| Where the run identity is stored: two columns vs jsonb parsing         | supersession correctness — yes                                | owner decision (schema change)                                                                   |
-| Whether an incomplete population may ever be stored as a valueless row | read-path reason granularity only                             | owner decision; §8.7C.3 recommends it is not                                                     |
-| Member count as column or hash preimage                                | provenance completeness, not correctness                      | owner decision                                                                                   |
-| Which physical member the 50 columns omit (control vs perturbed)       | nothing today; spread/probability language later              | provider documentation that does not exist — Open-Meteo does not publish a column↔member mapping |
+| Dependency | Blocks | Does **not** block | Evidence needed |
+|---|---|---|---|
+| **Lead-month anchor** (§8.7C.2, `Q-P5-BAND`) | the writer's **month selection** — which calendar month it writes for a given run. This is the only item that gates the value itself | payload shape, run validation, population read, assembler, record-set hash, writer ordering, read-path switch | one owner decision (A or B, with the band restated if B) |
+| **Run-identity storage** (§8.7C.5, `Q-P5-RUN`) | **enforceable** seasonal supersession: comparing an existing active row's rank against a candidate's. A writer that only inserts where nothing active exists is possible, but cannot tell "newer" from "older" | everything except rank comparison; the rank rule itself is approved | owner decision: two FK columns, or jsonb parsing |
+| **Freshness response representation** (§8.7C.4, `Q-P5-RUN`) | serving `stale` in the API response. `climateOutlookMonthSchema` is strict and has no availability field | a **value-only** seasonal writer: a month can be materialised and served without a staleness label, because staleness never changes the value | owner decision on the response field, then a contract change |
+| **Member-count provenance representation** (§8.7C.6) | provenance **completeness**: whether a future reader can verify the population, not the mean | mean correctness: the value is the mean of the 12 conditions in §8.7C.3 whether or not the count is hashed | owner decision: column or hash preimage field |
+
+Two further open items are narrower still, and neither is an implementation blocker:
+
+| Item | Scope | Evidence needed |
+|---|---|---|
+| Whether an incomplete population may ever be stored as a valueless row | read-path reason granularity; §8.7C.3 recommends it writes nothing | owner decision |
+| Which physical member the 50 columns omit (control vs perturbed) | nothing today; spread or probability language later | provider documentation that does not exist — Open-Meteo publishes no column↔member mapping |
+
+**What can proceed without any of the four.** The payload branch, run validation including
+`model = 'ecmwf_seas5'`, the population read exactly as §8.7C.3 states it, the assembler and
+record-set hash, and the read-path change from `not_requested` to `pending` are all
+independent of the four dependencies. Only month selection, rank enforcement and the stale
+label wait. An implementation that stops at "every part of 5.7D is blocked" overstates the
+coupling and delays work the contract already authorises.
 
 **Provider gates, unchanged.** `OPEN-18` still means the shipped registry has no
 `validated` provider grid, so no real seasonal job can run; `OPEN-03` still blocks
@@ -1964,13 +2073,14 @@ recorded rather than resolved:
 | ECMWF SEAS5             | 51-member ensemble (50 perturbed + 1 unperturbed control), initialised on the 1st, 7 months, released 12Z on the 5th        | SEAS5 user guide §2.2.1 ("51-member ensemble"); CEMS/GloFAS system description, <https://confluence.ecmwf.int/spaces/CEMS/pages/483297828>, retrieved 2026-11-24 ("51 ensemble members (one unperturbed and 50 perturbed)") |
 | Open-Meteo seasonal API | "Data is available for 51 ensemble members"; monthly means "based on 51 ensemble members"; SEAS5 updated monthly on the 5th | seasonal API documentation, retrieved 2026-11-24                                                       |
 | This adapter            | exactly `precipitation_sum_member01…50`, mean excluded, any other column refused                                            | `collectMembers`, `SEAS5_ENSEMBLE_MEMBERS = 50`; measured 2026-11-23                                   |
-| Stored population       | `ensemble_member 1..50`, `ensemble_size 50`, 50 rows per month                                                              | `normalize/monthly.ts`, `ingest/seasonal.ts`                                                           |
+| Stored population       | `ensemble_member 0..49`, `ensemble_size 50`, 50 live rows per month                                                          | `normalize/monthly.ts`, `ingest/seasonal.ts`                                                           |
 
 What that supports:
 
-- **The delivered population is 50 member columns.** That is the contract's population,
-  not a claim about ECMWF's ensemble size, and it is enforced by the adapter rather than
-  by convention.
+- **The delivered population is 50 member columns.** That is the contract's population — all
+  fifty columns this adapter currently exposes, not proof that all 51 physical ECMWF members
+  are represented — and it is enforced by the adapter rather than by convention. The
+  population is expressed internally as the zero-based index set `0..49` (§8.7C.1).
 - **The omitted member cannot be identified from the payload.** Open-Meteo publishes no
   column↔member mapping — the provider documentation names neither `member01` nor any
   member identifier, so it publishes no correspondence at all. Whether the control is
@@ -1981,8 +2091,12 @@ What that supports:
   ratios 0.989–1.011 (0.1 mm rounding) — a result a 51-member mean would also produce if
   the extra member behaves like the others. It rules out a _wrong_ conversion, not a
   50-versus-51 difference.
-- **The contract stays at 50.** Changing it to 51 would require the provider to deliver a
-  51st column, which it does not, and would break `collectMembers` by design.
+- **The contract stays at 50 columns.** This adapter's measured payload carries the mean
+  plus `member01`…`member50`; the provider documents 51 ensemble members as available, but
+  how a 51st member column would be requested is unverified, and the population this
+  repository stores is the 50 it actually accepts (`ensemble_member 0..49`,
+  `ensemble_size 50`). Widening the population would require a payload change and an
+  adapter change together, not a documentation change.
 - **One documentation error found, not fixed here:** `docs/data-model/lifecycle-and-retention.md`
   phrases a storage estimate as "46 days × 51 ensemble members", which matches neither this
   payload nor the EC46 payload (50 columns). It is an estimate, not a contract; it is

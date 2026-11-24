@@ -1154,7 +1154,7 @@ Status: **5.0 complete; 5.1 partially implemented; 5.2 complete, all eight steps
 5.3 complete; 5.4 implemented behind `OPEN-03` and `OPEN-18`; 5.5 implemented
 behind the same two gates; 5.6 implemented behind the same two gates — the values,
 their storage, and the ADR-001 D8b SEAS5 per-member monthly aggregates are done;
-ensemble spread itself and probability are not; 5.7A materialises climatology outlook months and 5.7B serves them; 5.7's seasonal half is not started — 5.7C records its source-selection and materialisation contract with nothing implemented, and 5.7D is blocked on the lead-month anchor and the freshness/run-identity mechanics; 5.8 not started.**
+ensemble spread itself and probability are not; 5.7A materialises climatology outlook months and 5.7B serves them; 5.7's seasonal half is not started — 5.7C records its source-selection and materialisation contract with nothing implemented, and 5.7D is partially blocked: the lead-month anchor gates month selection, while run identity, the freshness field and member-count storage gate enforcement, labelling and provenance only; 5.8 not started.**
 5.0 delivered the contract and resolver code in `packages/contracts` with tests, and
 added no migration, Prisma model, route, grant, policy, worker, queue, or persistence.
 It is complete as delivered: the `OPEN-14` vocabulary freeze remains a deferred open
@@ -1419,7 +1419,7 @@ current phase, not a phase of its own.
 | 5.7A | §8.7A | climatology materialisation delivered | none beyond 5.5 |
 | 5.7B | §8.7B | climatology read route delivered | none beyond 5.7A |
 | 5.7C | §8.7C contract | **documentation only, 2026-11-24** — the source-selection and materialisation contract is written; no payload, assembler, writer, route, schema or test changed | nothing; it is the authorisation boundary for 5.7D |
-| 5.7D | §8.7C.9 | **not started** — no `seasonal_forecast` row is ever written to `monthly_outlooks` | `Q-P5-BAND` anchor (blocks month selection), `Q-P5-RUN` run-identity storage and freshness representation, `Q-P5-SPREAD` (unchanged, does not block the value), `OPEN-18`, `OPEN-03`, `OPEN-05` |
+| 5.7D | §8.7C.9 | **not started** — no `seasonal_forecast` row is ever written to `monthly_outlooks`. Partially blocked: payload branch, run validation, population read, assembler, record-set hash and the read-path switch are independent of every open decision | `Q-P5-BAND` anchor (**only** gate on month selection), `Q-P5-RUN` run-identity storage (enforceable supersession) and freshness response field (stale label only), member-count provenance storage, `OPEN-18`, `OPEN-03`, `OPEN-05`; `Q-P5-SPREAD` unchanged and does not block the value |
 | 5.8 | §8.8 data quality and operations | **not started** — no `climate-core/audit.ts`, no `apps/worker/src/maintenance/`, no operations runbook | prerequisite 5.7 is incomplete, and its acceptance needs a week of scheduled runs; no scheduler exists |
 | Phase 6 | PROJECT.md §3; `docs/research/agronomic-reference-matrix.md` §6 | planning only — DDL and provenance contracts exist, no agronomy package, no crop rows, no suitability route | `OPEN-18`, `OPEN-26`, `OPEN-27`, catalog seeding, agronomist review; see `docs/review/phase-6-readiness.md` |
 
