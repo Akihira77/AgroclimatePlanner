@@ -126,7 +126,10 @@ readonly cellSelection: "lower-edge" | "nearest-centre";
 - `lower-edge` is today's rule: cell owns `[node, node + step)`; the node is the
   south-west corner.
 - `nearest-centre` is the measured provider rule: cell owns
-  `(node − step/2, node + step/2]`; the node is the cell's centre.
+  `[node − step/2, node + step/2)`; the node is the cell's centre. The interval is
+  half-open **above**, which is the same statement as "the tie goes to the higher node":
+  a value exactly one half-step below a node belongs to that node, and one exactly a
+  half-step above belongs to the next.
 
 ### 3.2 Where the field belongs — `GridSpec`, not the registry entry
 
@@ -155,10 +158,22 @@ j = floorDiv(2*(lonµ - originLonµ) + stepLonµ, 2*stepLonµ)
 
 The doubled arithmetic avoids a half-step micro-degree, which is not representable for
 every legal step: `0.25°` is `250000µ°` (halves cleanly), but a step of `1µ°` is not.
-Ties resolve toward `+∞` on both axes, matching the measured `0.125 → 0.25`,
-`−0.125 → 0.00`, `−33.875 → −33.75`. `floorDiv` already has the correct behaviour for
-negative deltas; no `Math.round` may be used, because it is half-up toward `+∞` only for
-positive values.
+Solving `floor((2·δ + step) / (2·step)) = 0` gives `−step/2 ≤ δ < step/2`, i.e. the cell
+owns `[node − step/2, node + step/2)`: the lower midpoint belongs to this node, the upper
+midpoint to the next one. Measured: `0.125 → 0.25`, `−0.125 → 0.00`, `−33.875 → −33.75`.
+`floorDiv` already has the correct behaviour for negative deltas; no `Math.round` may be
+used, because it rounds halves up in numeric value, not in the direction the half-open
+interval requires.
+
+Worked check on a `0.25°` lattice at node `0` (**Verified** by evaluating `floorDiv` in
+`grid.ts:159-162` semantics):
+
+| Input (δ from node 0) | `2δ + step` | Index | Node | Why |
+|---|---|---|---|---|
+| `0.124999` | `499998` | `0` | `0.00` | below the upper midpoint |
+| `0.125000` | `500000` | `1` | `0.25` | upper midpoint belongs to the next node |
+| `−0.125000` | `0` | `0` | `0.00` | lower midpoint belongs to this node |
+| `−0.125001` | `−2` | `−1` | `−0.25` | below the lower midpoint |
 
 **Bounds.**
 
@@ -174,9 +189,10 @@ positive values.
 - Request validation is unchanged: latitude must be inside `[-90, 90]` **and** inside
   `latRange`; longitude must be inside the domain. Consequence, stated rather than
   hidden: on a **bounded** nearest-centre grid, a coordinate in the outer half-cell
-  beyond the last node is `out_of_grid` even though it lies inside that cell's outer
-  edge. No known provider needs the outer half-cell, and accepting it would require
-  bounds outside `[-90, 90]` at the poles — the relaxation §1.4 rule 2 forbids.
+  beyond the first or last node is `out_of_grid` even though it lies inside that node's
+  cell. No known provider needs the outer half-cells, and accepting them would require a
+  range extending half a step past the node bounds — outside `[-90, 90]` at the poles,
+  the relaxation §1.4 rule 2 forbids.
 - `global` longitude needs one explicit sub-rule: after wrapping the input into
   `[originLon, originLon + 360)`, nearest-centre rounding of an input in the top
   half-cell yields index `colCount`, which is not a node. The measured `179.99 → 179.75`
@@ -253,8 +269,8 @@ Vectors 1–18 describe `lower-edge` behaviour and stay valid **byte for byte**,
 |---|---|---|---|---|
 | 19 | `0,0` / `0.25,0.25` / global, nearest | `0.13, 0.13` | `0.25,0.25` | interior rounds up to the nearest centre |
 | 20 | same | `0.12, 0.12` | `0.00,0.00` | the same lattice, the other side of the midpoint |
-| 21 | same | `0.125, 0.125` | `0.25,0.25` | tie toward `+∞` |
-| 22 | same | `-0.125, -0.125` | `0.00,0.00` | tie toward `+∞` from below; a `Math.round` shortcut is wrong for negatives in general |
+| 21 | same | `0.125, 0.125` | `0.25,0.25` | the upper midpoint belongs to the next node |
+| 22 | same | `-0.125, -0.125` | `0.00,0.00` | the lower midpoint belongs to this node; a `Math.round` shortcut is wrong for negatives in general |
 | 23 | same | `-6.21, 106.79` | `-6.25,106.75` | negative latitude and longitude, floor on a negative index |
 | 24 | `-90,-180` / `0.25,0.25` / global, nearest | `89.88, 179.99` | `90.00,179.75` | pole node and the longitude seam clamp |
 | 25 | same | `-89.88, -179.99` | `-90.00,-180.00` | the opposite pole and the low seam |
