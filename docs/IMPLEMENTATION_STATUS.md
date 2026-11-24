@@ -1458,6 +1458,27 @@ and the read API needs both. 5.7A delivered the climatology half; 5.7B later del
 | Result | `SpatialResolution` — `provider`, `model`, `gridId`, `gridSpecHash`, `resolutionAlgorithmVersion`, `evidence`, `requested` ≠ `anchor`, `i`, `j`, `cellKey`. **Implemented** in `grid.ts` (§5.2.9.2). No served coordinate, no `distanceKm`, no `extractionPolicy` |
 | Longitude | four separate concepts — normalization, domain validation, wrapping, indexing — with a boundary table for `-180`, `180`, `0`, `360`, `-0.5`, `359.5`, and five questions left to the owner: three longitude, the `lonRange` bound, and the `spatialResolutionKm` hash preimage (§5.2.9.3, `OPEN-18`) |
 | `field_outlook_cells` | **not written in 5.2.** `distance_km` is `NOT NULL` and is a distance to a served coordinate that does not exist yet; `0` is never a placeholder (§5.2.8) |
-| Provider grids | all five still pending. Evidence is graded A (documented), B (measured), C (inferred), with a protocol; grade C never configures a row. The only registered entry is synthetic; no provider grid is configured and nothing is `validated` |
+| Provider grids | all five still pending. Evidence is graded A (documented), B (measured), C (inferred), with a protocol; grade C never configures a row. `ecmwf_ifs025` was measured on 2026-11-24 and remains unconfigurable for a structural reason, not a missing one (§Phase 5.2 evidence). The only registered entry is synthetic; no provider grid is configured and nothing is `validated` |
 | Registry binding | `FieldModule.register(gridRegistry)`; production passes `syntheticGridRegistry`, and the only other instance is a test fixture bound in the API integration suite — no mutable global, no second production registry |
 | Next | `climate-data-foundation.md` §8.7: the seasonal half of 5.7, and the field→cell join (`OPEN-18`). 5.7A and 5.7B are implemented and gated, not live; 5.4, 5.5 and 5.6 likewise. Ensemble spread has an investigation (`docs/review/seasonal-spread-investigation.md`) and no implementation |
+
+
+---
+
+### Phase 5.2 — `OPEN-18` provider evidence review, Open-Meteo IFS 0.25° — 2026-11-24
+
+**Investigation only. Nothing is configured, and no code, contract, migration or golden
+vector changed.** The report is `docs/review/open-18-open-meteo-ifs025-evidence.md`.
+
+| Item | State |
+|---|---|
+| Question | does `ecmwf_ifs025` have enough evidence for a production `GridSpec`, and can the resolver represent it without approximation? The second half answers **no** |
+| Grade A — documented | **Partial.** The ECMWF API page states the open-data IFS 0.25° product is global at `0.25°` (~25 km) and updates every 6 h; the Weather API page states the returned `latitude`/`longitude` are "WGS84 of the center of the weather grid-cell which was used", and that `cell_selection` (`land` default, `sea`, `nearest`) chooses the cell. Not documented: origin/reference convention, axis order, regular-vs-reduced construction, the native longitude convention, and the identifier `ecmwf_ifs025` itself |
+| Grade B — measured | **Complete for geometry.** 164 request→served pairs, from 172 requests, at `api.open-meteo.com/v1/forecast` with `cell_selection=nearest`. The endpoint **snaps** (identical served coordinate and identical value across a whole cell), the lattice is global regular `0.25°` at multiples of `0.25` including `0` and `±90`, and selection is the **nearest node** with ties toward `+∞` |
+| Decisive finding | `GridSpec` makes the node the **south-west corner** of its cell (`[node, node + step)`, `climate-data-foundation.md` §5.2.2 rule 3), so `resolveGridCell` floors; the provider returns the nearest centre. Over 41 coordinates the resolver matched **14**, the nearest rule **41**. Registering the node lattice would key roughly two requests in three to a cell the provider did not serve |
+| Why no workaround | Aligning the partitions needs an anchor lattice offset by half a step, whose `latRange` starts at `-90.125`; `grid.ts:279-281` requires `latRange` inside `[-90, 90]`, and every bound must be a lattice point. **No legal `GridSpec` reproduces the provider's cells** |
+| Two further measured facts | `cell_selection` changed the served cell at 7 of 8 probed locations (Jakarta bay: `land` → `-6.25,106.75` 18.0 mm, `nearest` → `-6.00,106.75` 1.3 mm), so identity depends on a request flag; and response `elevation` is a DEM value at the *requested* point (six values inside one served cell), so it is never a cell property. Precipitation is unaffected by an `elevation` override, so the value is the native cell's |
+| Antimeridian | Requesting `180` serves `179.75`; requesting `-180` serves `-180` — adjacent cells, different values, contradicting §5.2.9.3's folding rule. Recorded unresolved; it is question 2 of `OPEN-18` |
+| Decision | **No production `GridSpec`, no `gridSpecHash`, no registry entry, no `validated` state, no resolver change, no migration.** `OPEN-18` stays `BLOCKED_EXTERNAL_INPUT`, and part of the blocker is now internal (question 6: cell-selection semantics) |
+| Methods unchanged | `requireValidated`, `GridEvidence`, the eighteen synthetic vectors, the five literal hash fixtures, and the `synthetic` registry entry are untouched |
+| Next | an owner decision on cell-selection semantics (nearest-centre mode with a `GRID_RESOLUTION_ALGORITHM_VERSION` bump, or a `cellKey` that names the node centre), plus a documentation source naming `ecmwf_ifs025`. Until then the climatology read path's `provider`/`model` parameters have no production value |
