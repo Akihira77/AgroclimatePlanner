@@ -45,7 +45,8 @@ Everything that does not serve that sentence is out of scope for v1.
 In:
 - One owner-operator, multiple farms/plots, RLS-style ownership isolation.
 - Four crops: padi, jagung, kedelai, cabai. Kedelai and cabai ship with **water = insufficient_data** (no verifiable threshold), capping their suitability at `conditional`.
-- 0–14 d daily, 15–45 d subseasonal, months 2–7 seasonal, remaining months climatology.
+- 0–14 d daily, 15–45 d subseasonal, lead months 1–7 seasonal, lead months 8–12 climatology
+  (`Q-P5-BAND`; lead month is 1-based over a twelve-month horizon, `climate-data-foundation.md` §8.7C.2).
 - Planting windows with per-dimension explanation, calendar with crop markers and overflow, AI briefing in Indonesian.
 
 Out (explicitly):

@@ -17,11 +17,12 @@ planting windows, and explanations. Its scope is bounded by the same document:
 
 - four crops — padi, jagung, kedelai, cabai — with kedelai and cabai carrying
   `water = insufficient_data`;
-- 0–14 d daily, 15–45 d subseasonal, months 2–7 seasonal, remaining months climatology.
-  **Note:** the seasonal band is stated three ways in the repository — "months 2–7" here,
+- 0–14 d daily, 15–45 d subseasonal, lead months 1–7 seasonal, lead months 8–12 climatology.
+  **Note:** the band was stated three ways in the repository — "months 2–7" here,
   `MONTHLY_OUTLOOK_BANDS` at leads 1–7, and "lead months 3–7" in
-  `climate-data-foundation.md` §8.9. The engine must not pick one silently; see §8.7C
-  decision 3 of that document;
+  `climate-data-foundation.md` §8.9 — and is now reconciled to **1–7**
+  (`Q-P5-BAND`). What lead month 1 anchors to is still open; see §8.7C.2 of that
+  document before building anything that selects a month from a forecast run;
 - planting windows with per-dimension explanation;
 - no yield prediction, price data, or 12-month daily forecast.
 
@@ -116,8 +117,8 @@ approval.
 
 ### 6.4 — Climate evaluation across four bases
 
-- 0–14 d daily, 15–45 d weekly/subseasonal, months 2–7 monthly/seasonal, months 8–12
-  climatology — four computations, not one precision switch.
+- 0–14 d daily, 15–45 d weekly/subseasonal, lead months 1–7 monthly/seasonal, lead
+  months 8–12 climatology (`Q-P5-BAND`) — four computations, not one precision switch.
 - Entry condition: 6.2–6.3, and a climate input whose class is honest. Reading
   climatology-only months is possible today; seasonal months are not materialised (`climate-data-foundation.md` §8.7C).
 
