@@ -161,12 +161,26 @@ function storedMonth(
   leadMonth: number,
   row: StoredOutlookMonth,
 ): ClimateOutlookMonth | Extract<OutlookReadOutcome, { ok: false }> {
+  // Value and class are present or absent together (`monthly_outlooks_value_state_check`,
+  // `outlookMonthSchema`). A row with only one of them is contradictory stored state:
+  // it is refused here rather than coerced, because coercing it would either invent a
+  // class for a number or turn a labelled month into an unlabelled absence — both
+  // serve a month the row does not describe.
+  const hasClass = row.dataClass !== null;
+  const hasValue = row.valueMm !== null;
+  if (hasClass !== hasValue) {
+    return fail(
+      "inconsistent_row",
+      `month "${row.month}" has ${hasClass ? "a data class and no value" : "a value and no data class"}; value and class are present or absent together`,
+    );
+  }
+
   // A row may record an absence rather than a number — the column permits it, and a
   // future writer may use it for a state this phase synthesises instead. Serve the
   // absence it describes, with no estimator and no derivation: the row's
   // `derivation_version` records the decision to store nothing, and attributing a
   // formula to that absence is what the response contract refuses.
-  if (row.dataClass === null || row.valueMm === null) {
+  if (!hasValue) {
     if (row.missingReason === null) {
       return fail(
         "inconsistent_row",
@@ -181,7 +195,10 @@ function storedMonth(
       valueMm: null,
       missingReason: row.missingReason as MissingReason,
       baselineVersion: row.baselineVersion,
-      anomalyKind: null,
+      // Passed through, not dropped: a stored anomaly on a valueless month is a
+      // contradiction the response contract refuses, and nulling it here would erase
+      // the evidence of that contradiction.
+      anomalyKind: row.anomalyKind as ClimateOutlookMonth["anomalyKind"],
       ensembleSpreadMm: row.ensembleSpreadMm,
       spreadUnavailableReason: row.spreadUnavailableReason,
       unit: "mm" as const,

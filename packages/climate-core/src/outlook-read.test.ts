@@ -136,6 +136,64 @@ describe("assembleOutlookHorizon — twelve months, no invention", () => {
     });
   });
 
+  it("refuses a stored month with a class and no value", () => {
+    // Coercing this to an absence would serve an unlabelled month for a row that
+    // names a class. The row is contradictory, so nothing honest can be rendered.
+    const row: StoredOutlookMonth = {
+      ...climatologyRow("2027-06-01"),
+      dataClass: "seasonal_forecast",
+      evaluationBasis: "monthly",
+      valueMm: null,
+      missingReason: "no_value",
+      baselineVersion: null,
+      spreadUnavailableReason: "no_value",
+    };
+
+    const outcome = assembleOutlookHorizon({ firstMonth: FIRST_MONTH, rows: [row] });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.ok === false && outcome.kind).toBe("inconsistent_row");
+    expect(outcome.ok === false && /a data class and no value/.test(outcome.message)).toBe(true);
+  });
+
+  it("refuses a stored month with a value and no data class", () => {
+    // Coercing this to an absence would drop a measured number; coercing it to a
+    // forecast would invent the class. Both are worse than refusing it.
+    const row: StoredOutlookMonth = {
+      ...climatologyRow("2027-06-01"),
+      dataClass: null,
+      evaluationBasis: "monthly",
+      valueMm: 120.5,
+      missingReason: null,
+      baselineVersion: null,
+      spreadUnavailableReason: "no_value",
+    };
+
+    const outcome = assembleOutlookHorizon({ firstMonth: FIRST_MONTH, rows: [row] });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.ok === false && outcome.kind).toBe("inconsistent_row");
+    expect(outcome.ok === false && /a value and no data class/.test(outcome.message)).toBe(true);
+  });
+
+  it("refuses a stored absence that carries an anomaly", () => {
+    const row: StoredOutlookMonth = {
+      ...climatologyRow("2027-06-01"),
+      dataClass: null,
+      evaluationBasis: "monthly",
+      valueMm: null,
+      missingReason: "pending",
+      baselineVersion: null,
+      anomalyKind: "model_anomaly",
+      spreadUnavailableReason: "no_value",
+    };
+
+    const outcome = assembleOutlookHorizon({ firstMonth: FIRST_MONTH, rows: [row] });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.ok === false && outcome.kind).toBe("inconsistent_row");
+  });
+
   it("refuses a stored absence that names no reason", () => {
     const row: StoredOutlookMonth = {
       ...climatologyRow("2027-06-01"),
@@ -161,6 +219,53 @@ describe("assembleOutlookHorizon — twelve months, no invention", () => {
     expect(unanswered?.valueMm).toBeNull();
     expect(unanswered?.dataClass).toBeNull();
     expect(unanswered?.missingReason).toBe(PENDING_OUTLOOK_REASON);
+  });
+
+  it("keeps the twelve-month axis when absences and real months are mixed", () => {
+    const months = assembled([
+      climatologyRow("2027-06-01", 101),
+      {
+        ...climatologyRow("2027-08-01"),
+        dataClass: null,
+        evaluationBasis: "monthly",
+        valueMm: null,
+        missingReason: "pending",
+        baselineVersion: null,
+        spreadUnavailableReason: "no_value",
+      },
+      climatologyRow("2027-10-01", 303),
+    ]);
+
+    expect(months).toHaveLength(12);
+    expect(months.map((month) => month.leadMonth)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(months.map((month) => month.valueMm)).toEqual([
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      101,
+      null,
+      null,
+      null,
+      303,
+    ]);
+    expect(months.map((month) => month.estimator)).toEqual([
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      "climatological_mean",
+      null,
+      null,
+      null,
+      "climatological_mean",
+    ]);
   });
 });
 
