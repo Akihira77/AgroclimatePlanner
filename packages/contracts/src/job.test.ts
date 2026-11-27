@@ -35,8 +35,14 @@ const baseJob = {
 };
 
 describe("jobStatusSchema", () => {
-  it("has exactly the four approved statuses and no failed", () => {
-    expect(jobStatusSchema.options).toEqual(["queued", "running", "succeeded", "dead"]);
+  it("has exactly the five approved statuses and no failed", () => {
+    expect(jobStatusSchema.options).toEqual([
+      "queued",
+      "running",
+      "succeeded",
+      "dead",
+      "cancelled",
+    ]);
     expect(jobStatusSchema.safeParse("failed").success).toBe(false);
   });
 });
@@ -81,6 +87,10 @@ describe("jobSchema", () => {
     expect(
       jobSchema.safeParse({ ...baseJob, status: "dead", finishedAt: baseJob.runAt }).success,
     ).toBe(true);
+    expect(
+      jobSchema.safeParse({ ...baseJob, status: "cancelled", finishedAt: baseJob.runAt }).success,
+    ).toBe(true);
+    expect(jobSchema.safeParse({ ...baseJob, status: "cancelled" }).success).toBe(false);
     expect(jobSchema.safeParse({ ...baseJob, finishedAt: baseJob.runAt }).success).toBe(false);
   });
 

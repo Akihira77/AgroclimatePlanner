@@ -1547,7 +1547,7 @@ Memastikan sistem dapat dioperasikan secara stabil, aman, dapat diamati, dan dap
 - [x] Dead-letter handling. Status `dead` adalah dead letter itu sendiri; aturan replay di `docs/operations/climate-ingestion.md`.
 - [x] Retry exhaustion handling. `runner.ts` menandai `dead` setelah attempt terakhir habis.
 - [x] Graceful shutdown. `enableShutdownHooks` di API; runner men-drain job berjalan.
-- [ ] Job cancellation handling.
+- [x] Job cancellation handling. Hanya `queued` dengan `ingestion_run_id IS NULL` → `cancelled` (terminal, `finished_at` diisi, `last_error` tidak disentuh). Job `running` ditolak karena handler bisa sedang menulis dan antrean tidak punya kanal ke proses lain; job `queued` yang masih memegang `IngestionRun` dari attempt pertama juga ditolak karena run itu akan tertinggal `running` tanpa error dan tanpa `finished_at`. Anggaran attempt dan reaper lease yang membatasi keduanya. Antarmuka operator: `pnpm --filter @agroclimate/worker cancel:job <jobId>`, exit 0 hanya untuk cancel yang berhasil; event log membedakan `job_not_found`, `job_already_cancelled`, `job_holds_ingestion_run`, `job_not_cancellable`, `cancel_error`. Lihat `docs/architecture/background-processing.md` §11.
 - [ ] Deployment rollback.
 - [ ] Migration rollback strategy.
 - [ ] Disaster recovery documentation.

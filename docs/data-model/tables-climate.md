@@ -585,7 +585,7 @@ Notes:
 | Entity | the queue row (`background-processing.md` §2.1) |
 | Class | global |
 | Purpose | one unit of background work, identified by a deterministic idempotency key |
-| Lifecycle | `queued → running → (queued \| succeeded \| dead)`; a dead row is kept, never deleted |
+| Lifecycle | `queued → running → (queued \| succeeded \| dead)`, plus `queued → cancelled`; a terminal row is kept, never deleted. `cancelled` needs `ingestion_run_id IS NULL`, so no `IngestionRun` is left `running`, but the row may carry a `last_error` from an earlier failed attempt (`background-processing.md` §11) |
 | Exists | yes (Phase 5.3, `20261122000000_jobs`) |
 
 | Column | Type | Null | Default | Meaning |
@@ -594,7 +594,7 @@ Notes:
 | `kind` | `text` | no | — | one of the six queue names; `CHECK` pinned to the list |
 | `idempotency_key` | `text` | no | — | `ingest:{queue}:{forecastRunId}:{ingestionVersion}` for ingestion jobs |
 | `payload` | `jsonb` | no | `'{}'` | handler-owned; validated by the handler, not by a `CHECK` |
-| `status` | `text` | no | `'queued'` | `queued \| running \| succeeded \| dead` — no `failed` |
+| `status` | `text` | no | `'queued'` | `queued \| running \| succeeded \| dead \| cancelled` — no `failed` |
 | `attempt` | `integer` | no | `0` | successful claims; `0` = never claimed |
 | `max_attempts` | `integer` | no | `5` | `CHECK (BETWEEN 1 AND 20)` |
 | `run_at` | `timestamptz(6)` | no | `now()` | earliest claim time; retry pushes it forward |
@@ -602,7 +602,7 @@ Notes:
 | `lease_expires_at` | `timestamptz(6)` | yes | — | when the reaper may recover the row |
 | `ingestion_run_id` | `uuid` | yes | — | the run this job executes; `NULL` until a handler begins |
 | `last_error` | `jsonb` | yes | — | `{code, message, retryable}`; the last failure, not a history |
-| `finished_at` | `timestamptz(6)` | yes | — | set exactly at `succeeded` or `dead` |
+| `finished_at` | `timestamptz(6)` | yes | — | set exactly at `succeeded`, `dead` or `cancelled` |
 | `created_at` | `timestamptz(6)` | no | `now()` | — |
 | `updated_at` | `timestamptz(6)` | no | `now()` | — |
 
@@ -614,12 +614,12 @@ Constraints:
 | `jobs_identity_key` | `UNIQUE (kind, idempotency_key)` | a duplicate enqueue minting a second job for one logical ingest |
 | `jobs_ingestion_run_fkey` | `FOREIGN KEY (ingestion_run_id) REFERENCES app.ingestion_runs (id) ON DELETE RESTRICT` | deleting a run out from under the job that records it |
 | `jobs_kind_check` | `kind IN (…six…)` | a kind no worker claims |
-| `jobs_status_check` | `status IN ('queued','running','succeeded','dead')` | a `failed` row, which would be a second failure vocabulary |
+| `jobs_status_check` | `status IN ('queued','running','succeeded','dead','cancelled')` | a `failed` row, which would be a second failure vocabulary |
 | `jobs_attempt_check` | `attempt BETWEEN 0 AND max_attempts` | an attempt count past the budget |
 | `jobs_max_attempts_check` | `max_attempts BETWEEN 1 AND 20` | a job that can never run, or one that hammers a provider |
 | `jobs_lease_check` | `(status = 'running') = (lease_token IS NOT NULL)` | a half-written lease in either direction |
 | `jobs_lease_expiry_check` | `lease_token IS NULL OR lease_expires_at IS NOT NULL` | a lease with no expiry, which the reaper can never recover |
-| `jobs_finished_check` | `(status IN ('succeeded','dead')) = (finished_at IS NOT NULL)` | a terminal row without a finish time, or a running one with it |
+| `jobs_finished_check` | `(status IN ('succeeded','dead','cancelled')) = (finished_at IS NOT NULL)` | a terminal row without a finish time, or a running one with it |
 | `jobs_error_check` | `last_error IS NULL OR jsonb_typeof(last_error) = 'object'` | a scalar error record |
 
 Indexes: `jobs_claim_idx` on `(kind, run_at, id) WHERE status = 'queued'` (the claim

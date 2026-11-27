@@ -68,6 +68,34 @@ Retryable failures return the job to `queued` with `run_at` set; between attempt
 there is nothing to observe by design (`background_process` §4). Only `dead` needs
 a person.
 
+### Withdrawing a job that should not run
+
+A job that is still `queued` — and has not yet opened an `IngestionRun` — can be
+cancelled instead of waited for:
+
+```bash
+pnpm --filter @agroclimate/worker cancel:job <jobId>
+```
+
+Exit 0 means the row is `cancelled`, with `finished_at` set and `last_error` left
+as it was. Exit 1 means it was refused, and the JSON event says which refusal:
+
+| Event | Meaning |
+|---|---|
+| `job_not_found` | no row with that id — check the id |
+| `job_already_cancelled` | an earlier run did commit; nothing left to do |
+| `job_holds_ingestion_run` | a retry still owns the `IngestionRun` its first attempt opened; wait for the attempt budget |
+| `job_not_cancellable` | `running` (a handler may be mid-write), or terminal for another reason |
+| `cancel_error` | malformed id, or the database refused the statement |
+
+A running job is bounded by its attempt budget, and one whose process died is
+recovered by the reaper once its lease expires.
+
+Cancelling keeps the dead-letter semantics intact: `cancelled` is terminal without
+a failure, so it never appears in the `status = 'dead'` query above, and the
+idempotency key stays occupied — re-enqueuing the same logical job returns
+`enqueued: false` and does not run. A cancel made in error has no supported undo.
+
 ### Replaying a dead job
 
 A dead job is **not** replayed in place. The idempotency key

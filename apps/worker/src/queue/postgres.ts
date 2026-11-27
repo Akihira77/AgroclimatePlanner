@@ -261,6 +261,32 @@ export function createPostgresQueue(options: PostgresQueueOptions): JobQueue {
       return rows[0] !== undefined;
     },
 
+    async cancel(jobId: string): Promise<boolean> {
+      // `status = 'queued'` is the whole guard, and it is in the statement rather
+      // than in a caller-side check: a read followed by an update would let a
+      // worker claim the row in between, and the cancel would then overwrite a
+      // running job. `finished_at` is set here because `jobs_finished_check`
+      // requires a terminal row to carry it.
+      //
+      // `ingestion_run_id IS NULL` is the second half of "has not started". A
+      // retry leaves the job `queued` while keeping the run its first attempt
+      // opened, and that run is still `running`: cancelling such a row would
+      // orphan it in `running` with no error and no finish time, and `settlePair`
+      // cannot repair it afterwards because its authority requires a running job.
+      // Such a job is bounded by its attempt budget instead.
+      const rows = await db.$queryRaw<{ id: string }[]>`
+        UPDATE app.jobs
+           SET status      = 'cancelled',
+               finished_at = now(),
+               updated_at  = now()
+         WHERE id = ${jobId}::uuid
+           AND status = 'queued'
+           AND ingestion_run_id IS NULL
+        RETURNING id::text AS "id"
+      `;
+      return rows[0] !== undefined;
+    },
+
     async reapExpired(): Promise<readonly ReapedJob[]> {
       // Candidate selection is not authority: two reapers may pick the same row.
       // Each candidate is settled in its own transaction, and both the requeue

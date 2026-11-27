@@ -8,11 +8,16 @@
  * Run: pnpm --filter @agroclimate/worker test:integration
  */
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { after, before, beforeEach, describe, it } from "node:test";
 
 import { ingestionVersionOf } from "@agroclimate/contracts";
-import { createPrismaClient, markIngestionStatus } from "@agroclimate/database";
+import {
+  beginIngestionExecution,
+  createPrismaClient,
+  markIngestionStatus,
+} from "@agroclimate/database";
 
 import { createPostgresQueue } from "../../dist/queue/postgres.js";
 import { createRunner } from "../../dist/runner.js";
@@ -182,6 +187,142 @@ describe("enqueue", () => {
     });
     assert.equal(again.enqueued, false);
     assert.equal(again.id, job.id);
+  });
+});
+
+describe("cancel", () => {
+  it("withdraws a queued job, and records that it finished", async () => {
+    const job = await queue.enqueue({
+      kind: "maintenance",
+      idempotencyKey: key("cancel"),
+      payload: {},
+    });
+
+    assert.equal(await queue.cancel(job.id), true);
+
+    const row = await rowOf(job.id);
+    assert.equal(row.status, "cancelled");
+    assert.notEqual(row.finished_at, null);
+    // Not a failure: a cause that never happened must not be invented.
+    assert.equal(row.last_error, null);
+    assert.equal(row.leaseToken, null);
+  });
+
+  it("is never claimed afterwards", async () => {
+    const job = await queue.enqueue({
+      kind: "verify",
+      idempotencyKey: key("cancel-claim"),
+      payload: {},
+    });
+    await queue.cancel(job.id);
+
+    assert.equal(await queue.claim({ leaseMs: 60_000, kinds: ["verify"] }), null);
+    assert.equal((await rowOf(job.id)).status, "cancelled");
+  });
+
+  it("keeps the identity key occupied, so the same job does not come back", async () => {
+    const job = await queue.enqueue({
+      kind: "maintenance",
+      idempotencyKey: key("cancel-key"),
+      payload: {},
+    });
+    await queue.cancel(job.id);
+
+    const again = await queue.enqueue({
+      kind: "maintenance",
+      idempotencyKey: key("cancel-key"),
+      payload: {},
+    });
+    assert.equal(again.enqueued, false);
+    assert.equal(again.id, job.id);
+  });
+
+  it("refuses a running job and leaves it running", async () => {
+    const job = await queue.enqueue({
+      kind: "maintenance",
+      idempotencyKey: key("cancel-running"),
+      payload: {},
+    });
+    const claimed = await queue.claim({ leaseMs: 60_000, kinds: ["maintenance"] });
+    assert.equal(claimed?.id, job.id);
+
+    assert.equal(await queue.cancel(job.id), false);
+
+    const row = await rowOf(job.id);
+    assert.equal(row.status, "running");
+    assert.equal(row.finished_at, null);
+    assert.equal(row.leaseToken, claimed.leaseToken);
+  });
+
+  it("refuses a queued retry that still holds the run its first attempt opened", async () => {
+    // A retry leaves the job `queued` while keeping `ingestion_run_id`, and that
+    // run is still `running`. Cancelling the row would orphan it: no error, no
+    // finish time, and `settlePair` cannot repair it because its authority needs
+    // a running job.
+    const job = await queue.enqueue({
+      kind: "maintenance",
+      idempotencyKey: key("cancel-run"),
+      payload: {},
+    });
+    const claimed = await queue.claim({ leaseMs: 60_000, kinds: ["maintenance"] });
+    assert.equal(claimed?.id, job.id);
+
+    await beginIngestionExecution(system, {
+      jobId: job.id,
+      leaseToken: claimed.leaseToken,
+      forecastRunId: await createForecastRun(),
+      adapterVersion: "a",
+      normalizerVersion: "n",
+      targetSelectorHash: "a".repeat(64),
+    });
+
+    await system.$transaction((tx) =>
+      queue.fail(
+        claimed,
+        { code: "provider_timeout", message: "x", retryable: true },
+        { retryable: true, retryAfterMs: 60_000 },
+        tx,
+      ),
+    );
+
+    const queued = await rowOf(job.id);
+    assert.equal(queued.status, "queued");
+    assert.notEqual(queued.ingestionRunId, null);
+
+    assert.equal(await queue.cancel(job.id), false);
+    assert.equal((await rowOf(job.id)).status, "queued");
+
+    const run = await owner.$queryRaw`
+      SELECT status FROM app.ingestion_runs WHERE id = ${queued.ingestionRunId}::uuid
+    `;
+    assert.equal(run[0].status, "running");
+  });
+
+  it("cancels through the operator command, and tells a second attempt it is already cancelled", async () => {
+    const job = await queue.enqueue({
+      kind: "maintenance",
+      idempotencyKey: key("cancel-cli"),
+      payload: {},
+    });
+
+    const cancelCli = (args) =>
+      spawnSync(process.execPath, ["dist/cancel.js", ...args], {
+        cwd: new URL("../../", import.meta.url),
+        env: { ...process.env, APP_SYSTEM_DATABASE_URL: roleConnectionString("app_system") },
+        encoding: "utf8",
+      });
+
+    const first = cancelCli([job.id]);
+    assert.equal(first.status, 0);
+    assert.equal(JSON.parse(first.stdout).event, "job_cancelled");
+
+    const second = cancelCli([job.id]);
+    assert.equal(second.status, 1);
+    assert.equal(JSON.parse(second.stdout).event, "job_already_cancelled");
+  });
+
+  it("answers false for a job that does not exist", async () => {
+    assert.equal(await queue.cancel(randomUUID()), false);
   });
 });
 

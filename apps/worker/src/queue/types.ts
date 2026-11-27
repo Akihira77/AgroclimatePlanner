@@ -4,7 +4,7 @@ import type { SqlExecutor } from "@agroclimate/database";
 /**
  * The queue boundary — `background-processing.md` §2.1, §10.
  *
- * Six methods, all in job terms. Nothing here names PostgreSQL, a table, or
+ * Seven methods, all in job terms. Nothing here names PostgreSQL, a table, or
  * `SKIP LOCKED`, so replacing the backing store is a module swap rather than a
  * rewrite of every handler. The two transaction-taking methods are the only
  * place the abstraction admits that a caller may own a transaction; that is
@@ -66,5 +66,15 @@ export interface JobQueue {
    * `false` means ownership was lost and nothing was written.
    */
   release(job: ClaimedJob): Promise<boolean>;
+  /**
+   * Withdraw a job that has not started: `queued` → `cancelled`, terminal, with
+   * `finished_at` set and no error. `false` when the row cannot be withdrawn —
+   * running, settled, not there, or a retry still holding the `IngestionRun` its
+   * first attempt opened (cancelling that row would orphan a `running` run).
+   *
+   * A `running` job is refused rather than aborted from here: the handler may be
+   * mid-transaction, and the queue has no channel to interrupt another process.
+   */
+  cancel(jobId: string): Promise<boolean>;
   reapExpired(): Promise<readonly ReapedJob[]>;
 }

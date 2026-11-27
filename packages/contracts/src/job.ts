@@ -29,14 +29,18 @@ export const jobKindSchema = z.enum([
 export type JobKind = z.infer<typeof jobKindSchema>;
 
 /**
- * Four states, no `failed`.
+ * Five states, no `failed`.
  *
  * `dead` is terminal failure *and* the dead-letter record — the same row, not a
  * second table. A retryable failure is not a state: the job returns to
  * `queued`, because between two attempts there is nothing to observe except the
  * wait.
+ *
+ * `cancelled` is terminal *without* a failure: the work was withdrawn before a
+ * handler started, so there is no error to read and no run to fail. Folding it
+ * into `dead` would make an operator search for a cause that does not exist.
  */
-export const jobStatusSchema = z.enum(["queued", "running", "succeeded", "dead"]);
+export const jobStatusSchema = z.enum(["queued", "running", "succeeded", "dead", "cancelled"]);
 export type JobStatus = z.infer<typeof jobStatusSchema>;
 
 export const jobErrorSchema = z.strictObject({
@@ -188,7 +192,10 @@ export const jobSchema = z
         message: "a lease exists exactly while the job is running",
       });
     }
-    const finished = job.status === "succeeded" || job.status === "dead";
+    // `cancelled` is terminal like `dead`, so it carries a finish time. Missing it
+    // here would make the contract refuse every row the database accepts.
+    const finished =
+      job.status === "succeeded" || job.status === "dead" || job.status === "cancelled";
     if (finished !== (job.finishedAt !== null)) {
       ctx.addIssue({
         code: "custom",

@@ -238,3 +238,48 @@ Rules:
    - The granted column set per table equals the documented list — a test that reads the list from one place and the database from another, so an extra grant fails.
 
    A document claiming a restriction is not a restriction; a failing `UPDATE` is. A failing `UPDATE` under a role that happens to be an `app_api` member proves nothing about the deployment.
+
+## 11. Cancellation
+
+One operator action, deliberately narrow: withdraw a job that has **not started**.
+
+| Row state | Cancel | Why |
+|---|---|---|
+| `queued`, `ingestion_run_id IS NULL` | allowed → `cancelled`, `finished_at` set, `last_error` untouched | Nothing has run, so nothing needs a cause. `finished_at` is set because the row is terminal and `jobs_finished_check` says so |
+| `queued`, `ingestion_run_id NOT NULL` | **refused**, row untouched | A retry keeps the run its first attempt opened, and that run is still `running`. Cancelling the row would orphan it with no error and no finish time, and `settlePair` could not repair it afterwards because its authority needs a running job. The attempt budget bounds this job instead |
+| `running` | **refused**, row untouched | The handler may be mid-transaction and the queue has no channel into another process. Aborting the row would leave data whose provenance disagrees with its job status. The attempt budget bounds it; the lease reaper recovers one whose process died |
+| `succeeded`, `dead`, `cancelled` | refused | Already terminal. Cancelling a `dead` job would erase the failure an operator is reading |
+
+`cancelled` is its own status rather than a reuse of `dead`, because `dead` means
+"an attempt failed and the budget is spent" and a cancelled job has no such
+attempt. One value would send an operator looking for a `last_error` that never
+existed. A cancelled row may still *carry* a `last_error` from an earlier failed
+attempt: it describes that attempt, not this outcome, which is why the operator
+command reports the status rather than the error.
+
+The row keeps `(kind, idempotency_key)`, so re-enqueuing the same logical job
+returns `enqueued: false` and does not run. That is the intended reading of
+"cancel": the decision is recorded, not erased. A new key is a new job. A cancel
+made in error has no queue-level undo — `migration_owner` may move the row back to
+`queued` by hand, which is an explicit act, not a supported command.
+
+Operator surface: `pnpm --filter @agroclimate/worker cancel:job <jobId>`, run with
+`APP_SYSTEM_DATABASE_URL` and the build present.
+
+| Exit | Log event | Meaning |
+|---|---|---|
+| 0 | `job_cancelled` | the row is `cancelled` |
+| 1 | `job_not_found` | no row with that id |
+| 1 | `job_already_cancelled` | an earlier run did commit; re-running is not needed |
+| 1 | `job_holds_ingestion_run` | a retry owns a `running` `IngestionRun`; wait for the budget |
+| 1 | `job_not_cancellable` | running, or a terminal status other than `cancelled` |
+| 1 | `cancel_error` | malformed id, or the database refused the statement |
+
+Exit 1 answers one question — did this command stop the job? — so a script branches
+on 0 versus 1, and the event name tells a person which remedy applies.
+
+There is no `cancel_requested_at` and no HTTP route. A request flag would only be
+honoured when the worker next renewed its lease — up to one heartbeat interval
+later — and the handler would still have to cooperate with an abort it already
+receives on shutdown. That is a second mechanism for a case the budget already
+bounds. `app_api` holds no grant on `app.jobs`, so no tenant can reach this action.
