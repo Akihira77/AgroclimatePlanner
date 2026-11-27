@@ -103,6 +103,7 @@ in sync with the migrations by hand.
 | Daily workflow, tests, migrations | `docs/guides/development.md`            |
 | Every environment variable        | `docs/guides/environment-variables.md`  |
 | Routes, envelopes, error codes    | `docs/guides/api-reference.md`          |
+| Using the four web screens        | `docs/guides/user-guide.md`             |
 | Security posture and its gaps     | `docs/security/review.md`               |
 | Phase state and open work         | `docs/IMPLEMENTATION_MASTER_ROADMAP.md` |
 | Decisions and their owners        | `docs/OWNER_DECISIONS.md`               |

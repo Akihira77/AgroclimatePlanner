@@ -1921,3 +1921,16 @@ and `docs/operations/migration-rollback.md`.
 | What tests the guard | A test-sufficiency audit made the point that the guard's value is its refusal, and a refusal validated by hand is an anecdote. `scripts/lib/prisma-schema-diff.mjs` now holds the parser and the two-sided comparison, and `test/unit/prisma-schema-diff.test.mjs` drives them without a database: exact match passes, one extra statement fails, the allowlist statement going absent fails, an empty script fails, and a reformatted statement fails instead of matching the one it replaced. Seven assertions, `pnpm test` 53 in the database package |
 | The class behind drift 3, asserted | `test/schema/schema-conformance.test.mjs` gained `supersession chains`: every `supersedes_id` / `superseded_by_id` column in `app` must be a single-column `NO ACTION` foreign key to its own table, and the eight declared pointers must be exactly the eight the catalogue holds. Proved by dropping `planting_windows_superseded_by_fkey` and watching the assertion fail, then restoring it — the previous bug would now be caught by a test instead of by a diff |
 | What this does not cover | The check compares the applied database to `schema.prisma`. It says nothing about the migrations directory as text, and a database that is behind its migrations would show drift here rather than as a missing migration — the ledger check runs first and names that case |
+
+### The interface, described from the code that draws it — §13.8 — 2026-11-28
+
+`docs/guides/user-guide.md` (new), a README row, and the §13.8 tick.
+
+| Item | State |
+|---|---|
+| What it describes | The four screens in `apps/web/src/pages/`: Ringkasan, Lahan, Katalog, Iklim — not the API, which already has its own reference, and not the agronomy |
+| Why the first section is what is absent | A user guide that starts with features sets the wrong expectation for every number on every screen. No recommendation is displayed anywhere; the climate values come from the `synthetic/synthetic_1deg_20x20` fixture grid; the catalogue may be empty until `OPEN-20`; there is no password reset, verification or account deletion |
+| Where the detail comes from | The forms' own limits (`maxLength` 100/120, 200 vertices, 12 000 characters, span 0.1–50 km), the generated `areaHa` column, the `409` that a farm with live fields returns, the three catalogue levels and the per-row evidence grade, the two climate horizons and their per-value data classes |
+| What is stated as a limit rather than a feature | No map, tiles or projection — the sketch is a degrees-per-kilometre frame, not a basemap. No interpolation: a month or day without a row is a gap with a reason, never zero. A stale value is labelled `basi` and reading it as current is the error the class exists to prevent |
+| What is not in the interface | §8 lists six absences (suitability, map, alerts/exports, account lifecycle, catalogue admin, shared links) and names the decision that gates each, so the gap reads as a decision rather than missing UI |
+| Freshness | Every claim is from the source files as they stand; the guide names files rather than copying their text, and `docs/guides/api-reference.md` §9 already gives the command that regenerates the route list this guide does not duplicate |
