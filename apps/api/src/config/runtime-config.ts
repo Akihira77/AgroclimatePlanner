@@ -6,8 +6,10 @@
  * that needed it. Nothing here reads `process.env` directly except `readEnvironment`,
  * which is the single place the process boundary is crossed.
  *
- * Errors never echo a value: a message that printed the rejected connection string
- * would print its password too.
+ * Errors never echo a credential or a number: a message that printed the rejected
+ * connection string would print its password too. The exceptions are configuration
+ * entries that are not secrets — a refused CORS origin or `TRUST_PROXY` token is
+ * quoted, because the operator needs to see which entry was wrong.
  */
 
 import { readFileSync } from "node:fs";

@@ -1572,10 +1572,10 @@ Memastikan sistem dapat dioperasikan secara stabil, aman, dapat diamati, dan dap
 
 ## 13.8 Documentation
 
-- [x] README. `README.md`.
-- [ ] Installation guide.
-- [ ] Development guide.
-- [ ] Environment variable reference.
+- [x] README. `README.md`. Disaring ulang 2026-11-28: tabel state masih mengklaim "Phase 4 complete", "no climate route", "worker tanpa queue", dan "web scaffold only" — semuanya sudah tidak benar. Tabel kini menyebut 25 tabel (24 domain + `sessions`), empat role, layar web, engine agronomi, dan tiga lapisan yang tetap belum ada (scheduler, katalog terisi, AI briefing) beserta nomor keputusan pemiliknya.
+- [x] Installation guide. `docs/guides/installation.md`: prasyarat versi, urutan `db:up` → `db:bootstrap` → `db:migrate` → `db:verify` → `build` → `test`, cara menjalankan API/web/worker, dan tabel gejala→sebab→perbaikan dengan pesan galat apa adanya. Batas yang dinyatakan: tidak ada prosedur instalasi produksi, dan `db:reset` menghapus volume.
+- [x] Development guide. `docs/guides/development.md`: peta paket dan arah dependensi, tabel perintah root dan per-paket, pembagian suite uji (mana yang butuh basis data), jebakan `ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL` dan `dist` yang basi, alur migration tulis-tangan, serta urutan verifikasi sebelum menyebut selesai.
+- [x] Environment variable reference. `docs/guides/environment-variables.md`: setiap variabel yang benar-benar dibaca kode, siapa pembacanya, nilai bawaan pengembangan, kewajiban produksi, dan validasinya. Mencatat satu pengecualian nyata: worker tidak membaca berkas env lokal dan menuntut `APP_SYSTEM_DATABASE_URL` eksplisit, sementara API menurunkan URL role-nya di pengembangan. Tidak ada nilai rahasia yang ditulis.
 - [ ] API reference.
 - [x] Database documentation. `docs/data-model/`.
 - [ ] Provider configuration guide.
