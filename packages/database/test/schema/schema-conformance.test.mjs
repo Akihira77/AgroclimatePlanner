@@ -352,6 +352,93 @@ function normaliseCheck(definition) {
     .trim();
 }
 
+describe("supersession chains", () => {
+  /**
+   * Every `supersedes_id` / `superseded_by_id` column must be a foreign key to its
+   * own table. That is not a stylistic rule: `planting_windows.superseded_by_id`
+   * was indexed, documented and guarded by a status check, but the constraint was
+   * never written by any migration, so a window could name a superseding row that
+   * does not exist. The bug was found by a schema diff, not by a test, which is
+   * why the class is asserted here rather than the one instance.
+   */
+  const EXPECTED = [
+    ["ai_briefings", "superseded_by_id"],
+    ["crop_profile_versions", "supersedes_id"],
+    ["monthly_outlooks", "superseded_by_id"],
+    ["planting_windows", "superseded_by_id"],
+    ["suitability_runs", "superseded_by_id"],
+    ["suitability_runs", "supersedes_id"],
+    ["weather_records", "superseded_by_id"],
+    ["weather_records", "supersedes_id"],
+  ];
+
+  let found;
+  let declared;
+
+  before(async () => {
+    const { rows } = await owner.query(
+      `select tbl.relname as table_name,
+              att.attname as column_name,
+              con.conname as constraint_name,
+              con.confdeltype as on_delete_policy,
+              pg_get_constraintdef(con.oid) as definition
+         from pg_attribute att
+         join pg_class tbl on tbl.oid = att.attrelid
+         join pg_namespace n on n.oid = tbl.relnamespace
+         left join pg_constraint con
+           on con.conrelid = tbl.oid
+          and con.confrelid = tbl.oid
+          and con.contype = 'f'
+          and con.conkey = array[att.attnum]
+        where n.nspname = 'app'
+          and tbl.relkind = 'r'
+          and att.attname in ('supersedes_id', 'superseded_by_id')
+          and att.attnum > 0
+        order by 1, 2`,
+    );
+    found = new Map(
+      rows.map((row) => [
+        `${row.table_name}.${row.column_name}`,
+        {
+          name: row.constraint_name,
+          onDelete: row.on_delete_policy,
+          definition: row.definition,
+        },
+      ]),
+    );
+    declared = [...found.keys()];
+  });
+
+  test("the eight declared chain pointers are the eight the catalogue holds", () => {
+    const expected = EXPECTED.map(([table, column]) => `${table}.${column}`);
+    assert.deepEqual(
+      declared,
+      expected,
+      "a column added or removed without updating this list is a decision nobody recorded",
+    );
+  });
+
+  test("each pointer is a single-column foreign key to its own table, NO ACTION on delete", () => {
+    for (const [table, column] of EXPECTED) {
+      const entry = found.get(`${table}.${column}`);
+      assert.ok(
+        entry.name,
+        `${table}.${column} has a value but no constraint, so it can name a row that does not exist`,
+      );
+      assert.equal(
+        entry.onDelete,
+        "a",
+        `${table}.${column} must be NO ACTION on delete, not a cascade that rewrites an audit chain`,
+      );
+      assert.match(
+        entry.definition,
+        new RegExp(`^FOREIGN KEY \\(${column}\\) REFERENCES app\\.${table}\\(id\\)`),
+        `${table}.${column} must reference ${table}(id)`,
+      );
+    }
+  });
+});
+
 describe("app.sessions structure", () => {
   test("the nine columns match the definition in attnum order", async () => {
     const expected = [

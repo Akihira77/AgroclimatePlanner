@@ -18,41 +18,25 @@
  *
  * The check is therefore not a diff of two schema files: it asks Prisma for the
  * script that would make the database match the schema and refuses anything but
- * the one difference Prisma cannot express.
+ * the one difference Prisma cannot express. That comparison lives in
+ * `lib/prisma-schema-diff.mjs` so it can be tested without a database.
  *
- * That difference is `fields.area_ha`: `GENERATED ALWAYS AS (...) STORED`, which
- * Prisma has no syntax for, so it reads the generated column as a plain nullable
- * `double precision` and wants to drop the generation. The allowlist is one
- * statement, and a separate query below asserts the column really is still
+ * The one difference is `fields.area_ha`: `GENERATED ALWAYS AS (...) STORED`,
+ * which Prisma has no syntax for, so it reads the generated column as a plain
+ * nullable `double precision` and wants to drop the generation. The allowlist is
+ * one statement, and the check below asserts the column really is still
  * generated — so the allowlist cannot become a place where real drift hides.
  */
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Client } from "pg";
 
 import { roleConnectionString } from "./lib/connections.mjs";
+import { compareSchemaDiff } from "./lib/prisma-schema-diff.mjs";
 
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
-
-/** The one statement Prisma must always want, and never anything else. */
-const UNEXPRESSIBLE = [
-  'ALTER TABLE "fields" ALTER COLUMN "area_ha" DROP DEFAULT,',
-  'ALTER COLUMN "area_ha" SET DATA TYPE double precision;',
-].join("\n");
-
-function statements(script) {
-  return script
-    .split("\n")
-    .filter((line) => !line.trimStart().startsWith("--"))
-    .join("\n")
-    .split(";")
-    .map((chunk) => chunk.trim())
-    .filter((chunk) => chunk.length > 0)
-    .map((chunk) => `${chunk.replace(/\s+/g, " ")}`);
-}
 
 function diffScript() {
   const prisma = join(packageRoot, "node_modules", ".bin", "prisma");
@@ -69,14 +53,14 @@ function diffScript() {
     { cwd: packageRoot, encoding: "utf8", timeout: 240_000 },
   );
   if (result.error) throw result.error;
+  // A signal kill leaves `status` null, and "exit null" reads as a bug in this
+  // script rather than in the command it ran.
+  if (result.signal) throw new Error(`prisma migrate diff killed by ${result.signal}`);
   if (result.status !== 0) {
     throw new Error(`prisma migrate diff failed (exit ${result.status}): ${result.stderr.trim()}`);
   }
   return result.stdout;
 }
-
-const expected = statements(UNEXPRESSIBLE);
-const actual = statements(diffScript());
 
 let failures = 0;
 const check = (label, passed, detail) => {
@@ -88,13 +72,12 @@ const check = (label, passed, detail) => {
   console.log(`FAIL  ${label}${detail === undefined ? "" : ` — ${detail}`}`);
 };
 
-const unexplained = actual.filter((statement) => !expected.includes(statement));
-const missing = expected.filter((statement) => !actual.includes(statement));
+const { unexpected, absent } = compareSchemaDiff(diffScript());
 
 check(
   "the schema and the database differ only where Prisma cannot express the difference",
-  unexplained.length === 0 && missing.length === 0,
-  JSON.stringify({ unexpected: unexplained, absent: missing }),
+  unexpected.length === 0 && absent.length === 0,
+  JSON.stringify({ unexpected, absent }),
 );
 
 // The allowlist says "generated column"; if that stops being true, the exception
@@ -112,6 +95,14 @@ try {
     "fields.area_ha is still a generated column, so the one allowed difference is still an inexpressible one",
     column !== undefined && column.is_generated === "ALWAYS" && column.has_expression === true,
     JSON.stringify(column ?? "column not found"),
+  );
+} catch (error) {
+  // Reported through `check` so a connection failure reads as a failed check
+  // rather than a stack trace above a summary that never mentions it.
+  check(
+    "the catalogue can be read to confirm fields.area_ha is still generated",
+    false,
+    `${error.code ?? error.name}: ${error.message}`,
   );
 } finally {
   await client.end().catch(() => {});
