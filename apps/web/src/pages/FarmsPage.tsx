@@ -9,10 +9,13 @@ import { useAsync } from "../useAsync.js";
  * Farms and their fields, one screen.
  *
  * A field needs a polygon, and typing a GeoJSON ring is not a thing anyone does.
- * The form takes a centre and a span and builds the square around it — the same
- * shape the fixture suites use. It is a convenience for data entry, not a
- * substitute for drawing on a map: a real parcel is not a square, and the stored
- * geometry is whatever PostGIS accepted.
+ * The form draws the ring in a plain SVG frame anchored on the centre and span:
+ * click adds a vertex, drag moves it, and the sketch keeps its shape when the
+ * frame changes because vertices are stored normalised, not in degrees.
+ *
+ * No map tiles, no projection. The frame is small enough that equirectangular
+ * degrees-per-kilometre is honest, and the stored geometry is whatever PostGIS
+ * accepted — a self-intersecting ring is refused there, not here.
  */
 export function FarmsPage() {
   const state = useAsync("farms", async () => {
@@ -29,6 +32,9 @@ export function FarmsPage() {
   const [lat, setLat] = useState("-6.2");
   const [lon, setLon] = useState("106.816");
   const [spanKm, setSpanKm] = useState("1");
+  const [vertices, setVertices] = useState<readonly SketchPoint[]>([]);
+  const [dragging, setDragging] = useState<number | null>(null);
+  const [polygonText, setPolygonText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
@@ -43,6 +49,23 @@ export function FarmsPage() {
 
   const name = farmName.trim();
   const region = farmRegion.trim() === "" ? null : farmRegion.trim();
+
+  const frame = frameFrom(lat, lon, spanKm);
+  const { geometry, reason } = geometryFor(vertices, frame, polygonText);
+
+  const addVertex = (event: React.PointerEvent<SVGRectElement>) => {
+    const svg = event.currentTarget.ownerSVGElement;
+    if (svg === null) return;
+    const point = sketchPoint(svg, event.clientX, event.clientY);
+    setVertices((current) => (current.length >= MAX_VERTICES ? current : [...current, point]));
+  };
+
+  const moveVertex = (index: number, event: React.PointerEvent<SVGCircleElement>) => {
+    const svg = event.currentTarget.ownerSVGElement;
+    if (svg === null) return;
+    const point = sketchPoint(svg, event.clientX, event.clientY);
+    setVertices((current) => current.map((vertex, at) => (at === index ? point : vertex)));
+  };
 
   const saveFarm = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -88,20 +111,21 @@ export function FarmsPage() {
   const saveField = async (event: React.FormEvent) => {
     event.preventDefault();
     if (selected === undefined) return;
+    // Unreachable while the button is disabled for the same condition; kept because
+    // the cost of a stale click posting an empty ring is not worth the guard's line.
+    if (editingFieldId === null && geometry === null) return;
     setBusy(true);
     setError(null);
     try {
-      if (editingFieldId === null) {
-        await api.createField(
-          selected.id,
-          fieldName.trim(),
-          squareAround(Number(lat), Number(lon), Number(spanKm)),
-        );
-      } else {
+      if (editingFieldId === null && geometry !== null) {
+        await api.createField(selected.id, fieldName.trim(), geometry);
+      } else if (editingFieldId !== null) {
         await api.updateField(editingFieldId, { name: fieldName.trim() });
       }
       setFieldName("");
       setEditingFieldId(null);
+      setVertices([]);
+      setPolygonText("");
       state.reload();
     } catch (failure) {
       setError(failure);
@@ -345,11 +369,101 @@ export function FarmsPage() {
                       value={spanKm}
                       onChange={(event) => setSpanKm(event.target.value)}
                     />
+                    <span className="hint">Sisi bingkai sketsa.</span>
+                  </div>
+                  <div className="sketch-block">
+                    <div className="spread">
+                      <span className="eyebrow">Batas lahan</span>
+                      <span className="faint numeric">{vertices.length} titik</span>
+                    </div>
+                    <svg
+                      className="sketch"
+                      viewBox="0 0 100 100"
+                      role="group"
+                      aria-label={`Sketsa batas lahan, ${vertices.length} titik`}
+                    >
+                      <rect
+                        className="sketch-frame"
+                        x={PLOT_MIN}
+                        y={PLOT_MIN}
+                        width={PLOT_SIZE}
+                        height={PLOT_SIZE}
+                        onPointerDown={addVertex}
+                      />
+                      {vertices.length < 2 ? null : (
+                        <polygon
+                          className="sketch-area"
+                          points={vertices
+                            .map((vertex) => `${plot(vertex.x)},${plot(vertex.y)}`)
+                            .join(" ")}
+                        />
+                      )}
+                      {vertices.map((vertex, index) => (
+                        <circle
+                          key={index}
+                          className="sketch-vertex"
+                          cx={plot(vertex.x)}
+                          cy={plot(vertex.y)}
+                          r={6}
+                          role="img"
+                          aria-label={`Titik ${index + 1}`}
+                          onPointerDown={(event) => {
+                            event.currentTarget.setPointerCapture(event.pointerId);
+                            setDragging(index);
+                          }}
+                          onPointerMove={(event) => {
+                            if (dragging === index) moveVertex(index, event);
+                          }}
+                          onPointerUp={(event) => {
+                            event.currentTarget.releasePointerCapture(event.pointerId);
+                            setDragging(null);
+                          }}
+                          onPointerCancel={() => setDragging(null)}
+                        />
+                      ))}
+                    </svg>
+                    <p className="faint">
+                      Klik di dalam bingkai untuk menambah titik; seret titik untuk memindahkannya.
+                    </p>
+                    <div className="row">
+                      <button
+                        type="button"
+                        className="btn btn-quiet"
+                        disabled={busy || vertices.length === 0}
+                        onClick={() => setVertices((current) => current.slice(0, -1))}
+                      >
+                        Hapus titik terakhir
+                      </button>
+                    </div>
+                    {reason === "" ? null : <p className="faint">{reason}</p>}
+                    <details>
+                      <summary className="faint">Tanpa tetikus: tulis poligon</summary>
+                      <div className="field">
+                        <label htmlFor="field-polygon">
+                          Poligon (bujur, lintang — satu titik per baris)
+                        </label>
+                        <textarea
+                          id="field-polygon"
+                          rows={4}
+                          maxLength={MAX_POLYGON_TEXT}
+                          value={polygonText}
+                          onChange={(event) => setPolygonText(event.target.value)}
+                        />
+                        <span className="hint">
+                          Kalau diisi, teks ini menggantikan sketsa. Satu titik per baris, tiap
+                          baris berisi bujur lalu lintang; ring ditutup otomatis.
+                        </span>
+                      </div>
+                    </details>
                   </div>
                 </>
               ) : null}
               <div className="form-actions">
-                <button className="btn btn-primary" type="submit" disabled={busy}>
+                <button
+                  className="btn btn-primary"
+                  type="submit"
+                  disabled={busy || (editingFieldId === null && geometry === null)}
+                >
                   {editingFieldId === null ? "Tambah lahan" : "Simpan nama"}
                 </button>
                 {editingFieldId === null ? null : (
@@ -369,8 +483,8 @@ export function FarmsPage() {
             <div className="panel-body">
               <p className="faint">
                 {editingFieldId === null
-                  ? "Persegi di sekitar titik pusat. Bentuk ini untuk entri cepat; lahan nyata tidak persegi."
-                  : "Geometri tidak berubah di sini: PATCH menerima nama saja."}
+                  ? "Titik disimpan sebagai bujur dan lintang saat formulir dikirim; ring ditutup otomatis. Bentuk nyata mengikuti apa yang diterima PostGIS."
+                  : "Geometri ditetapkan saat lahan dibuat, jadi di sini hanya nama yang bisa diubah."}
               </p>
             </div>
           </form>
@@ -385,25 +499,177 @@ function countLabel(fields: readonly { farmId: string }[], farmId: string): stri
   return count === 1 ? "1 lahan" : `${count} lahan`;
 }
 
+/** Sketch space is 0..1 on both axes; `0,0` is the frame's north-west corner. */
+interface SketchPoint {
+  readonly x: number;
+  readonly y: number;
+}
+
+/** The lat/lon window the sketch covers, in degrees. */
+interface Frame {
+  readonly top: number;
+  readonly bottom: number;
+  readonly left: number;
+  readonly right: number;
+}
+
+const KM_PER_DEGREE = 111.32;
+
 /**
- * A square around a point, as a closed ring of five positions.
- *
- * Degrees per kilometre: 1/111.32 north-south, divided by cos(latitude) east-west.
- * At a latitude where the cosine approaches zero this would explode, but the
- * contract refuses |lat| > 90 and a 0.1–50 km span cannot reach the pole from any
- * real farm; the caller sees the API's own validation if it ever does.
+ * Caps, not rules: a parcel has a handful of corners, and a pasted or clicked ring
+ * of thousands would freeze this tab long before the server saw it.
  */
-function squareAround(lat: number, lon: number, spanKm: number): PolygonGeometry {
-  const halfLat = spanKm / 2 / 111.32;
-  const halfLon = spanKm / 2 / (111.32 * Math.cos((lat * Math.PI) / 180));
+const MAX_VERTICES = 200;
+const MAX_POLYGON_TEXT = 4000;
 
-  const ring: [number, number][] = [
-    [lon - halfLon, lat - halfLat],
-    [lon + halfLon, lat - halfLat],
-    [lon + halfLon, lat + halfLat],
-    [lon - halfLon, lat + halfLat],
-    [lon - halfLon, lat - halfLat],
+/** The plot is inset so a vertex at 0 or 1 is still a full circle on screen. */
+const PLOT_MIN = 6;
+const PLOT_SIZE = 88;
+
+function plot(normalised: number): number {
+  return PLOT_MIN + normalised * PLOT_SIZE;
+}
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+/**
+ * Degrees per kilometre: 1/111.32 north-south, divided by cos(latitude) east-west.
+ * The contract refuses |lat| > 90; here a frame that would cross a pole or the
+ * antimeridian is refused outright, because clamping a corner would move the
+ * drawing away from the centre the user typed.
+ */
+/**
+ * The frame, or null. The inputs arrive as the strings the form holds, and a
+ * cleared `type="number"` field is `""` — which `Number` turns into `0`, not
+ * `NaN`. Accepting that would silently anchor the drawing on the equator, so a
+ * blank field is refused here rather than defaulted.
+ */
+function frameFrom(latText: string, lonText: string, spanText: string): Frame | null {
+  if (latText.trim() === "" || lonText.trim() === "" || spanText.trim() === "") return null;
+  return frameBounds(Number(latText), Number(lonText), Number(spanText));
+}
+
+function frameBounds(lat: number, lon: number, spanKm: number): Frame | null {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || !Number.isFinite(spanKm)) return null;
+  if (spanKm <= 0 || Math.abs(lat) >= 90) return null;
+
+  const dLat = spanKm / KM_PER_DEGREE;
+  const dLon = spanKm / (KM_PER_DEGREE * Math.cos((lat * Math.PI) / 180));
+  const frame: Frame = {
+    top: lat + dLat / 2,
+    bottom: lat - dLat / 2,
+    left: lon - dLon / 2,
+    right: lon + dLon / 2,
+  };
+
+  return frame.top > 90 || frame.bottom < -90 || frame.left < -180 || frame.right > 180
+    ? null
+    : frame;
+}
+
+/** Pointer position in sketch space. The `viewBox` is square and `aspect-ratio` is 1. */
+function sketchPoint(svg: SVGSVGElement, clientX: number, clientY: number): SketchPoint {
+  const rect = svg.getBoundingClientRect();
+  const x = ((clientX - rect.left) / rect.width) * 100;
+  const y = ((clientY - rect.top) / rect.height) * 100;
+  return {
+    x: clamp01((x - PLOT_MIN) / PLOT_SIZE),
+    y: clamp01((y - PLOT_MIN) / PLOT_SIZE),
+  };
+}
+
+function positionOf(point: SketchPoint, frame: Frame): [number, number] {
+  return [
+    frame.left + point.x * (frame.right - frame.left),
+    frame.top - point.y * (frame.top - frame.bottom),
   ];
+}
 
-  return { type: "Polygon", coordinates: [ring] };
+/**
+ * A closed ring, or null when there are fewer than three distinct positions.
+ *
+ * Every repeated position is dropped, not just a consecutive one: a corner visited
+ * twice makes the ring self-touching, which `ST_IsValid` reads as a zero-area or
+ * invalid polygon. Dropping the second visit leaves the shape a user meant, and a
+ * ring that still cannot reach three distinct corners is refused.
+ */
+function ringOf(positions: readonly (readonly [number, number])[]): PolygonGeometry | null {
+  const ring: [number, number][] = [];
+  for (const [lon, lat] of positions) {
+    if (ring.some(([seenLon, seenLat]) => seenLon === lon && seenLat === lat)) continue;
+    ring.push([lon, lat]);
+  }
+
+  const first = ring[0];
+  if (ring.length < 3 || first === undefined) return null;
+  return { type: "Polygon", coordinates: [[...ring, [first[0], first[1]]]] };
+}
+
+type Parsed = { readonly positions: [number, number][] } | { readonly error: string };
+
+/** `bujur, lintang` per line, comma or whitespace separated. */
+function parsePositions(text: string): Parsed {
+  const positions: [number, number][] = [];
+  for (const raw of text.split(/[\n;]+/)) {
+    const line = raw.trim();
+    if (line === "") continue;
+    const parts = line.split(/[\s,]+/);
+    // A leading or trailing separator splits into an empty part, and `Number("")`
+    // is 0 — a missing ordinate would become the equator or the prime meridian.
+    if (parts.length !== 2 || parts.some((part) => part === ""))
+      return { error: `Baris "${line}" butuh tepat dua angka: bujur, lintang.` };
+
+    const lon = Number(parts[0]);
+    const lat = Number(parts[1]);
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) {
+      return { error: `Baris "${line}" bukan angka yang sah.` };
+    }
+    if (lon < -180 || lon > 180 || lat < -90 || lat > 90) {
+      return { error: `Baris "${line}" di luar batas ±180 bujur atau ±90 lintang.` };
+    }
+    positions.push([lon, lat]);
+  }
+  return { positions };
+}
+
+/**
+ * The geometry the form can submit, and the reason it cannot.
+ * Typed text wins when non-empty, so the two inputs never mix into one ring.
+ */
+function geometryFor(
+  vertices: readonly SketchPoint[],
+  frame: Frame | null,
+  text: string,
+): { readonly geometry: PolygonGeometry | null; readonly reason: string } {
+  if (text.trim() !== "") {
+    const parsed = parsePositions(text);
+    if ("error" in parsed) return { geometry: null, reason: parsed.error };
+    const geometry = ringOf(parsed.positions);
+    return geometry === null
+      ? { geometry: null, reason: "Poligon butuh minimal 3 titik berbeda." }
+      : { geometry, reason: "" };
+  }
+
+  if (frame === null) {
+    // Every way `frameBounds` can refuse — a non-numeric field, a side that is not
+    // positive, a corner past ±90/±180 — ends here, so the message names the inputs
+    // rather than guessing which one is wrong.
+    return { geometry: null, reason: "Bingkai tidak valid; periksa lintang, bujur, dan sisi." };
+  }
+  if (vertices.length < 3) {
+    if (vertices.length === 0) {
+      return { geometry: null, reason: "Belum ada titik; butuh minimal 3 titik." };
+    }
+    return {
+      geometry: null,
+      reason: `Baru ${vertices.length} titik; butuh minimal 3 titik berbeda.`,
+    };
+  }
+
+  const geometry = ringOf(vertices.map((vertex) => positionOf(vertex, frame)));
+  return geometry === null
+    ? { geometry: null, reason: "Titik berimpit; butuh minimal 3 titik berbeda." }
+    : { geometry, reason: "" };
 }

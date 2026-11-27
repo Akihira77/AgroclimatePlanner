@@ -1877,7 +1877,7 @@ migration can store, not what an evaluation would decide.
 **Why:** the engine cannot start without a readable, versioned catalog. Catalog
 seeding is the last unblocked prerequisite; the provider gates do not touch it.
 
-## Priority 4 — Begin product-facing frontend — **DONE except map geometry**
+## Priority 4 — Begin product-facing frontend — **DONE except a basemap**
 
 - [x] Implement authentication UI (login, registration, session restore).
 - [x] Implement farm management UI (list, create, select).
@@ -1886,7 +1886,7 @@ seeding is the last unblocked prerequisite; the provider gates do not touch it.
 - [x] Build the climate outlook view on the shipped monthly contract, and the 0–45 day view beside it.
 - [x] Prepare dashboard layout (session shell, navigation, counts, next actions).
 - [x] Edit and delete for farms and fields. Rename reuses the create form (PATCH accepts a name and region, so the geometry fields hide while editing a field); delete is per row, and a farm with live fields is refused by the server's own `409` rather than by a client guess.
-- [ ] Map-based geometry drawing — the current field form builds a square around a point.
+- [x] Polygon geometry entry — the form draws the ring in a plain SVG frame instead of building a square. No map tiles and no projection: the frame is small (≤ 50 km), so degrees-per-kilometre is honest, and topology stays `ST_IsValid`'s job. A typed `bujur, lintang` list is the keyboard and precision alternative, and either source must produce at least three distinct points before the form can submit. Still open: tiles and a real basemap, and a geometry edit path after creation.
 
 **Why:** the product has no usable interface. The stable Farm/Field/Climate APIs
 are enough to begin; waiting for Phase 6–8 delays the only demonstration of value.
@@ -1895,14 +1895,15 @@ are enough to begin; waiting for Phase 6–8 delays the only demonstration of va
 
 - [x] Implement pure suitability dimensions on synthetic fixtures. `packages/agronomy/src/constraint.ts`: one constraint against one observation, deterministic, no clock. `null` is `insufficient_data`, never a pass; grade C may not gate, grade D may not vote.
 - [x] Implement growth-stage alignment. `packages/agronomy/src/stages.ts`: UTC calendar arithmetic, inclusive stage bounds, a gap is `null` rather than the previous stage, and critical windows are clipped to the cycle at either duration extreme.
-- [ ] Implement planting-window generation. **Blocked by `OPEN-26`**: a window cannot be stored until the `evidenceSegments ∪ missingRanges` partition is validated, and generating one before the validator exists would produce an artifact the write path must refuse.
-- [x] Resolve `OPEN-26` and implement the EvidenceSegment validator. `packages/agronomy/src/partition.ts`: one violation per failed check, not a boolean; impossible dates refused rather than normalised; a zero-coverage segment treated as a missing range; the union required to touch both window extremes. Two limits named in the code — the contract's coverage formula contradicts its own partial-coverage rule, and no writer calls the function yet.
+- [ ] Implement planting-window generation. **`OPEN-26` no longer blocks it** — the validator exists and is tested. It still needs a profile with real thresholds (`OPEN-20`) and a field→cell writer (`OPEN-27`), so a generated window would have nothing to evaluate against.
+- [x] Resolve `OPEN-26` and implement the EvidenceSegment validator. `packages/agronomy/src/partition.ts`: one violation per failed check, not a boolean; impossible dates refused rather than normalised; a zero-coverage segment treated as a missing range; a gap measured from the farthest covered day; the union required to touch both window extremes; coverage reconciled in both directions, so a segment whose uncovered days are declared nowhere is refused. One limit named in the code: no writer calls the function yet, so the invariant is enforced by the absence of a write path.
 - [ ] Implement tenant-scoped recomputation (`OPEN-27`).
 - [ ] Validate crop scenarios. **Blocked by `OPEN-20`** for real profiles; the four-crop scenario matrix needs reviewed thresholds that do not exist yet.
 
-**What is still missing on purpose:** no window, no score, no verdict, no persistence,
-no route. The engine's evidence rules are enforced, not relaxed, so a rulebook row that
+**What is still missing on purpose:** no window, no persistence, no route, no score.
+The engine's evidence rules are enforced, not relaxed, so a rulebook row that
 contradicts its own grade raises `ConstraintRuleError` instead of producing a number.
+The verdict classifier exists and is tested; nothing constructs its input yet.
 
 ## Priority 6 — Calendar and AI
 

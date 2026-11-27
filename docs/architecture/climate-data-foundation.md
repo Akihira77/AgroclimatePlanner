@@ -10,7 +10,7 @@ documented; 5.7D (seasonal materialisation, SEAS5) implemented in the working tr
 2026-11-24 — the anchor is resolved as "lead 1 is the month after the initialisation
 month", the band is restated as lead months 1–6 `seasonal_forecast` and 7–12
 `climatology`, run identity is two nullable FK columns, and freshness is served as a
-read-time `availability` label (§8.7C); 5.8 not started.**
+read-time `availability` label (§8.7C); 5.8 is partial — the audit package exists and is tested, the sweep, route, alerts and runbook do not.**
 5.2.1–5.2.8 are complete as of `8a6f2ec` (2026-11-22): generic grid resolution, a
 synthetic registry instance, the tenant-scoped field centroid read, cell identity
 persistence, and `POST /v1/fields/:fieldId/resolve-cell`. 5.3 is complete as of the
