@@ -102,6 +102,7 @@ in sync with the migrations by hand.
 | Install, run, verify              | `docs/guides/installation.md`           |
 | Daily workflow, tests, migrations | `docs/guides/development.md`            |
 | Every environment variable        | `docs/guides/environment-variables.md`  |
+| Routes, envelopes, error codes    | `docs/guides/api-reference.md`          |
 | Phase state and open work         | `docs/IMPLEMENTATION_MASTER_ROADMAP.md` |
 | Decisions and their owners        | `docs/OWNER_DECISIONS.md`               |
 | Data model                        | `docs/data-model/`                      |
