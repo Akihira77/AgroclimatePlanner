@@ -28,6 +28,22 @@ export type {
 } from "./auth-sessions.js";
 export { readSessionCsrfToken, resolveSessionCsrfToken } from "./auth-csrf.js";
 export { createFarm, findFarm, listFarms, softDeleteFarm, updateFarm } from "./farms.js";
+export {
+  findCropBySlug,
+  findProfileVersion,
+  listCrops,
+  listCultivars,
+  listProfileVersionsForCrop,
+} from "./crops.js";
+export type {
+  ConstraintRow,
+  CropProfileVersionRow,
+  CropProfileVersionSummaryRow,
+  CropRow,
+  CultivarRow,
+  GrowthStageRow,
+  SourceRefRow,
+} from "./crops.js";
 export type {
   Farm,
   FarmCreate,

@@ -206,16 +206,16 @@ GET    /v1/farms/:id/fields            POST /v1/farms/:id/fields
 GET    /v1/fields/:id                  PATCH /v1/fields/:id
 POST   /v1/fields/:id/resolve-cell     (returns provider cell mapping)
 
-GET    /v1/crops                       POST /v1/crops
-GET    /v1/crops/:id/cultivars         POST /v1/crops/:id/cultivars
-GET    /v1/profiles/:id                POST /v1/profiles/:id/publish
-POST   /v1/profiles/:id/duplicate
+GET    /v1/crops                       (implemented; catalog is read-only)
+GET    /v1/crops/:slug                 (cultivars + version summaries)
+GET    /v1/crop-profiles/:profileVersionId   (stages, thresholds, citations)
 
 GET    /v1/weather/current?fieldId=…    (forecast, labelled)
 GET    /v1/weather/daily?fieldId=…&from=…&to=…
 GET    /v1/weather/sources
 
 GET    /v1/climate/outlook?fieldId=…    (12 months, per-month class)
+GET    /v1/climate/forecast?fieldId=…   (0–45 days, per-day class and run)
 GET    /v1/climate/monthly?fieldId=…&year=…
 GET    /v1/climate/anomalies?fieldId=…
 GET    /v1/climate/data-quality?fieldId=…
@@ -233,6 +233,15 @@ GET    /v1/monitoring/sources
 GET    /v1/monitoring/queues
 GET    /health  |  /health/ready
 ```
+
+The catalog routes are `GET` only, by construction: `app_api` holds `SELECT` on the
+six catalog tables and a published profile is frozen by trigger. A seed run as
+`migration_owner` is the only writer, and publishing, duplicating, and editing a
+profile are not HTTP operations in v1 — `OPEN-20` still decides what a seed may
+contain.
+
+`GET /v1/climate/forecast` takes the same `provider`, `model` and `fieldId`, plus an
+optional `firstDate` (Asia/Jakarta day 0). The monthly route is unchanged.
 
 `GET /v1/climate/outlook` also takes `provider` and `model`, and optionally
 `firstMonth`. They are the grid identity the read path resolves through the registry,

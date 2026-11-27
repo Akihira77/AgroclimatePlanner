@@ -10,6 +10,7 @@ import type { DatabaseClientFactory } from "./database/database.module.js";
 import { DatabaseModule } from "./database/database.module.js";
 import { AuthModule } from "./auth/auth.module.js";
 import { ClimateModule } from "./climate/climate.module.js";
+import { CropModule } from "./crop/crop.module.js";
 import { FarmModule } from "./farm/farm.module.js";
 import { FieldModule } from "./field/field.module.js";
 import { HealthModule } from "./health/health.module.js";
@@ -48,6 +49,7 @@ export class AppModule {
         FarmModule,
         FieldModule.register(gridRegistry),
         ClimateModule.register(gridRegistry),
+        CropModule,
         HealthModule,
       ],
     };

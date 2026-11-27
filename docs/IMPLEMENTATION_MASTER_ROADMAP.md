@@ -1856,14 +1856,18 @@ direct read of live `weather_records`; the monthly contract is unchanged.
 agronomic calculations" above the engine itself. Growth-stage alignment cannot
 evaluate 0–45 days without it.
 
-## Priority 3 — Crop catalog and Phase 6 contracts
+## Priority 3 — Crop catalog and Phase 6 contracts — **catalog reads DONE, seed still gated**
 
-- [ ] Implement crop catalog API (crops, cultivars, profile versions, growth stages, constraints, source refs).
-- [ ] Seed the four v1 crops with graded evidence; kedelai and cabai keep `water = insufficient_data`.
-- [ ] Enforce profile-version immutability.
-- [ ] Resolve `OPEN-20` (seed scope) and `OPEN-21` (field vocabulary mapping).
-- [ ] Define CropProfile, FieldSnapshot, suitability input/output and engine-version contracts.
-- [ ] Define the deterministic hash input.
+- [x] Implement crop catalog API (crops, cultivars, profile versions, growth stages, constraints, source refs).
+- [ ] Seed the four v1 crops with graded evidence; kedelai and cabai keep `water = insufficient_data`. **Blocked by `OPEN-20`**: the seed scope is an owner decision, and no threshold may be promoted from grade C to a hard gate to fill it.
+- [x] Enforce profile-version immutability, on the version and on its stages, thresholds and citations.
+- [ ] Resolve `OPEN-20` (seed scope) and `OPEN-21` (field vocabulary mapping). Neither is a code decision; both stay recorded as blockers.
+- [x] Define CropProfile, FieldSnapshot, suitability and planting-window row contracts, and the engine-version fields.
+- [x] Define the deterministic hash input. `derivationDescriptorSchema` already covered `suitability_run` and `planting_window`; the row contracts now carry the same versions and hashes they hash.
+
+**What is still missing on purpose:** no suitability engine, no window generator, no
+`OPEN-26` partition validator, and no catalog rows. The contracts describe what the
+migration can store, not what an evaluation would decide.
 
 **Why:** the engine cannot start without a readable, versioned catalog. Catalog
 seeding is the last unblocked prerequisite; the provider gates do not touch it.
