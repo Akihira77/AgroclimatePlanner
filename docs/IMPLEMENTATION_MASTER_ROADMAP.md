@@ -1,12 +1,13 @@
 # Agroclimate Planner — Implementation Master Roadmap
 
 **Document Type:** Master Implementation Roadmap  
-**Version:** 1.0  
+**Version:** 1.1  
 **Status:** Active  
-**Last Reconciled:** 2026-11-27  
+**Last Reconciled:** 2026-11-27 (after `9908dd3`)  
 **Repository:** `Akihira77/AgroclimatePlanner`  
 **Baseline Branch:** `master`  
-**Baseline Commit:** `973aca923be9a94f1f0dd7f3cd8f0a696fd23cef`  
+**Baseline Commit:** `9908dd3` — `feat(climate): materialise seasonal outlook from SEAS5`  
+**Reconciliation note:** v1.0 was written against `973aca9`, before Phase 5.7D landed. This revision marks 5.7D `VERIFIED`, corrects the Phase 4 adapter and ingestion checklists against the code that 5.4–5.6 actually shipped, and reorders the execution queue to match PRD §15.
 **Companion Documents:**
 - `docs/PRD.md` — Product Requirements Document
 - `docs/PROJECT.md` — Product definition and scope
@@ -451,7 +452,6 @@ Menyediakan identitas pengguna, manajemen farm, petak/lahan, dan crop catalog se
 - [x] Login rate limiting.
 - [x] Session expiry enforcement.
 - [x] Session concurrency hardening.
-- [ ] Reconcile seluruh uncommitted changes dengan commit history.
 - [ ] Complete remaining documentation reconciliation.
 - [ ] Complete public-deployment account lifecycle requirements.
 - [ ] Resolve account deletion policy (`OPEN-04`).
@@ -640,11 +640,13 @@ Mengambil, menormalisasi, dan menyimpan data cuaca dari provider eksternal secar
 - [x] SEAS5 monthly payload parsing.
 - [x] Monthly calendar-axis validation.
 - [x] Synthetic adapter fixtures.
-- [ ] Open-Meteo daily adapter.
-- [ ] ECMWF EC46 daily adapter.
-- [ ] ERA5 archive adapter.
+- [x] Open-Meteo daily adapter (`open-meteo-daily.ts`, 5.4) — implemented behind `OPEN-03`/`OPEN-18`.
+- [x] ECMWF EC46 daily adapter (inside `open-meteo-seasonal.ts`, 5.6) — implemented behind the same gates.
+- [x] ERA5 archive adapter (`open-meteo-archive.ts`, 5.5) — implemented behind the same gates.
 - [ ] BMKG adapter — only after written permission.
 - [ ] ECMWF Set VII adapter — only after licensing and GRIB proof of concept.
+
+The gate is what keeps these adapters out of production, not missing code: the shipped registry contains only `synthetic` and `requireValidated` refuses it, so a real job dies `grid_not_validated` before any fetch.
 
 ## 8.3 Spatial resolution
 
@@ -669,31 +671,35 @@ Mengambil, menormalisasi, dan menyimpan data cuaca dari provider eksternal secar
 
 ## 8.4 Daily weather ingestion
 
-**Status: `NOT_STARTED` / `PARTIAL` according to existing shared components**
+**Status: `IMPLEMENTED` behind `OPEN-03`/`OPEN-18` (Phase 5.4, 2026-11-23). The read model that serves these rows is §9.2 (2026-11-27).**
 
-- [ ] Complete daily adapter.
-- [ ] Implement daily observation normalization.
-- [ ] Implement daily forecast normalization.
-- [ ] Implement daily weather record assembly.
-- [ ] Implement forecast run persistence.
-- [ ] Implement ingestion run persistence.
-- [ ] Implement idempotent ingestion.
-- [ ] Implement retry and backoff behavior.
-- [ ] Implement partial coverage handling.
-- [ ] Implement null-value preservation.
-- [ ] Implement forecast horizon updates.
-- [ ] Add daily ingestion integration tests.
+- [x] Complete daily adapter (`fetchDailyForecast`, `fetchDailyEnsemble`).
+- [x] Implement daily observation normalization.
+- [x] Implement daily forecast normalization (`normalizeDailyPrecipitation`; temperature deliberately unmapped pending `OPEN-14`).
+- [x] Implement daily weather record assembly.
+- [x] Implement forecast run persistence (`persistForecastRun`).
+- [x] Implement ingestion run persistence.
+- [x] Implement idempotent ingestion.
+- [x] Implement retry and backoff behavior.
+- [x] Implement partial coverage handling.
+- [x] Implement null-value preservation.
+- [x] Implement forecast horizon updates (`extendHorizon` never shrinks).
+- [x] Add daily ingestion integration tests.
+- [ ] Production grid configuration (`OPEN-18`).
+- [ ] Automated scheduling.
 
 ## 8.5 Subseasonal ingestion
 
-- [ ] Complete EC46 daily ingestion.
-- [ ] Validate day 15–45 availability.
-- [ ] Preserve the actual temporal resolution.
-- [ ] Handle missing forecast days.
-- [ ] Handle provider changes.
-- [ ] Implement ingestion idempotency.
-- [ ] Add EC46 fixture tests.
-- [ ] Add provider integration verification.
+**Status: `IMPLEMENTED` behind `OPEN-03`/`OPEN-18` (Phase 5.6).**
+
+- [x] Complete EC46 daily ingestion.
+- [x] Validate day 15–45 availability (fixture-validated; live provider gated).
+- [x] Preserve the actual temporal resolution.
+- [x] Handle missing forecast days.
+- [x] Handle provider changes (`provider_changed` in the failure taxonomy).
+- [x] Implement ingestion idempotency.
+- [x] Add EC46 fixture tests.
+- [ ] Add provider integration verification (blocked with `OPEN-03`/`OPEN-18`).
 
 ## 8.6 Seasonal ingestion
 
@@ -756,15 +762,33 @@ Menyediakan rolling 12-month climate outlook yang menggabungkan daily forecast, 
 
 ## 9.2 Daily and subseasonal climate data
 
-**Status: `PARTIAL` / dependent on Phase 4**
+**Status: `VERIFIED` for the read path (2026-11-27). Days 0–45 are served; the rows were already ingested by 5.4/5.6 behind the same provider gates.**
 
-- [ ] Daily outlook materialization.
-- [ ] Daily anomaly computation.
-- [ ] Subseasonal aggregation.
-- [ ] Subseasonal data availability handling.
-- [ ] Temporal resolution boundary validation.
-- [ ] Daily-to-subseasonal segment continuity.
-- [ ] Tests for missing and partial horizons.
+**Design decision — direct read, not materialisation.** A day is a stored value, not an aggregation, and `weather_records` already carries the run identity, the data class, the model, and the live/superseded marker. Copying those rows into a daily outlook table would add a second supersession path without adding a fact. Monthly outlooks stay materialised because a calendar month *is* an aggregation (`Q-P5-6` unchanged). The choice is recorded here because the roadmap asked for it before any code.
+
+- [x] Daily read model (0–14 d), `weather_forecast`.
+- [x] Subseasonal read model (15–45 d), `subseasonal_forecast`.
+- [x] Subseasonal data availability handling (per-day `pending`, never a value).
+- [x] Temporal resolution boundary validation (band ↔ class, daily sum, mm only).
+- [x] Daily-to-subseasonal segment continuity (two dense, ordered segments).
+- [x] Tests for missing and partial horizons.
+- [x] Per-day freshness (`6 h` / `12 h` / `48 h`) evaluated at read time.
+- [ ] Daily anomaly computation — no accepted daily baseline exists; deferred with `Q-P5-6`.
+- [ ] Ensemble spread on a served day — the read serves one deterministic value; spread stays `Q-P5-SPREAD`.
+- [ ] Live provider rows — gated by `OPEN-03`/`OPEN-18`.
+
+### Implementation evidence
+
+| Item | Evidence |
+|---|---|
+| Contracts | `climateDailyOutlookSchema`, `climateDailyOutlookQuerySchema`, `dailyForecastDaySchema`, `dailyForecastSegmentSchema` in `packages/contracts/src/climate.ts` |
+| Bands | `DAILY_BAND` 0–14, `SUBSESONAL_BAND` 15–45, `dailyBandOf`, `permittedDailyDataClasses` |
+| Assembler | `assembleDailyHorizon` in `packages/climate-core/src/daily-read.ts` — pure, clock passed in |
+| Read | `loadActiveDailyRecords` in `packages/database/src/weather.ts` — `superseded_at IS NULL`, `ensemble_member IS NULL` |
+| Route | `GET /v1/climate/forecast` (`apps/api/src/climate/climate.controller.ts`) |
+| Freshness | `weatherForecastStaleAfterHours` (6/12/48 h) and `dailyAvailability` in `packages/climate-core/src/freshness.ts` |
+| Tests | contracts 431, climate-core 95, api unit 206, api integration 6 new cases; typecheck 11/11, lint 7/7 |
+| Unchanged | `GET /v1/climate/outlook` and the 12-month contract — no field, band, or token altered |
 
 ## 9.3 Climatology foundation
 
@@ -787,7 +811,7 @@ Remaining:
 
 ## 9.4 Seasonal materialization — Phase 5.7D
 
-**Status: `NOT_STARTED` at the documented implementation baseline; approved design decisions must be preserved.**
+**Status: `VERIFIED` — delivered in commit `9908dd3` (2026-11-27).** Nothing is live: the seasonal coverage is fixture-based because `OPEN-03`, `OPEN-05` and `OPEN-18` keep every real job out. Approved design decisions are unchanged.
 
 This work is a major milestone because it connects the existing SEAS5 ingestion layer to the monthly outlook read model.
 
@@ -825,29 +849,29 @@ This work is a major milestone because it connects the existing SEAS5 ingestion 
 
 ### Implementation tasks
 
-- [ ] Inspect existing seasonal member persistence.
-- [ ] Inspect ForecastRun/ IngestionRun identity and ordering.
-- [ ] Inspect monthly outlook persistence and unique indexes.
-- [ ] Implement seasonal materialization job.
-- [ ] Implement explicit ForecastRun validation.
-- [ ] Implement exact member identity validation.
-- [ ] Implement 50-member completeness validation.
-- [ ] Implement monthly total aggregation.
-- [ ] Implement canonical record-set hashing.
-- [ ] Implement all-or-nothing materialization.
-- [ ] Implement forecast ranking.
-- [ ] Implement stale source protection.
-- [ ] Implement supersession behavior.
-- [ ] Implement additive database migration for run identity references.
-- [ ] Implement transaction-safe promotion.
-- [ ] Implement read-time stale availability.
-- [ ] Implement API response provenance.
-- [ ] Add concurrency tests.
-- [ ] Add out-of-order completion tests.
-- [ ] Add partial member failure tests.
-- [ ] Add regression tests for climatology/seasonal precedence.
-- [ ] Verify clean database migration.
-- [ ] Reconcile implementation status and architecture documents.
+- [x] Inspect existing seasonal member persistence.
+- [x] Inspect ForecastRun/ IngestionRun identity and ordering.
+- [x] Inspect monthly outlook persistence and unique indexes.
+- [x] Implement seasonal materialization job.
+- [x] Implement explicit ForecastRun validation.
+- [x] Implement exact member identity validation.
+- [x] Implement 50-member completeness validation.
+- [x] Implement monthly total aggregation.
+- [x] Implement canonical record-set hashing.
+- [x] Implement all-or-nothing materialization.
+- [x] Implement forecast ranking.
+- [x] Implement stale source protection.
+- [x] Implement supersession behavior.
+- [x] Implement additive database migration for run identity references.
+- [x] Implement transaction-safe promotion.
+- [x] Implement read-time stale availability.
+- [x] Implement API response provenance.
+- [x] Add concurrency tests.
+- [x] Add out-of-order completion tests.
+- [x] Add partial member failure tests.
+- [x] Add regression tests for climatology/seasonal precedence.
+- [x] Verify clean database migration.
+- [x] Reconcile implementation status and architecture documents.
 
 ### Seasonal acceptance criteria
 
@@ -862,6 +886,20 @@ This work is a major milestone because it connects the existing SEAS5 ingestion 
 9. Read API correctly exposes `fresh` or `stale`.
 10. Provenance is sufficient to identify the exact source runs.
 11. Real PostgreSQL tests prove transaction and concurrency behavior.
+
+### Implementation evidence
+
+| Item | Evidence |
+|---|---|
+| Band and anchor | `seasonalOutlookMonths()` in `packages/climate-core/src/seasonal.ts`; `MONTHLY_OUTLOOK_BANDS` = 1–6 / 7–12 |
+| Completeness | 50 members, indices `0..49`, one ingestion run, non-null non-negative totals, all six months present or nothing written |
+| Value | Arithmetic mean of 50 monthly member totals; `precipitation_mean` is excluded by the variable predicate |
+| Rank | `(forecast_runs.initialized_at, ingestion_runs.created_at)` read inside the transaction after the footprint lock |
+| Precedence | The writer refuses a climatology month over an active seasonal one and counts it in `skipped` |
+| Freshness | `availability: fresh \| stale` computed at read time; `seasonalStaleBoundary` = `(init month + 1)-05T12:00Z` |
+| Migration | `20261124000000_monthly_outlook_run_identity` — two nullable FKs plus a partial index, additive only |
+| Tests | contracts 420, climate-core 81, database integration 141, worker integration 102, api integration 86; typecheck 11/11, lint 7/7, build 7/7, schema 23, rls 92 |
+| Still deferred | Spread, SD/IQR/P10–P90/min–max, probability, terciles, exceedance, confidence (`Q-P5-SPREAD` open) |
 
 ## 9.5 Ensemble spread
 
@@ -1484,7 +1522,7 @@ Memastikan sistem dapat dioperasikan secara stabil, aman, dapat diamati, dan dap
 - [ ] Database backup strategy.
 - [ ] Backup integrity verification.
 - [ ] Restore drill.
-- [ ] Redis recovery strategy.
+- [ ] Redis recovery strategy — only if Redis is ever introduced; the shipped queue is PostgreSQL-only.
 - [ ] Worker restart behavior.
 - [ ] Dead-letter handling.
 - [ ] Retry exhaustion handling.
@@ -1499,7 +1537,7 @@ Memastikan sistem dapat dioperasikan secara stabil, aman, dapat diamati, dan dap
 - [ ] Production Dockerfiles.
 - [ ] Production environment configuration.
 - [ ] Production database configuration.
-- [ ] Production Redis configuration.
+- [ ] Production Redis configuration — only if Redis is ever introduced.
 - [ ] Production reverse proxy.
 - [ ] TLS configuration.
 - [ ] CI pipeline.
@@ -1557,7 +1595,14 @@ Daftar berikut harus menjadi referensi utama ketika menentukan urutan implementa
 | `OPEN-05` | Raw provider payload retention | Reproducibility claims |
 | `OPEN-02` | BMKG written permission | BMKG production adapter |
 | `OPEN-09` | Planting status vocabulary | Planting status default/index and corresponding workflow |
+| `OPEN-16` | Weather-record growth and retention policy | Long-running ingestion volume |
+| `OPEN-20` | v1 catalog seed scope (which graded thresholds ship) | Crop catalog seeding and Phase 6 profiles |
+| `OPEN-12` | Verification/scoring table shape | Phase 9 forecast verification |
+| `OPEN-06`/`OPEN-07`/`OPEN-08`/`OPEN-10`/`OPEN-14`/`OPEN-23`/`OPEN-24` | Catalog and vocabulary details | Phase 6 constraint authoring |
+| `OPEN-22`/`OPEN-25`/`OPEN-29`/`OPEN-19`/`OPEN-15` | Maintenance and snapshot details | Phase 6/9 hardening |
 | Agronomic citation gaps | Threshold evidence | Production-grade crop profiles |
+
+The table above is the cross-phase subset only. The authoritative list, with resolution state and revisit conditions for all 29 items, is `docs/data-model/open-decisions.md`.
 
 ## 14.1 Parallelizable work
 
@@ -1790,83 +1835,75 @@ Jika hanya ada laporan agent, gunakan `IMPLEMENTED` atau `REPORTED` dalam catata
 
 Urutan berikut adalah rekomendasi pekerjaan berikutnya berdasarkan baseline repository.
 
-## Priority 1 — Close the immediate climate materialization milestone
+## Priority 1 — 5.7D seasonal materialization — **DONE**
 
-- [ ] Complete Phase 5.7D seasonal materialization.
-- [ ] Verify exact 50-member completeness.
-- [ ] Verify monthly sum aggregation.
-- [ ] Verify ForecastRun ranking.
-- [ ] Verify transactional supersession.
-- [ ] Verify stale response behavior.
-- [ ] Update implementation status and related architecture documents.
+Closed in commit `9908dd3` and verified (see §9.4). No further action here.
 
-**Why:** Fondasi seasonal data dan climatology sudah tersedia. Materialization adalah penghubung penting untuk menghasilkan rolling climate outlook yang lebih lengkap.
+## Priority 2 — Serve the 0–45 day leg — **DONE**
 
-## Priority 2 — Complete remaining climate operations
+Delivered as `GET /v1/climate/forecast` and verified (see §9.2). The read is a
+direct read of live `weather_records`; the monthly contract is unchanged.
 
-- [ ] Start Phase 5.8 data quality and operations.
-- [ ] Implement ingestion quality monitoring.
-- [ ] Implement source freshness monitoring.
-- [ ] Implement operational failure visibility.
-- [ ] Document remaining production provider gates.
+- [x] Define the daily (0–14 d) and subseasonal (15–45 d) read contracts. Data class, model, initialization instant, freshness and resolution travel on **every served day**, never flattened to the segment — a 45-day horizon may mix runs.
+- [x] Decide the read shape: direct read of `weather_records`, documented in §9.2.
+- [x] Implement the assembler in `packages/climate-core` (pure, clock-free).
+- [x] Add the read path as a sibling route, `GET /v1/climate/forecast`.
+- [x] Preserve the 12-month monthly contract unchanged.
+- [x] Add fixture-based tests; real-data tests stay gated by `OPEN-18`.
+- [x] Reconcile `IMPLEMENTATION_STATUS.md` and the climate contract.
 
-**Why:** Sistem tidak cukup hanya mampu memproses data. Sistem juga harus mengetahui kapan data tidak lengkap, stale, atau gagal.
+**Why it came first:** PRD §15 ranks "complete the climate data path needed for
+agronomic calculations" above the engine itself. Growth-stage alignment cannot
+evaluate 0–45 days without it.
 
-## Priority 3 — Prepare Phase 6 contracts
+## Priority 3 — Crop catalog and Phase 6 contracts
 
-- [ ] Review Phase 6 readiness.
-- [ ] Resolve field snapshot vocabulary mapping.
-- [ ] Audit agronomic source references.
-- [ ] Define crop profile contracts.
-- [ ] Define deterministic suitability input/output.
-- [ ] Implement pure synthetic suitability engine.
-- [ ] Implement comprehensive deterministic tests.
+- [ ] Implement crop catalog API (crops, cultivars, profile versions, growth stages, constraints, source refs).
+- [ ] Seed the four v1 crops with graded evidence; kedelai and cabai keep `water = insufficient_data`.
+- [ ] Enforce profile-version immutability.
+- [ ] Resolve `OPEN-20` (seed scope) and `OPEN-21` (field vocabulary mapping).
+- [ ] Define CropProfile, FieldSnapshot, suitability input/output and engine-version contracts.
+- [ ] Define the deterministic hash input.
 
-**Why:** Agronomic engine merupakan nilai utama produk. Sebagian pekerjaan pure domain dapat dimulai tanpa menunggu seluruh provider production gate selesai.
+**Why:** the engine cannot start without a readable, versioned catalog. Catalog
+seeding is the last unblocked prerequisite; the provider gates do not touch it.
 
-## Priority 4 — Complete crop catalog
-
-- [ ] Implement crop catalog API.
-- [ ] Seed four v1 crops.
-- [ ] Implement cultivar/profile retrieval.
-- [ ] Implement source reference retrieval.
-- [ ] Enforce version immutability.
-
-**Why:** Engine membutuhkan catalog dan profile yang dapat dibaca melalui application layer, bukan hanya tabel database.
-
-## Priority 5 — Begin product-facing frontend
+## Priority 4 — Begin product-facing frontend
 
 - [ ] Implement authentication UI.
 - [ ] Implement farm management UI.
 - [ ] Implement field management UI.
 - [ ] Implement crop catalog UI.
+- [ ] Build the climate outlook view on the shipped monthly contract.
 - [ ] Prepare dashboard layout.
-- [ ] Integrate existing Farm/Field APIs.
 
-**Why:** Jangan menunggu seluruh Phase 6–8 selesai sebelum produk memiliki interface yang bisa digunakan. Frontend dapat dikembangkan bertahap mengikuti API yang sudah stabil.
+**Why:** the product has no usable interface. The stable Farm/Field/Climate APIs
+are enough to begin; waiting for Phase 6–8 delays the only demonstration of value.
 
-## Priority 6 — Continue agronomic engine
+## Priority 5 — Complete agronomic engine
 
-- [ ] Complete suitability dimensions.
-- [ ] Complete growth-stage alignment.
-- [ ] Complete planting-window generation.
-- [ ] Complete EvidenceSegment validator.
-- [ ] Implement tenant-scoped recomputation.
+- [ ] Implement pure suitability dimensions on synthetic fixtures.
+- [ ] Implement growth-stage alignment.
+- [ ] Implement planting-window generation.
+- [ ] Resolve `OPEN-26` and implement the EvidenceSegment validator.
+- [ ] Implement tenant-scoped recomputation (`OPEN-27`).
 - [ ] Validate crop scenarios.
 
-## Priority 7 — Complete calendar and AI
+## Priority 6 — Calendar and AI
 
-- [ ] Implement agricultural calendar.
-- [ ] Implement planting opportunities.
-- [ ] Implement AI context pipeline.
-- [ ] Implement AI briefing.
-- [ ] Implement AI auditability.
+- [ ] Implement agricultural calendar and planting opportunities.
+- [ ] Implement AI context pipeline and briefing (`OPEN-11` first).
+- [ ] Implement AI auditability and deterministic fallback.
 
-## Priority 8 — Production readiness
+## Priority 7 — Data quality, monitoring and production readiness
 
+Phase 5.8 and Phase 9 are deliberately last: PRD §15 ranks monitoring below the
+engine and the frontend. Data quality only becomes measurable once real ingestion
+runs exist, which the provider gates currently prevent.
+
+- [ ] Complete Phase 5.8 data quality and operations.
 - [ ] Complete security hardening.
 - [ ] Complete provider licensing.
-- [ ] Complete monitoring.
 - [ ] Complete forecast verification.
 - [ ] Complete backup and restore.
 - [ ] Complete production deployment.

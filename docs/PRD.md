@@ -1,10 +1,11 @@
 # AGROCLIMATE PLANNER
 ## Product Requirements Document (PRD)
 
-**Version:** 1.0 — Product Baseline & Implementation Reconciliation  
+**Version:** 1.1 — Product Baseline & Implementation Reconciliation  
 **Document date:** 27 November 2026  
 **Repository:** [Akihira77/AgroclimatePlanner](https://github.com/Akihira77/AgroclimatePlanner)  
-**Verified repository baseline:** `973aca923be9a94f1f0dd7f3cd8f0a696fd23cef`  
+**Verified repository baseline:** `9908dd3` (`feat(climate): materialise seasonal outlook from SEAS5`)  
+**Reconciled:** 2026-11-27 — v1.0 was written against `973aca9`, before Phase 5.7D was committed. §4.6, §10, §13 and §17 record the shipped 5.7D and, after it, the 0–45 day read model `GET /v1/climate/forecast`; what remains is production provider validation, not a missing read path.
 **Product category:** Agricultural Weather & Climate Planning Platform  
 **Primary market:** Indonesia  
 **Primary language:** Bahasa Indonesia  
@@ -505,7 +506,7 @@ A successful fixture-based integration test does not mean production provider in
 
 ## 4.6 Weather Forecast & Climate Outlook
 
-**Status repository: Partial. Climatology materialization and read API exist; seasonal outlook materialization remains incomplete.**
+**Status repository: Partial. Both documented horizons are served. The twelve-month monthly horizon is complete — climatology materialization, seasonal materialization (Phase 5.7D), and `GET /v1/climate/outlook`. The 0–45 day leg is served by `GET /v1/climate/forecast`, which reads live daily and subseasonal rows directly. What remains is production grid validation (`OPEN-18`), so the served values are fixture-based, not live provider output.**
 
 ### Product requirement
 
@@ -574,18 +575,18 @@ The provider's `precipitation_mean` is not automatically the monthly accumulatio
 - Strict response validation.
 - Missing month handling.
 - Active/superseded row handling.
+- Seasonal outlook assembler and writer (5.7D) — 50-member completeness, all-or-nothing across the run window, arithmetic mean of member monthly totals.
+- Seasonal run identity on the row (`forecast_run_id`, `ingestion_run_id`) and rank-based supersession.
+- Class precedence: seasonal may supersede climatology; climatology never supersedes an active seasonal month.
+- Read-time `availability: fresh | stale` on seasonal months.
 
 ### Still incomplete
 
-- Seasonal outlook writer.
-- Seasonal value materialization.
-- Seasonal run identity on monthly outlook rows.
-- Seasonal supersession.
-- Freshness representation for the seasonal read response.
-- Production grid resolution.
+- Daily (0–14 d) and subseasonal (15–45 d) read contracts and endpoint (`GET /v1/climate/forecast`), reading live `weather_records` directly with per-day class, model, run and freshness.
+- Production grid resolution (`OPEN-18`) and validated field-to-cell persistence.
 - Automated scheduling.
 - Anomaly calculation.
-- Ensemble spread.
+- Ensemble spread (`Q-P5-SPREAD`, deferred).
 - Probability and tercile outputs.
 
 ### Phase 5.7 breakdown
@@ -595,7 +596,7 @@ The provider's `precipitation_mean` is not automatically the monthly accumulatio
 | 5.7A — Climatology materialization | Implemented |
 | 5.7B — Climatology read API | Implemented |
 | 5.7C — Seasonal source-selection contract | Documentation implemented |
-| 5.7D — Seasonal materialization | Not started at verified baseline |
+| 5.7D — Seasonal materialization | Implemented and verified, 2026-11-27 (commit `9908dd3`) |
 | 5.8 — Data quality and operations | Not started |
 
 ---
@@ -1436,7 +1437,7 @@ Important open decisions:
 | 5.7A Climatology materialization | Implemented |
 | 5.7B Climatology read API | Implemented |
 | 5.7C Seasonal contract | Documentation implemented |
-| 5.7D Seasonal materialization | Not started at verified baseline |
+| 5.7D Seasonal materialization | Implemented and verified, 2026-11-27 (commit `9908dd3`) |
 | 5.8 Data quality and operations | Not started |
 
 Important implementation details:
@@ -1639,7 +1640,7 @@ Includes:
 - Freshness.
 - Data-quality monitoring.
 
-Repository status: Partial. Seasonal materialization and production provider gates remain.
+Repository status: Partial. Both horizons are served: the twelve-month monthly outlook since 5.7D, and days 0–45 through `GET /v1/climate/forecast`. Remaining: production grid validation, whether either horizon is served for a real coordinate, and the provider licensing gates.
 
 ## Release 2 — Agronomic Decision Engine
 
@@ -1802,8 +1803,8 @@ At the verified repository baseline:
 | Farm and Field backend | Implemented |
 | Crop catalog | Schema only |
 | Weather ingestion | Partially implemented |
-| Climate outlook | Partially implemented |
-| Seasonal materialization | Not implemented |
+| Climate outlook | Monthly horizon and the 0–45 day read model implemented and verified; both fixture-based behind the provider gates |
+| Seasonal materialization | Implemented behind fixture gates (Phase 5.7D, `9908dd3`); no live provider run |
 | Agronomic engine | Not implemented |
 | Planting window engine | Not implemented |
 | Frontend | Scaffold only |
