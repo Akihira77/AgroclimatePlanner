@@ -101,9 +101,9 @@ export async function createApplication(
     // answer "method not allowed" for the one verb the middleware had already
     // promised to protect.
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    // `X-CSRF-Token` is listed ahead of the synchronizer-token implementation so a
-    // frontend does not need a CORS change on the day it lands; the header alone
-    // grants nothing, because no endpoint reads it yet.
+    // `X-CSRF-Token` is here because `AuthGuard` requires it on every
+    // authenticated mutation; without the CORS entry the browser's preflight
+    // would refuse the header the guard expects.
     allowedHeaders: ["Content-Type", "X-Request-Id", "Idempotency-Key", "If-Match", "X-CSRF-Token"],
     // The rate limiter's headers are useless to a browser client if CORS hides
     // them, and `Retry-After` is what a client backs off on.

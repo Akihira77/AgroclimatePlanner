@@ -1522,20 +1522,20 @@ Memastikan sistem dapat dioperasikan secara stabil, aman, dapat diamati, dan dap
 
 ## 13.5 Security hardening
 
-- [ ] Complete security review.
-- [ ] Review authentication and session lifecycle.
-- [ ] Review CSRF and Origin protection.
-- [ ] Review tenant isolation.
-- [ ] Review worker privileges.
-- [ ] Review database grants.
-- [ ] Review secrets management.
-- [ ] Review dependency vulnerabilities.
-- [ ] Review rate limiting.
-- [ ] Review request validation.
-- [ ] Review log redaction.
-- [ ] Review object storage permissions.
-- [ ] Review external request handling.
-- [ ] Review production configuration.
+- [ ] Complete security review. **Review written (`docs/security/review.md`), item per item, but not closed.** The thirteen sub-items below now have a recorded state, evidence and caveats. Yang belum bisa ditutup: review eksternal dan penetration test belum ada, dan keputusan hosting (§13.7) belum ada sehingga TLS, HSTS, network policy dan distribusi secret tidak bisa diperiksa — dokumen menyebutnya `not ours to verify`, bukan lulus. Reviewer sejauh ini read-only.
+- [x] Review authentication and session lifecycle. `docs/security/review.md` §1. Argon2id dengan parameter dari satu `RuntimeConfig`, token 32 byte CSPRNG yang hanya disimpan sebagai hash, dua tenggat di baris (30 hari sliding, 90 hari absolut, cookie memakai `LEAST` dari keduanya), sliding diperpanjang paling sering sekali per 5 menit oleh statement yang memilikinya. Caveat yang dinyatakan: tidak ada reset password, MFA, atau penghapusan akun (`OPEN-04`), dan registrasi mengungkap keberadaan alamat lewat `409` — diterima di `IG-2`, tanpa `details`.
+- [x] Review CSRF and Origin protection. `docs/security/review.md` §2, dan diuji langsung 2026-11-28: `POST` tanpa `Origin` → `403 FORBIDDEN`; dengan `Origin` tepercaya tetapi tanpa token → `403` setelah autentikasi. Kewajiban token diturunkan dari metode di dalam `AuthGuard`, `Origin` dibandingkan sebagai anggota himpunan persis sebelum body diparse. Caveat: token tidak dirotasi selama sesi — keputusan sadar agar tab kedua tetap bekerja.
+- [x] Review tenant isolation. `docs/security/review.md` §3. RLS **forced** di setiap tabel milik tenant; konteks ditulis lewat `set_config(..., true)` di dalam transaksi interaktif dan callback menerima klien transaksi itu; `withTenant` bersarang ditolak, bukan didukung. Diuji `pnpm test:rls`: 92 kasus lulus, dijalankan ulang 2026-11-28.
+- [x] Review worker privileges. `docs/security/review.md` §4. Worker berjalan sebagai `app_system` dengan `BYPASSRLS` karena job terjadwal tidak punya tenant peminta. Pertahanannya bukan "tenant diambil dari baris job" — tidak ada payload job yang membawa tenant — melainkan bahwa semua yang ditulis worker sekarang bebas tenant: yang disentuh `weather_records`, `outlook_cells`, `climatology_*`, tanpa kolom pemilik. Job per-tenant yang akan datang mematahkan argumen ini dan harus mengambil tenant dari baris job atau memakai `withTenant`. Belum dijalankan seminggu — tidak ada scheduler.
+- [x] Review database grants. `docs/security/review.md` §5. Empat role dengan tujuan terpisah, diverifikasi dengan menghubungkan diri sebagai masing-masing role (termasuk `app_api` ditolak `SELECT count(*)` pada ledger migration dengan `42501`), bukan dengan membaca berkas grant. **Temuan:** tujuh belas tabel masih memberi `DELETE` padahal tidak ada kode runtime yang mengeluarkan `DELETE`, dan hanya sembilan di antaranya yang dibatasi RLS. Sembilan tabel tenant diberikan ke `app_api` dan dijaga policy `FOR ALL` pada `app.user_id`, jadi kredensial bocor hanya bisa menghapus riwayat tenant-nya sendiri. Delapan sisanya — bidang cuaca (`outlook_cells`, `forecast_runs`, `ingestion_runs`, `weather_records`, `monthly_outlooks`, `climatology_normals`, `climatology_baselines`) dan `jobs` — diberikan ke `app_system`, tidak punya RLS sama sekali karena tidak punya kolom pemilik, dan role itu memegang `BYPASSRLS`; kredensial worker yang bocor bisa menghapus data yang melayani semua tenant. Remediasi (migration pencabutan + matriks `privilege-verification.mjs` yang berubah bersamaan + probe perilaku, bukan hanya perubahan matriks) sengaja belum dikerjakan di pass ini: keduanya harus mendarat bersama, dan menjadi item pertama yang diserahkan review.
+- [x] Review secrets management. `docs/security/review.md` §6. Tidak ada rahasia di repositori; placeholder pengembangan hanya dipakai ketika `NODE_ENV` bukan production, dan kegagalan validasi menghentikan proses. Caveat: rahasia berupa environment variable sehingga terbaca di `/proc/<pid>/environ`, dan URL di baris perintah masuk riwayat shell — panduan memakai pola `read -rs`.
+- [x] Review dependency vulnerabilities. `docs/security/review.md` §7. `pnpm audit --audit-level=moderate` bersih per 2026-11-28; satu advisory (`GHSA-7589-6fvf-x4pw`, ReDoS di `effect` lewat `prisma>@prisma/config`) ditutup dengan override bervolume tetap (`759545e`). Tidak ada SCA lain di luar `pnpm audit`.
+- [x] Review rate limiting. `docs/security/review.md` §8. 30 permintaan/menit per IP untuk `register` dan `login` dari satu penghitung, diperiksa sebelum handler. Diuji langsung: permintaan ke-31 di jendela menjawab `429` dengan `Retry-After: 56`. Dua sifat yang dinyatakan: limiter in-process per instance, dan `req.ip` hanya sekuat penanganan `X-Forwarded-For` oleh proxy — proxy yang menambahkan, bukan menimpa, membuat pemanggil memilih bucket-nya.
+- [x] Review request validation. `docs/security/review.md` §9. Setiap schema di `packages/contracts`, dipasang per parameter karena pipe global tidak tahu schema mana milik argumen mana; body dibatasi 16 KiB sebelum Zod berjalan; kontrak GeoJSON menolak yang diterima PostgreSQL (`MULTIPOLYGON`, ordinat ketiga, `crs`). Validasi bukan otorisasi: body sah yang menamai farm tenant lain tetap `404`.
+- [x] Review log redaction. `docs/security/review.md` §10. Kegagalan menulis lima field tetap — `requestId`, `status`, `code`, `exception`, `env` — tanpa pesan, body, header, atau stack; `exception` adalah kategori kasar (`HttpException`, `Error`, `Unknown`), bukan nama kelas, di pengembangan maupun produksi; hanya `5xx` yang menulis baris. Celah yang dicatat: tidak ada jejak audit keputusan otorisasi, sehingga investigasi insiden bergantung pada uji, bukan pada log.
+- [x] Review object storage permissions. Tidak berlaku: tidak ada object storage, unggahan berkas, atau dokumen hasil. Dicatat sebagai ketiadaan di `docs/security/review.md` §11 dan di daftar absen `docs/guides/api-reference.md` §8, bukan dibiarkan implisit.
+- [x] Review external request handling. `docs/security/review.md` §12. Transport membatasi body 8 MiB dan waktu 20 s, tidak melakukan retry atau klasifikasi `4xx`; setiap adapter menolak `baseUrl` non-`https`; tidak ada URL yang dibangun dari input pemanggil. Belum ada egress allowlist, proxy, atau certificate pinning — keputusan deployment.
+- [x] Review production configuration. `docs/security/review.md` §13. Penolakan saat boot sudah ada dan diuji: `TRUST_PROXY=true`, entri `CORS_ORIGINS` yang `*`/bukan URL/bukan `URL.origin`-nya sendiri, role yang salah pada URL API dan auth (termasuk ejaan percent-encoded), dan kata sandi role yang hilang di luar pengembangan. Caveat yang harus diputuskan sebelum produksi: batas `ARGON2_*` adalah batas library, bukan lantai produksi.
 
 ## 13.6 Reliability and recovery
 
@@ -1582,7 +1582,7 @@ Memastikan sistem dapat dioperasikan secara stabil, aman, dapat diamati, dan dap
 - [x] Source attribution guide. `docs/research/data-licensing-and-attribution.md`.
 - [ ] Crop profile administration guide.
 - [x] Operational runbook. `docs/operations/climate-ingestion.md` untuk antrean dan ingestion; `docs/operations/backup-restore.md` untuk dump, restore dan perbandingan pasca-restore; `docs/operations/migration-rollback.md` untuk integritas migration dan urutan expand/contract.
-- [ ] Security documentation.
+- [x] Security documentation. `docs/security/review.md`: empat belas item §13.5 dengan apa yang ditegakkan, di mana, diverifikasi bagaimana, dan apa yang belum; ditambah bagian ancaman yang tidak dimodelkan (insider dengan akses basis data, kompromi provider, rantai pasok, kehabisan sumber daya, akses host) dan daftar apa yang akan mengubah dokumen ini. Batasnya dinyatakan di paragraf pertama: bukan pengganti review eksternal.
 - [x] Forecast limitation documentation. `docs/research/forecast-horizon-capabilities.md`.
 - [ ] User guide.
 

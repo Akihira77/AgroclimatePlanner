@@ -349,6 +349,8 @@ Each of these is an absence, not an oversight:
   guard, not a distributed limiter.
 - **No CORS wildcard.** `CORS_ORIGINS` rejects `*`, and `credentials: true` with
   a wildcard is invalid anyway.
+- **No object storage, no file upload, no generated document.** Nothing returns a
+  file handle, so there is no per-object permission to get wrong.
 - **No graph, no RPC, no websocket.** JSON over HTTP.
 
 ## 9. Keeping this page true
