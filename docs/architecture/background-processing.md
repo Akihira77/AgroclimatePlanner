@@ -200,7 +200,14 @@ Why this is a hard rule rather than a preference: a bug in a `BYPASSRLS` write p
 
 ### The boundary is grants, not prose
 
-RLS does not apply to a `BYPASSRLS` role, so the sentence "maintenance may only read metadata" enforces nothing by itself. The restriction has to exist in PostgreSQL:
+RLS does not apply to a `BYPASSRLS` role, so the sentence "maintenance may only read metadata" enforces nothing by itself. The restriction has to exist in PostgreSQL.
+
+The sweep does not exist yet, so these grants are not in the tree: no migration
+grants `app_system` anything on a tenant-owned table, and `db:verify` asserts
+that absence rather than these columns. What follows is the shape the grant must
+take on the day the sweep lands — one statement per column set, in the same
+migration that adds the sweep. Writing it earlier would be a privilege with no
+reader, which is the mistake `20261128120000_revoke_runtime_delete` had to undo.
 
 ```sql
 -- app_system gets column-level SELECT on the minimum needed to detect staleness,

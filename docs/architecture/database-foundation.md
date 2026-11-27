@@ -475,11 +475,15 @@ than lumping both together as "rejected".
 | Table | `app_api` | `app_system` |
 |---|---|---|
 | `users` | none | none |
-| `farms` | `SELECT, INSERT, UPDATE, DELETE` | none |
-| `fields` | `SELECT, INSERT, UPDATE, DELETE` | none |
+| `farms` | `SELECT, INSERT, UPDATE` | none |
+| `fields` | `SELECT, INSERT, UPDATE` | none |
 
 No `GRANT ALL`, no `GRANT … ON ALL TABLES`, no default privileges added: 2.2.2's
-default-deny stays the baseline and each table opts in explicitly.
+default-deny stays the baseline and each table opts in explicitly. No `DELETE`
+either, for any runtime role: `20261128120000_revoke_runtime_delete` removed it
+everywhere once the review found it granted and unused. A row that must survive is
+a row an `UPDATE` marks — and a `DELETE` now fails with `42501` rather than
+matching zero rows.
 
 `app_system` keeps `BYPASSRLS` and receives nothing on these tables.
 `background-processing.md` §10 rule 2 says a new tenant-owned table ships without
@@ -532,7 +536,7 @@ assertion run as `app_api` or `app_system`:
 |---|---|
 | A sees only its own farms and fields | pass |
 | B sees only its own | pass |
-| No context: `SELECT` 0 rows, `INSERT` `42501`, `UPDATE`/`DELETE` 0 rows | pass |
+| No context: `SELECT` 0 rows, `INSERT`/`DELETE` `42501`, `UPDATE` 0 rows | pass |
 | Context gone after commit, on the same pooled connection (`poolMax: 1`) | pass |
 | Write and context gone after rollback | pass |
 | Concurrent A and B do not cross | pass |

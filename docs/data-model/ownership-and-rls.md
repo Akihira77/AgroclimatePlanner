@@ -61,34 +61,38 @@ grant. Measured in Phase 2.2.2.x: every operation `app_api` is refused,
 ## 2. The matrix
 
 `api` = `app_api` · `sys` = `app_system` · `own` = `migration_owner`.
-`RW` = SELECT, INSERT, UPDATE, DELETE · `R` = SELECT only.
+`RW` = SELECT, INSERT, UPDATE · `RW+` = `RW` and `DELETE` · `R` = SELECT only.
+
+No runtime role holds `DELETE` on anything. `20261128120000_revoke_runtime_delete`
+took it away from `app_api` and `app_system` after the grants below were written;
+only `migration_owner`, which acts in migrations, keeps it.
 
 | # | Table | Class | RLS | `api` | `sys` | `own` |
 |---|---|---|---|---|---|---|
-| 1 | `users` | identity | FORCE | **none** | none | RW |
-| 2 | `farms` | tenant | FORCE | RW | none | RW |
-| 3 | `fields` | tenant | FORCE | RW | none | RW |
-| 4 | `field_outlook_cells` | tenant | FORCE | RW | none | RW |
-| 5 | `field_observations` | tenant | FORCE | RW | none | RW |
-| 6 | `plantings` | tenant | FORCE | RW | none | RW |
-| 7 | `harvests` | tenant | FORCE | RW | none | RW |
-| 8 | `crops` | reference | none | R | none | RW |
-| 9 | `cultivars` | reference | none | R | none | RW |
-| 10 | `crop_profile_versions` | reference | none | R | none | RW |
-| 11 | `growth_stages` | reference | none | R | none | RW |
-| 12 | `constraints` | reference | none | R | none | RW |
-| 13 | `source_refs` | reference | none | R | none | RW |
-| 14 | `outlook_cells` | global | none | R + `INSERT (provider, model, cell_key)` | RW | RW |
-| 15 | `forecast_runs` | global | none | R | RW | RW |
-| 16 | `ingestion_runs` | global | none | R | RW | RW |
-| 17 | `weather_records` | global | none | R | RW | RW |
-| 18 | `monthly_outlooks` | global | none | R | RW | RW |
-| 19 | `climatology_normals` | global | none | R | RW | RW |
-| 20 | `climatology_baselines` | global | none | R | RW | RW |
-| 21 | `suitability_runs` | tenant-derived | FORCE | RW | none | RW |
-| 22 | `planting_windows` | tenant-derived | FORCE | RW | none | RW |
-| 23 | `ai_briefings` | tenant-derived | FORCE | RW | none | RW |
-| 24 | `jobs` | global | none | none | RW | RW |
+| 1 | `users` | identity | FORCE | **none** | none | RW+ |
+| 2 | `farms` | tenant | FORCE | RW | none | RW+ |
+| 3 | `fields` | tenant | FORCE | RW | none | RW+ |
+| 4 | `field_outlook_cells` | tenant | FORCE | RW | none | RW+ |
+| 5 | `field_observations` | tenant | FORCE | RW | none | RW+ |
+| 6 | `plantings` | tenant | FORCE | RW | none | RW+ |
+| 7 | `harvests` | tenant | FORCE | RW | none | RW+ |
+| 8 | `crops` | reference | none | R | none | RW+ |
+| 9 | `cultivars` | reference | none | R | none | RW+ |
+| 10 | `crop_profile_versions` | reference | none | R | none | RW+ |
+| 11 | `growth_stages` | reference | none | R | none | RW+ |
+| 12 | `constraints` | reference | none | R | none | RW+ |
+| 13 | `source_refs` | reference | none | R | none | RW+ |
+| 14 | `outlook_cells` | global | none | R + `INSERT (provider, model, cell_key)` | RW | RW+ |
+| 15 | `forecast_runs` | global | none | R | RW | RW+ |
+| 16 | `ingestion_runs` | global | none | R | RW | RW+ |
+| 17 | `weather_records` | global | none | R | RW | RW+ |
+| 18 | `monthly_outlooks` | global | none | R | RW | RW+ |
+| 19 | `climatology_normals` | global | none | R | RW | RW+ |
+| 20 | `climatology_baselines` | global | none | R | RW | RW+ |
+| 21 | `suitability_runs` | tenant-derived | FORCE | RW | none | RW+ |
+| 22 | `planting_windows` | tenant-derived | FORCE | RW | none | RW+ |
+| 23 | `ai_briefings` | tenant-derived | FORCE | RW | none | RW+ |
+| 24 | `jobs` | global | none | none | RW | RW+ |
 
 `app_auth` has no column in this matrix on purpose: it is permitted exactly one
 table, `users`, and the reason it needs even that is §5. Every other table above is
@@ -179,7 +183,7 @@ next grant a one-line privilege escalation.
 
 ```sql
 -- tenant-owned
-GRANT SELECT, INSERT, UPDATE, DELETE ON
+GRANT SELECT, INSERT, UPDATE ON
   app.field_outlook_cells, app.field_observations, app.plantings,
   app.harvests, app.suitability_runs, app.planting_windows, app.ai_briefings
   TO app_api;
@@ -197,16 +201,20 @@ GRANT SELECT ON
   TO app_api;
 GRANT INSERT (provider, model, cell_key) ON app.outlook_cells TO app_api;
 
-GRANT SELECT, INSERT, UPDATE, DELETE ON
+GRANT SELECT, INSERT, UPDATE ON
   app.outlook_cells, app.forecast_runs, app.ingestion_runs,
   app.weather_records, app.monthly_outlooks, app.climatology_normals
   TO app_system;
 ```
 
 `app_system` gets `UPDATE` on `weather_records` because supersession is an
-update (`superseded_by_id`/`superseded_at`), not a delete. It gets `DELETE`
-nowhere except through the same grant — no delete path exists, and revoking it
-individually would be undone by the next `GRANT` restatement.
+update (`superseded_by_id`/`superseded_at`), not a delete. These blocks are shown
+as they read after `20261128120000_revoke_runtime_delete`: the original grants
+also carried `DELETE`, nothing used it, and the revocation took it off every
+table both roles hold. It is a later migration rather than an edit of these, so a
+database that already ran them is brought to the same state as a fresh one — and
+a restated `GRANT` in a future migration would be visibly wrong, because `db:verify`
+asserts the absence rather than assuming it.
 
 ## 5. `app.users` and the login lookup — `OPEN-01`
 
@@ -284,7 +292,8 @@ the suites were written against; the closing paragraph says which of them now ru
 4. `INSERT` with `user_id` = another tenant → `42501` (policy) or `23503`
    (composite FK), asserted **specifically**, never as "denied".
 5. `UPDATE` moving `user_id` → `42501` (the `WITH CHECK` half).
-6. `DELETE` on another tenant's row → 0 rows affected.
+6. `DELETE` on another tenant's row → `42501`; the privilege is absent, so the
+   refusal arrives before a policy is consulted.
 7. `app_system` on each tenant table → `42501` on every operation.
 8. `app_api` `INSERT` on the catalog → `42501`.
 9. `app_api` `UPDATE weather_records` → `42501`.

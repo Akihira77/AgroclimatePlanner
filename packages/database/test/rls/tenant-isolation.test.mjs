@@ -286,8 +286,9 @@ describe("tenant scope", () => {
     const update = await apiPg.query("update app.farms set name = 'hijacked'");
     assert.equal(update.rowCount, 0, "UPDATE without context must match no rows");
 
-    const remove = await apiPg.query("delete from app.fields");
-    assert.equal(remove.rowCount, 0, "DELETE without context must match no rows");
+    // DELETE is refused before a policy is consulted: no runtime role holds the
+    // privilege, so there is no row count to observe. 42501, not 0.
+    await rejected(apiPg, "delete without context", "delete from app.fields", [], "42501");
   });
 
   test("scenario 4 — context does not survive the commit", async () => {
@@ -573,11 +574,18 @@ describe("phase 3 tenant-owned tables", () => {
       assert.equal(affected, 0, `${spec.table}: tenant A updated a tenant B row`);
     });
 
-    test(`${spec.table} — tenant A cannot DELETE tenant B's row`, async () => {
-      const removed = await singleScope.withTenant(fixtures.tenantA, (tx) =>
-        tx.$executeRawUnsafe(`delete from app.${spec.table} where id = $1::uuid`, spec.rowId()),
+    test(`${spec.table} — no tenant can DELETE, the privilege is absent`, async () => {
+      // Stronger than "tenant A cannot reach tenant B's row": the runtime role
+      // holds no DELETE at all, so the refusal arrives before any policy runs.
+      const outcome = await attempt(
+        singleScope,
+        fixtures.tenantA,
+        `delete from app.${spec.table} where id = $1::uuid`,
+        [spec.rowId()],
       );
-      assert.equal(removed, 0, `${spec.table}: tenant A deleted a tenant B row`);
+
+      assert.equal(outcome.ok, false, `${spec.table}: DELETE was accepted`);
+      assertSqlState(spec.table, outcome.error, "42501");
     });
 
     test(`${spec.table} — tenant A cannot INSERT under tenant B's parent`, async () => {

@@ -86,7 +86,9 @@ The ledger itself is unreadable to every application role: `pnpm db:verify` asse
 
 ## 2. What the current set already guarantees
 
-Checked by grep across all twelve migrations, 2026-11-27:
+Checked by grep across every migration present on 2026-11-27 (twelve), and again
+on 2026-11-28 with `20261128120000_revoke_runtime_delete` present, which only
+revokes privileges:
 
 - No `DROP TABLE`, no `DROP COLUMN`, no `RENAME`, no `ALTER TYPE`.
 - No `UPDATE` or `DELETE` against application rows at migration time. The one

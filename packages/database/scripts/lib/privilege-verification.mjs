@@ -1916,13 +1916,21 @@ export async function runPrivilegeVerification({
     // Effective privileges, per table per operation, from PostgreSQL's own
     // answer rather than from the migration text. Built from the ownership
     // classes so the matrix cannot drift from the table list.
-    const RW = ["SELECT", "INSERT", "UPDATE", "DELETE"];
+    //
+    // `DELETE` is absent on purpose. No runtime role holds it anywhere, which the
+    // loop below asserts as a refusal rather than as an omission, and
+    // `20261128120000_revoke_runtime_delete` is the migration that took it away.
+    const RW = ["SELECT", "INSERT", "UPDATE"];
     const R = ["SELECT"];
     const NONE = [];
 
     const EXPECTED = Object.fromEntries([
       // Row 1: identity. No grant at all — the login lookup is OPEN-01.
       ["users", { app_api: NONE, app_system: NONE }],
+      // Sessions are reached through column grants to `app_auth` only, which is
+      // neither of the roles this matrix reads. Listed so the coverage assertion
+      // at the end of this block has no exception to remember.
+      ["sessions", { app_api: NONE, app_system: NONE }],
       ...TENANT_TABLES.filter((table) => table !== "users").map((table) => [
         table,
         { app_api: RW, app_system: NONE },
@@ -1954,6 +1962,48 @@ export async function runPrivilegeVerification({
         }
       }
     }
+
+    // The matrix above reads the catalogue. These two read what a client actually
+    // gets: a `DELETE` that a runtime role sends must come back as 42501, not as
+    // "0 rows affected", because a policy that hides rows and a privilege that
+    // does not exist are different guarantees.
+    await denied(
+      api,
+      "app_api cannot DELETE from a tenant table",
+      "delete from app.farms where false",
+    );
+    for (const table of [...GLOBAL_TABLES, ...SYSTEM_ONLY_TABLES]) {
+      await denied(
+        system,
+        `app_system cannot DELETE from ${table}`,
+        `delete from app.${quote(table)} where false`,
+      );
+    }
+
+    // Every table in the schema must be classified above. The matrix is built
+    // from the four class constants, so a table nobody added to one of them is
+    // exempt from every assertion in this file — which is exactly how the
+    // privilege this migration removed came to exist unnoticed. The ledger is the
+    // one relation that is not application data.
+    const { rows: unclassified } = await owner.query(
+      `select c.relname as table
+         from pg_class c
+         join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'app'
+          and c.relkind = 'r'
+          and c.relname <> '_prisma_migrations'
+          -- A crashed run can leave its probe table behind, and teardown only
+          -- drops the one this run created.
+          and c.relname not like 'privilege_probe\_%'
+        order by c.relname`,
+    );
+    const classified = new Set(Object.keys(EXPECTED));
+    const orphans = unclassified.map((row) => row.table).filter((table) => !classified.has(table));
+    check(
+      "every app table is classified in the privilege matrix",
+      orphans.length === 0,
+      `unclassified: ${JSON.stringify(orphans)}`,
+    );
 
     // The columns the maintenance sweep must never reach. app_system has no grant
     // on these tables at all, which is the stricter version of the documented

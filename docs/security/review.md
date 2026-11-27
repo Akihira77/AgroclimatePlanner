@@ -130,27 +130,30 @@ behaviour is recorded in §13.6 and in the queue runbook.
 
 ## 5. Database grants
 
-**Implemented and measured.** `packages/database/scripts/verify-privileges.mjs`,
+**Implemented and measured.** `packages/database/scripts/lib/privilege-verification.mjs`,
 run by `pnpm db:verify`.
 
 - Four roles with disjoint purposes: `migration_owner` (DDL), `app_api`
   (tenant-scoped DML through RLS), `app_auth` (credential tables only),
   `app_system` (worker).
-- No runtime role holds `TRUNCATE`, `CREATE`, or the right to bypass RLS except
-  `app_system`. `app_auth` cannot `DELETE` from `app.sessions` or `app.users`,
-  which is why revocation sets a column instead of removing a row.
+- No runtime role holds `DELETE` on anything, nor `TRUNCATE`, nor `CREATE`. The
+  right to bypass RLS is held by `app_system` alone. `app_auth` cannot `DELETE`
+  from `app.sessions` or `app.users`, which is why revocation sets a column
+  instead of removing a row.
 - The verification is not a reading of the grant files: it connects as each role
   and asserts what that role can and cannot do, including that `app_api` is denied
   `SELECT count(*)` on the migration ledger and that the denial arrives as `42501`
   rather than as an empty result.
 
-**Verified by.** `pnpm db:verify` on 2026-11-28: twelve migrations match their
-files, all privilege checks pass.
+**Verified by.** `pnpm db:verify` on 2026-11-28, twice: twelve migrations match
+their files before the revocation below, thirteen after, all privilege checks
+passing both times.
 
-**Finding: `DELETE` is granted where nothing needs it, and on eight tables
-nothing scopes it.** Seventeen tables carry `GRANT … DELETE` while no runtime
-code issues a `DELETE` anywhere: the API soft-deletes, the worker settles rows,
-and every test that removes a row does so as `migration_owner`.
+**Finding, now closed: `DELETE` was granted where nothing needs it, and on eight
+tables nothing scoped it.** This is recorded rather than deleted because the shape
+of the mistake is the useful part. Seventeen tables carried `GRANT … DELETE` while
+no runtime code issued a `DELETE` anywhere: the API soft-deletes, the worker
+settles rows, and every test that removes a row does so as `migration_owner`.
 
 The seventeen are not one case.
 
@@ -173,16 +176,31 @@ The seventeen are not one case.
   tenant. That is the more damaging half of this finding, and it is not scoped by
   anything.
 
-The remediation is a new migration revoking `DELETE` from both runtime roles and
-narrowing `privilege-verification.mjs`'s expected matrix, which currently lists
-`DELETE` in the read/write set it asserts for these tables. Nothing depends on the
-grant: `purge_expired_sessions()` is `SECURITY DEFINER` and needs only
-`EXECUTE`, tests delete as `migration_owner`, and there is no `ON DELETE CASCADE`
-in the schema whose semantics a revocation would change. It is not done in this
-pass because the revocation and the matrix must change together, and a
-half-applied matrix is worse than a recorded finding. It is the first item this
-review hands on, and it should land with a behavioural probe — `delete from
-app.weather_records` refused as `app_system` — not only a matrix edit.
+**Closed by** `20261128120000_revoke_runtime_delete`, which revokes `DELETE` from
+both roles on all seventeen tables, plus three changes that had to land with it:
+the expected matrix in `privilege-verification.mjs` no longer lists `DELETE`
+anywhere, so the absence is asserted per table per role rather than assumed;
+behavioural probes refuse a `DELETE` from `app_api` on a tenant table and from
+`app_system` on all eight of its tables, because a catalogue check and a client's
+experience are different guarantees; and the two RLS tests that observed `DELETE`
+as "0 rows affected" now assert `42501`, which is a stronger claim — the privilege
+does not exist, so no policy is consulted.
+
+A fourth assertion guards the reason this finding was possible at all: every table
+in schema `app` must appear in one of the matrix's class lists, so a table added
+without a decision fails `db:verify` instead of silently escaping every assertion
+below. It was checked by creating a stray table and watching the run fail.
+
+Nothing depended on the grant: `purge_expired_sessions()` is `SECURITY DEFINER`
+and needs only `EXECUTE`, tests delete as `migration_owner`, and there is no
+`ON DELETE CASCADE` in the schema whose semantics a revocation would change. It
+was held back from the review pass only because the revocation and the matrix had
+to change together; they did.
+
+**What this does not fix.** `app_system` still holds `BYPASSRLS`, so a leaked
+worker credential can still read and overwrite the weather plane. Revocation
+removed the irreversible half of the damage — history cannot be deleted — and left
+the reversible half, which is what a backup and an audit trail are for.
 
 **Caveat.** Exit 0 means the files, the ledger and the grants agree. It is not a
 drift check and not a statement that the deployed schema is the one these files

@@ -95,9 +95,11 @@ CREATE POLICY farms_owner_full_access ON app.farms FOR ALL TO migration_owner
   USING (true) WITH CHECK (true);
 ```
 
-`GRANT SELECT, INSERT, UPDATE, DELETE ON app.farms TO app_api` (and the same on `app.fields`).
-`app_system` and `app_auth` hold nothing. There is no table-level privilege to
-`app_system` by policy, not by oversight (`docs/data-model/ownership-and-rls.md` §2).
+`GRANT SELECT, INSERT, UPDATE ON app.farms TO app_api` (and the same on
+`app.fields`). No `DELETE`: `20261128120000_revoke_runtime_delete` removed it from
+every runtime grant once the review found it unused. `app_system` and `app_auth`
+hold nothing. There is no table-level privilege to `app_system` by policy, not by
+oversight (`docs/data-model/ownership-and-rls.md` §2).
 
 ### 2.3 The tenant mechanism is transaction-scoped
 
