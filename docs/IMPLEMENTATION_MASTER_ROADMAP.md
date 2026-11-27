@@ -401,7 +401,7 @@ Menyediakan fondasi monorepo, database, security boundary, tenant isolation, dan
 
 ## 6.7 Remaining Phase 2 work
 
-- [ ] Implement `crop_profile_versions_immutable` trigger sesuai normative specification.
+- [x] Implement `crop_profile_versions_immutable` trigger sesuai normative specification — `packages/database/prisma/migrations/20261127120000_crop_profile_immutability/migration.sql`. The test is `published_at`, not the status: a live profile may only move `published -> retired`, and retirement is terminal. Covered by `packages/database/test/integration/crop-profile-immutability.test.mjs`.
 - [ ] Audit seluruh SQL migration terhadap physical model.
 - [ ] Audit seluruh Prisma model terhadap applied schema.
 - [ ] Pastikan migration verification tetap bekerja pada clean volume.
