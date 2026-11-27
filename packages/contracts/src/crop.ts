@@ -260,3 +260,98 @@ export const cropListSchema = z.strictObject({
   crops: z.array(cropSchema),
 });
 export type CropList = z.infer<typeof cropListSchema>;
+
+/**
+ * Projection query. `cycleStartDate` is the day the cultivar's own `cycleStart`
+ * names — sowing for maize and soybean, transplant for rice and chili — and the
+ * caller is told which in the response rather than left to infer it.
+ *
+ * No `durationDays` parameter: the cultivar stores a range, so the engine projects
+ * the typical duration and returns the harvest as that range. Letting a caller pick
+ * a number would let it pick one outside the evidence.
+ */
+export const cropCycleQuerySchema = z.strictObject({
+  cycleStartDate: isoDateSchema,
+});
+export type CropCycleQuery = z.infer<typeof cropCycleQuerySchema>;
+
+/**
+ * One stage placed on the calendar. `clipped` is not decoration: the typical cycle
+ * can end before a rulebook stage does, and a caller that hides the flag presents a
+ * truncated phase as a complete one.
+ */
+export const projectedStageSchema = z
+  .strictObject({
+    stageId: z.uuid(),
+    name: z.string().min(1),
+    startDayOffset: z.number().int().nonnegative(),
+    endDayOffset: z.number().int().nonnegative(),
+    startDate: isoDateSchema,
+    endDate: isoDateSchema,
+    isCritical: z.boolean(),
+    clipped: z.boolean(),
+  })
+  .superRefine((stage, ctx) => {
+    if (stage.startDayOffset > stage.endDayOffset) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["startDayOffset"],
+        message: "startDayOffset cannot exceed endDayOffset",
+      });
+    }
+    if (stage.startDate > stage.endDate) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["startDate"],
+        message: "a stage cannot end before it starts",
+      });
+    }
+  });
+export type ProjectedStage = z.infer<typeof projectedStageSchema>;
+
+/**
+ * A dated cycle. Every date derives from two stored facts — the offsets and the
+ * cultivar's duration range — so this is arithmetic, not a recommendation. It says
+ * *when* a phase falls; it never says the crop suits the place.
+ */
+export const cropCycleSchema = z
+  .strictObject({
+    profileVersionId: z.uuid(),
+    cultivarId: z.uuid(),
+    cultivarName: z.string().min(1),
+    cycleStart: cycleStartSchema,
+    cycleStartDate: isoDateSchema,
+    /** The duration the stages were clipped to, and the range the harvest spans. */
+    duration: z.strictObject({
+      min: z.number().int().positive(),
+      typical: z.number().int().positive(),
+      max: z.number().int().positive(),
+    }),
+    harvest: z.strictObject({
+      earliest: isoDateSchema,
+      typical: isoDateSchema,
+      latest: isoDateSchema,
+    }),
+    stages: z.array(projectedStageSchema),
+  })
+  .superRefine((cycle, ctx) => {
+    const { min, typical, max } = cycle.duration;
+    if (!(min <= typical && typical <= max)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["duration"],
+        message: "duration is not ordered min <= typical <= max",
+      });
+    }
+    // A single harvest date would be the false precision the product forbids, and
+    // an ordered range is the one property the three dates must satisfy.
+    const { earliest, typical: typicalHarvest, latest } = cycle.harvest;
+    if (!(earliest <= typicalHarvest && typicalHarvest <= latest)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["harvest"],
+        message: "harvest window is not ordered earliest <= typical <= latest",
+      });
+    }
+  });
+export type CropCycle = z.infer<typeof cropCycleSchema>;

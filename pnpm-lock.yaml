@@ -241,6 +241,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@agroclimate/agronomy':
+        specifier: workspace:*
+        version: link:../../packages/agronomy
       '@agroclimate/climate-core':
         specifier: workspace:*
         version: link:../../packages/climate-core

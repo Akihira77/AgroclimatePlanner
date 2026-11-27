@@ -30,6 +30,7 @@ export { readSessionCsrfToken, resolveSessionCsrfToken } from "./auth-csrf.js";
 export { createFarm, findFarm, listFarms, softDeleteFarm, updateFarm } from "./farms.js";
 export {
   findCropBySlug,
+  findCultivar,
   findProfileVersion,
   listCrops,
   listCultivars,

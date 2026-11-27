@@ -290,12 +290,21 @@ current date's month or day, computed by the assembled read, not by the client.
 | GET    | `/v1/crops`                         | yes  | `200`   | `{ crops: [ … ] }` |
 | GET    | `/v1/crops/:slug`                   | yes  | `200`   | one crop with its cultivars and profile versions |
 | GET    | `/v1/crop-profiles/:profileVersionId` | yes | `200`  | the rulebook: stages, thresholds, citations |
+| GET    | `/v1/crop-profiles/:profileVersionId/cycle` | yes | `200` | stages projected onto calendar dates from one cycle-start date; harvest as a duration range |
 
 Read-only, and there is no write route in this build: a published profile version
 is frozen once it exists, so there is nothing for the API to mutate. The catalog
 is identical for every tenant, and it is still authenticated: "public" is not
 something this build offers anywhere else, and one unauthenticated surface would
 be a second trust rule to keep in step.
+
+`cycle` is arithmetic, not a recommendation: it reads the stored stage offsets
+and the cultivar's duration range, and no weather. `cycleStartDate` is a calendar
+day (`YYYY-MM-DD`, `2026-02-30` is rejected rather than normalised) and must be
+the event the cultivar's `cycleStart` names — `sowing` or `transplant`, echoed in
+the response. The typical duration places the stages; a stage that runs past it
+is clipped and flagged, and the harvest is returned as `earliest`/`typical`/`latest`.
+An unknown query parameter is refused, so no caller can substitute its own duration.
 
 `404 CROP_NOT_FOUND` for an unknown slug, `404 PROFILE_NOT_FOUND` for an unknown
 version id.

@@ -1,6 +1,7 @@
 import type {
   ClimateDailyOutlook,
   ClimateOutlook,
+  CropCycle,
   CropDetail,
   CropList,
   CropProfileVersion,
@@ -287,6 +288,18 @@ export const api = {
   async profileVersion(id: string): Promise<CropProfileVersion> {
     const body = await request<{ data: CropProfileVersion }>(
       `/crop-profiles/${encodeURIComponent(id)}`,
+    );
+    return body.data;
+  },
+
+  /**
+   * The version's stages placed on the calendar. The date travels as a plain
+   * `YYYY-MM-DD` because a cycle boundary is a calendar day; sending an instant
+   * would make the answer depend on the browser's time zone.
+   */
+  async cropCycle(profileVersionId: string, cycleStartDate: string): Promise<CropCycle> {
+    const body = await request<{ data: CropCycle }>(
+      `/crop-profiles/${encodeURIComponent(profileVersionId)}/cycle?cycleStartDate=${encodeURIComponent(cycleStartDate)}`,
     );
     return body.data;
   },

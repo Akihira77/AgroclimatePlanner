@@ -14,6 +14,7 @@
     "dev:serve": "node --watch dist/main.js"
   },
   "dependencies": {
+    "@agroclimate/agronomy": "workspace:*",
     "@agroclimate/climate-core": "workspace:*",
     "@agroclimate/contracts": "workspace:*",
     "@agroclimate/database": "workspace:*",

@@ -548,9 +548,10 @@ catalogue.
 - [x] Implement crop catalog repository. `packages/database/src/crops.ts`, SELECT-only.
 - [x] Implement crop catalog service. `apps/api/src/crop/crop.service.ts`.
 - [x] Implement crop catalog API. `GET /v1/crops`, `/v1/crops/:slug`, `/v1/crop-profiles/:profileVersionId`.
-- [ ] Seed initial crop catalog.
+- [x] Seed initial crop catalog. `packages/database/scripts/seed-catalog.mjs`, four crops / four published rulebooks; re-run is a no-op.
 - [x] Implement cultivar listing. Bagian dari `GET /v1/crops/:slug`.
 - [x] Implement crop profile version retrieval. `GET /v1/crop-profiles/:profileVersionId`.
+- [x] Project growth stages onto calendar dates. `GET /v1/crop-profiles/:profileVersionId/cycle`; `packages/agronomy/src/cycle.ts`. Dates only — no weather, no verdict.
 - [x] Implement growth-stage retrieval. Bagian payload profile version.
 - [x] Implement constraint retrieval. Bagian payload profile version.
 - [x] Implement agronomic source reference retrieval. Bagian payload profile version.

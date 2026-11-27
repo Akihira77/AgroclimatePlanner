@@ -131,7 +131,7 @@ function CropDetail({ slug }: { readonly slug: string }) {
 
               {openVersionId !== null &&
               cultivar.profileVersions.some((version) => version.id === openVersionId) ? (
-                <VersionDetail id={openVersionId} />
+                <VersionDetail id={openVersionId} cycleStart={cultivar.cycleStart} />
               ) : null}
             </section>
           ))}
@@ -141,7 +141,13 @@ function CropDetail({ slug }: { readonly slug: string }) {
   );
 }
 
-function VersionDetail({ id }: { readonly id: string }) {
+function VersionDetail({
+  id,
+  cycleStart,
+}: {
+  readonly id: string;
+  readonly cycleStart: "sowing" | "transplant";
+}) {
   const state = useAsync(`profile:${id}`, () => api.profileVersion(id));
 
   if (state.loading) return <div className="panel-body loading">Memuat rulebook…</div>;
@@ -187,6 +193,8 @@ function VersionDetail({ id }: { readonly id: string }) {
           </table>
         )}
       </section>
+
+      <CycleProjection id={id} cycleStart={cycleStart} />
 
       <section>
         <h4>Ambang batas</h4>
@@ -261,6 +269,108 @@ function VersionDetail({ id }: { readonly id: string }) {
         mengevaluasinya, dan tidak ada angka yang boleh dibaca sebagai keputusan tanam.
       </p>
     </div>
+  );
+}
+
+/**
+ * The rulebook's stages as calendar dates.
+ *
+ * The date input starts at today in Asia/Jakarta — the same zone the API uses for
+ * its climate labels — because a cycle boundary is a calendar day there, not in
+ * whatever zone the laptop is set to. Re-requesting on each change is the point:
+ * the projection is the server's arithmetic, and the browser only displays it.
+ */
+function CycleProjection({
+  id,
+  cycleStart,
+}: {
+  readonly id: string;
+  readonly cycleStart: "sowing" | "transplant";
+}) {
+  const [date, setDate] = useState(() =>
+    new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date()),
+  );
+
+  const startLabel = cycleStart === "sowing" ? "tanam benih" : "pindah tanam";
+
+  return (
+    <section>
+      <h4>Proyeksi siklus</h4>
+      <p className="muted">
+        Tanggal {startLabel}. Tahap diletakkan pada durasi khas kultivar; panen tampil sebagai
+        rentang karena durasinya rentang.
+      </p>
+      <label htmlFor={`cycle-${id}`}>Tanggal {startLabel}</label>
+      <input
+        id={`cycle-${id}`}
+        type="date"
+        value={date}
+        onChange={(event) => setDate(event.target.value)}
+      />
+      {date === "" ? (
+        <p className="muted">Pilih tanggal untuk melihat proyeksi.</p>
+      ) : (
+        <CycleTable id={id} date={date} />
+      )}
+      <p className="faint">
+        Proyeksi tanggal, bukan rekomendasi: cuaca dan iklim pada fase ini belum dinilai, karena
+        grid provider belum tervalidasi (<Mono>OPEN-18</Mono>).
+      </p>
+    </section>
+  );
+}
+
+function CycleTable({ id, date }: { readonly id: string; readonly date: string }) {
+  const state = useAsync(`cycle:${id}:${date}`, () => api.cropCycle(id, date));
+
+  if (state.loading) return <div className="loading">Menghitung siklus…</div>;
+  if (state.error !== null) return <ErrorNotice error={state.error} />;
+  if (state.data === null) return null;
+
+  const cycle = state.data;
+
+  return (
+    <>
+      <p>
+        Panen: <strong>{cycle.harvest.typical}</strong>
+        <span className="muted">
+          {" "}
+          (rentang {cycle.harvest.earliest} – {cycle.harvest.latest}, {cycle.duration.min}–
+          {cycle.duration.max} hari)
+        </span>
+      </p>
+      {cycle.stages.length === 0 ? (
+        <p className="muted">Rulebook ini tidak menyatakan tahap pertumbuhan.</p>
+      ) : (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Tahap</th>
+              <th className="numeric">Hari</th>
+              <th>Mulai</th>
+              <th>Selesai</th>
+              <th>Kritis</th>
+            </tr>
+          </thead>
+          <tbody>
+            {cycle.stages.map((stage) => (
+              <tr key={stage.stageId}>
+                <td>{stage.name}</td>
+                <td className="numeric">
+                  {stage.startDayOffset}–{stage.endDayOffset}
+                </td>
+                <td className="numeric">{stage.startDate}</td>
+                <td className="numeric">
+                  {stage.endDate}
+                  {stage.clipped ? <Tag>dipotong durasi</Tag> : null}
+                </td>
+                <td>{stage.isCritical ? <Tag tone="warn">kritis</Tag> : "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
   );
 }
 

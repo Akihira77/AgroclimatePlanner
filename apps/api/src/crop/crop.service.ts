@@ -1,10 +1,22 @@
 import { Inject, Injectable } from "@nestjs/common";
-import type { CropDetail, CropList, CropProfileVersion, CropSlug } from "@agroclimate/contracts";
-import { cropDetailSchema, cropProfileVersionSchema } from "@agroclimate/contracts";
+import type {
+  CropCycle,
+  CropDetail,
+  CropList,
+  CropProfileVersion,
+  CropSlug,
+} from "@agroclimate/contracts";
+import {
+  cropCycleSchema,
+  cropDetailSchema,
+  cropProfileVersionSchema,
+} from "@agroclimate/contracts";
+import { projectCycle } from "@agroclimate/agronomy";
 import type { PrismaClient, TenantScope } from "@agroclimate/database";
 import {
   createTenantScope,
   findCropBySlug,
+  findCultivar,
   findProfileVersion,
   listCrops,
   listCultivars,
@@ -80,6 +92,70 @@ export class CropService {
       if (!parsed.success) {
         throw new Error(
           `crop profile ${profileVersionId} does not satisfy its response contract: ${parsed.error.issues[0]?.path.join(".") ?? "root"}`,
+        );
+      }
+      return parsed.data;
+    });
+  }
+
+  /**
+   * The rulebook's stages placed on the calendar. `null` when the version is
+   * unknown; the controller answers `PROFILE_NOT_FOUND`.
+   *
+   * Pure arithmetic over two stored facts — the offsets and the cultivar's duration
+   * range. It intentionally consults no climate value and produces no verdict: a
+   * projection says when a phase falls, and a suitability claim needs the field
+   * vocabulary (`OPEN-21`) and a validated grid (`OPEN-18`) that do not exist yet.
+   */
+  async cycle(
+    userId: string,
+    profileVersionId: string,
+    cycleStartDate: string,
+  ): Promise<CropCycle | null> {
+    return this.scope.withTenant(userId, async (tx) => {
+      const version = await findProfileVersion(tx, profileVersionId);
+      if (version === null) return null;
+
+      const cultivar = await findCultivar(tx, version.cultivarId);
+      // A profile whose cultivar is gone is a broken catalog, not an absence: the
+      // FK makes it impossible, so reaching here means the row was read wrong.
+      if (cultivar === null) {
+        throw new Error(
+          `crop profile ${profileVersionId} names cultivar ${version.cultivarId}, which does not exist`,
+        );
+      }
+
+      const projected = projectCycle({
+        stages: version.growthStages,
+        cycleStartDate,
+        durationDays: {
+          min: cultivar.durationDaysMin,
+          typical: cultivar.durationDaysTypical,
+          max: cultivar.durationDaysMax,
+        },
+      });
+
+      const parsed = cropCycleSchema.safeParse({
+        profileVersionId: version.id,
+        cultivarId: cultivar.id,
+        cultivarName: cultivar.name,
+        cycleStart: cultivar.cycleStart,
+        cycleStartDate: projected.cycleStartDate,
+        duration: {
+          min: cultivar.durationDaysMin,
+          typical: cultivar.durationDaysTypical,
+          max: cultivar.durationDaysMax,
+        },
+        harvest: {
+          earliest: projected.harvestEarliest,
+          typical: projected.harvestTypical,
+          latest: projected.harvestLatest,
+        },
+        stages: projected.stages,
+      });
+      if (!parsed.success) {
+        throw new Error(
+          `crop cycle for profile ${profileVersionId} does not satisfy its response contract: ${parsed.error.issues[0]?.path.join(".") ?? "root"}`,
         );
       }
       return parsed.data;

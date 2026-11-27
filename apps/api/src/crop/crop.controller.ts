@@ -1,13 +1,15 @@
 import type {
+  CropCycle,
+  CropCycleQuery,
   CropDetail,
   CropList,
   CropProfileVersion,
   CropSlug,
   Envelope,
 } from "@agroclimate/contracts";
-import { cropSlugSchema } from "@agroclimate/contracts";
+import { cropCycleQuerySchema, cropSlugSchema } from "@agroclimate/contracts";
 import { z } from "zod";
-import { Controller, Get, NotFoundException, Param, Req, UseGuards } from "@nestjs/common";
+import { Controller, Get, NotFoundException, Param, Query, Req, UseGuards } from "@nestjs/common";
 
 import type { AuthenticatedRequest } from "../auth/auth.guard.js";
 import { AuthGuard, authenticatedUserId } from "../auth/auth.guard.js";
@@ -45,6 +47,29 @@ export class CropController {
     const crop = await this.crops.find(authenticatedUserId(request), slug);
     if (crop === null) throw notFound("CROP_NOT_FOUND");
     return { data: crop };
+  }
+
+  /**
+   * The version's stages as calendar dates, from one cycle-start date.
+   *
+   * A projection, not a recommendation: it multiplies nothing, ranks nothing, and
+   * reads no weather. The response carries the harvest as the cultivar's duration
+   * range, because a single date would claim a precision the evidence does not have.
+   */
+  @Get("crop-profiles/:profileVersionId/cycle")
+  async cycle(
+    @Req() request: AuthenticatedRequest,
+    @Param("profileVersionId", new ZodValidationPipe(profileVersionIdSchema))
+    profileVersionId: string,
+    @Query(new ZodValidationPipe(cropCycleQuerySchema)) query: CropCycleQuery,
+  ): Promise<Envelope<CropCycle>> {
+    const cycle = await this.crops.cycle(
+      authenticatedUserId(request),
+      profileVersionId,
+      query.cycleStartDate,
+    );
+    if (cycle === null) throw notFound("PROFILE_NOT_FOUND");
+    return { data: cycle };
   }
 
   /** The complete rulebook: stages, thresholds and citations for one version id. */

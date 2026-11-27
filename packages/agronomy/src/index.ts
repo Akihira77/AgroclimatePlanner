@@ -13,6 +13,8 @@ export type {
 } from "./constraint.js";
 export { addDays, criticalStageWindows, daysBetween, stageAtOffset } from "./stages.js";
 export type { CriticalStageWindow } from "./stages.js";
+export { projectCycle } from "./cycle.js";
+export type { ProjectCycleInput, ProjectedCycle, ProjectedStage } from "./cycle.js";
 export { validatePartition } from "./partition.js";
 export type { PartitionInput, PartitionViolation, PartitionViolationCode } from "./partition.js";
 export { classifyVerdict } from "./verdict.js";

@@ -123,6 +123,35 @@ export async function listCultivars(
   `;
 }
 
+/**
+ * One cultivar by id, or `null`.
+ *
+ * The cycle projection needs the duration range and the cycle-start event, and a
+ * profile version names its cultivar only by id. Reading it here keeps the join in
+ * SQL rather than assembling it in a service from a list it happened to fetch.
+ */
+export async function findCultivar(
+  tx: TenantTransaction,
+  cultivarId: string,
+): Promise<CultivarRow | null> {
+  const rows = await tx.$queryRaw<CultivarRow[]>`
+    SELECT id::text                   AS id,
+           crop_id::text              AS "cropId",
+           name,
+           duration_days_min          AS "durationDaysMin",
+           duration_days_typical      AS "durationDaysTypical",
+           duration_days_max          AS "durationDaysMax",
+           cycle_start                AS "cycleStart",
+           nursery_days               AS "nurseryDays",
+           photoperiod_sensitivity    AS "photoperiodSensitivity",
+           altitude_min_m             AS "altitudeMinM",
+           altitude_max_m             AS "altitudeMaxM"
+      FROM app.cultivars
+     WHERE id = ${cultivarId}::uuid
+  `;
+  return rows[0] ?? null;
+}
+
 /** Every version of every cultivar of one crop, newest first. */
 export async function listProfileVersionsForCrop(
   tx: TenantTransaction,

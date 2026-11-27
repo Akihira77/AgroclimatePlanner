@@ -30,6 +30,7 @@ let harness;
 let call;
 let alice;
 let bob;
+let stageId;
 
 const seedUser = (label) => seedFixture(harness.owner, EMAIL_PREFIX, label);
 
@@ -80,6 +81,7 @@ async function seedCatalog() {
     `SELECT id::text AS id FROM app.growth_stages WHERE profile_version_id = $1::uuid`,
     publishedId,
   );
+  stageId = stage[0].id;
 
   await harness.owner.$queryRawUnsafe(
     `INSERT INTO app.constraints
@@ -281,5 +283,80 @@ describe("crop catalog", () => {
     // 405: no handler is registered for it.
     const { response } = await call(alice, "POST", `/v1/crops/${SLUG}`, { body: {} });
     assert.equal(response.status, 404);
+  });
+
+  it("projects a version's stages onto the calendar, with the harvest as a window", async () => {
+    const detail = await call(alice, "GET", `/v1/crops/${SLUG}`);
+    const version = detail.body.data.cultivars[0].profileVersions.find(
+      (entry) => entry.status === "published",
+    );
+
+    const { response, body } = await call(
+      alice,
+      "GET",
+      `/v1/crop-profiles/${version.id}/cycle?cycleStartDate=2026-12-01`,
+    );
+    assert.equal(response.status, 200, JSON.stringify(body));
+
+    const cycle = body.data;
+    assert.equal(cycle.cultivarName, "Uji-1");
+    assert.equal(cycle.cycleStart, "transplant");
+    assert.equal(cycle.cycleStartDate, "2026-12-01");
+    assert.deepEqual(cycle.duration, { min: 100, typical: 110, max: 120 });
+
+    // One date would be the false precision the contract refuses.
+    assert.deepEqual(cycle.harvest, {
+      earliest: "2027-03-10",
+      typical: "2027-03-20",
+      latest: "2027-03-30",
+    });
+
+    // Day 1 is the cycle-start date, so the last day of a 110-day cycle is offset
+    // 109, and the stage keeps the offsets the rulebook states.
+    assert.equal(cycle.stages.length, 1);
+    assert.deepEqual(cycle.stages[0], {
+      stageId,
+      name: "vegetative",
+      startDayOffset: 0,
+      endDayOffset: 30,
+      startDate: "2026-12-01",
+      endDate: "2026-12-31",
+      isCritical: true,
+      clipped: false,
+    });
+  });
+
+  it("refuses a bad date, an unknown parameter and a missing version", async () => {
+    const detail = await call(alice, "GET", `/v1/crops/${SLUG}`);
+    const version = detail.body.data.cultivars[0].profileVersions.find(
+      (entry) => entry.status === "published",
+    );
+
+    const anonymous = await call(
+      alice,
+      "GET",
+      `/v1/crop-profiles/${version.id}/cycle?cycleStartDate=2026-12-01`,
+      { anonymous: true },
+    );
+    assert.equal(anonymous.response.status, 401);
+
+    for (const path of [
+      `/v1/crop-profiles/${version.id}/cycle`,
+      `/v1/crop-profiles/${version.id}/cycle?cycleStartDate=2026-02-30`,
+      `/v1/crop-profiles/${version.id}/cycle?cycleStartDate=01-12-2026`,
+      `/v1/crop-profiles/${version.id}/cycle?cycleStartDate=2026-12-01&durationDays=200`,
+    ]) {
+      const { response, body } = await call(alice, "GET", path);
+      assert.equal(response.status, 400, `${path}: ${JSON.stringify(body)}`);
+      assert.equal(body.error.code, "VALIDATION_FAILED");
+    }
+
+    const missing = await call(
+      alice,
+      "GET",
+      "/v1/crop-profiles/00000000-0000-4000-8000-000000000000/cycle?cycleStartDate=2026-12-01",
+    );
+    assert.equal(missing.response.status, 404);
+    assert.equal(missing.body.error.code, "PROFILE_NOT_FOUND");
   });
 });
