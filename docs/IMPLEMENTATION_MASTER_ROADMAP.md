@@ -1059,7 +1059,7 @@ Important limitations:
 - [x] Implement hard constraint evaluation.
 - [x] Implement soft constraint evaluation.
 - [x] Implement insufficient-data propagation, at the constraint and per-dimension levels.
-- [ ] Implement suitability category classification. **Vocabulary conflict resolved in favour of the database**: `planting_windows.suitability` is `suitable | conditional | unsuitable | insufficient_data`, so the `excellent/good/poor` list below is superseded, not pending.
+- [x] Implement suitability category classification. `packages/agronomy/src/verdict.ts`: `classifyVerdict` returns `suitable | conditional | unsuitable | insufficient_data` — the vocabulary the DDL accepts, so the `excellent/good/poor` list below is superseded, not pending. Precedence is the policy: a failed hard gate is `unsuitable`; an unmeasured hard gate is `insufficient_data` (a gate nobody checked is not an open gate); climatology over the critical stage, any soft failure, or any judged-but-unobserved dimension caps at `conditional`; `not_applicable` never caps because it means the rulebook does not judge the dimension. Each cap returns a `VerdictReason` an explanation can quote.
 - [ ] Implement reason generation.
 - [ ] Implement source reference propagation.
 - [ ] Implement deterministic ordering.

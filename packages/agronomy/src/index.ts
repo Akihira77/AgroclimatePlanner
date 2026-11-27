@@ -15,3 +15,5 @@ export { addDays, criticalStageWindows, daysBetween, stageAtOffset } from "./sta
 export type { CriticalStageWindow } from "./stages.js";
 export { validatePartition } from "./partition.js";
 export type { PartitionInput, PartitionViolation, PartitionViolationCode } from "./partition.js";
+export { classifyVerdict } from "./verdict.js";
+export type { Verdict, VerdictInput, VerdictReason, VerdictReasonCode } from "./verdict.js";
