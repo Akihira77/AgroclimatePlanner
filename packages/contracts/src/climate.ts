@@ -934,3 +934,241 @@ export const climateOutlookSchema = z
     }
   });
 export type ClimateOutlook = z.infer<typeof climateOutlookSchema>;
+
+/* ------------------------------------------------------------------ *
+ * Daily and subseasonal read model — the 0–45 day leg
+ * ------------------------------------------------------------------ */
+
+/**
+ * The two bands the day horizon is split into. They are the horizon map's own
+ * bands (`temporal-and-weather-semantics.md` §3), not a UI grouping:
+ *
+ * | Lead day | Band | Permitted class | Reach |
+ * |---|---|---|---|
+ * | 0–14 | `daily` | `weather_forecast` | 16 d |
+ * | 15–45 | `subseasonal` | `subseasonal_forecast` | 46 d |
+ *
+ * Lead day 0 is today in Asia/Jakarta. A value outside its band's class is a
+ * modelling bug, so the reader refuses the row instead of serving it.
+ */
+export const DAILY_BAND = { fromLeadDay: 0, toLeadDay: 14 } as const;
+export const SUBSESONAL_BAND = { fromLeadDay: 15, toLeadDay: 45 } as const;
+export const DAILY_HORIZON_LAST_LEAD_DAY = 45;
+
+export const DAILY_BAND_DATA_CLASS = "weather_forecast" as const;
+export const SUBSESONAL_BAND_DATA_CLASS = "subseasonal_forecast" as const;
+
+export const dailyHorizonBandSchema = z.enum(["daily", "subseasonal"]);
+export type DailyHorizonBand = z.infer<typeof dailyHorizonBandSchema>;
+
+/** `null` for a lead day the horizon does not cover; the reader then drops the row. */
+export function dailyBandOf(leadDay: number): DailyHorizonBand | null {
+  if (!Number.isInteger(leadDay)) return null;
+  if (leadDay >= DAILY_BAND.fromLeadDay && leadDay <= DAILY_BAND.toLeadDay) return "daily";
+  if (leadDay >= SUBSESONAL_BAND.fromLeadDay && leadDay <= SUBSESONAL_BAND.toLeadDay) {
+    return "subseasonal";
+  }
+  return null;
+}
+
+/** The data class a lead day's band permits. Empty outside the horizon. */
+export function permittedDailyDataClasses(leadDay: number): readonly WeatherDataClass[] {
+  const band = dailyBandOf(leadDay);
+  if (band === "daily") return [DAILY_BAND_DATA_CLASS];
+  if (band === "subseasonal") return [SUBSESONAL_BAND_DATA_CLASS];
+  return [];
+}
+
+/**
+ * The calendar date `days` after `date`, both `YYYY-MM-DD`.
+ *
+ * Pure `Date.UTC` arithmetic on the parts: no local timezone, no DST, no
+ * calendar table. Leap days and month ends fall out of the epoch conversion.
+ */
+export function addCalendarDays(date: string, days: number): string {
+  if (!isoDateSchema.safeParse(date).success) {
+    throw new RangeError("date must be a valid calendar date");
+  }
+  if (!Number.isInteger(days)) throw new RangeError("days must be an integer");
+  const [year, month, day] = date.split("-").map(Number) as [number, number, number];
+  const shifted = new Date(Date.UTC(year, month - 1, day) + days * 86_400_000);
+  return shifted.toISOString().slice(0, 10);
+}
+
+/**
+ * Whole calendar days from `from` to `to`, signed.
+ *
+ * The difference is computed on the dates' UTC midnights, so it is the number of
+ * printed day labels crossed and never 23 or 25 hours of a clock.
+ */
+export function calendarDaysBetween(from: string, to: string): number {
+  if (!isoDateSchema.safeParse(from).success || !isoDateSchema.safeParse(to).success) {
+    throw new RangeError("from and to must be valid calendar dates");
+  }
+  const midnight = (date: string): number => {
+    const [year, month, day] = date.split("-").map(Number) as [number, number, number];
+    return Date.UTC(year, month - 1, day);
+  };
+  return (midnight(to) - midnight(from)) / 86_400_000;
+}
+
+/**
+ * One served day.
+ *
+ * Identity is per day, never flattened to the segment: a 45-day horizon may mix
+ * forecast runs, and a segment-level `model` would attribute one run's value to
+ * another's. A day with no value is `pending` and carries **nothing** — no class,
+ * no model, no run, no availability. `pending` is the weakest true claim: a row
+ * with a null value and a missing row are indistinguishable here, and the read
+ * path cannot prove a cause it never stored.
+ *
+ * `staleAfterHours` is the TTL the band allows at this lead day (`6`, `12`, or
+ * `48`), stated so the consumer can age a time on screen without duplicating the
+ * rule. `availability` is computed against it at read time and never stored.
+ */
+export const dailyForecastDaySchema = z
+  .strictObject({
+    /** The Jakarta calendar day the value describes, `YYYY-MM-DD`. */
+    date: isoDateSchema,
+    leadDay: z.number().int().min(0).max(DAILY_HORIZON_LAST_LEAD_DAY),
+    dataClass: weatherDataClassSchema.nullable(),
+    model: z.string().min(1).max(128).nullable(),
+    valueMm: z.number().nonnegative().nullable(),
+    missingReason: missingReasonSchema.nullable(),
+    initializedAt: isoInstantSchema.nullable(),
+    availability: outlookAvailabilitySchema.nullable(),
+    staleAfterHours: z.number().int().min(1).max(168),
+    temporalResolution: z.literal("daily"),
+    aggregationLevel: z.literal("daily_sum"),
+  })
+  .superRefine((day, ctx) => {
+    // A value and its provenance travel together. Any one of these without the
+    // others is either an unlabelled number or a label on an absence.
+    const provenance = [day.valueMm, day.dataClass, day.model, day.initializedAt, day.availability];
+    const present = provenance.filter((part) => part !== null).length;
+    if (present !== 0 && present !== provenance.length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["valueMm"],
+        message:
+          "valueMm, dataClass, model, initializedAt and availability must be present or absent together",
+      });
+    }
+    if (day.valueMm === null && day.missingReason === null) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["missingReason"],
+        message: "a day with no value must state why",
+      });
+    }
+    if (
+      day.missingReason !== null &&
+      noValueReasons.has(day.missingReason) &&
+      day.valueMm !== null
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["missingReason"],
+        message: `${day.missingReason} cannot accompany a value`,
+      });
+    }
+  });
+export type DailyForecastDay = z.infer<typeof dailyForecastDaySchema>;
+
+export const dailyForecastSegmentSchema = z
+  .strictObject({
+    band: dailyHorizonBandSchema,
+    evaluationBasis: z.literal("daily"),
+    dataClass: weatherDataClassSchema,
+    unit: z.literal("mm"),
+    /** Dense and ordered: one entry per lead day the band covers, gaps included. */
+    days: z.array(dailyForecastDaySchema),
+  })
+  .superRefine((segment, ctx) => {
+    const expectedClass =
+      segment.band === "daily" ? DAILY_BAND_DATA_CLASS : SUBSESONAL_BAND_DATA_CLASS;
+    if (segment.dataClass !== expectedClass) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["dataClass"],
+        message: `band ${segment.band} permits only ${expectedClass}`,
+      });
+    }
+    const range = segment.band === "daily" ? DAILY_BAND : SUBSESONAL_BAND;
+    const length = range.toLeadDay - range.fromLeadDay + 1;
+    if (segment.days.length !== length) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["days"],
+        message: `band ${segment.band} covers ${length} lead days`,
+      });
+    }
+    segment.days.forEach((day, index) => {
+      const expectedLeadDay = range.fromLeadDay + index;
+      if (day.leadDay !== expectedLeadDay) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["days", index, "leadDay"],
+          message: `entry ${index} must be lead day ${expectedLeadDay}`,
+        });
+      }
+    });
+  });
+export type DailyForecastSegment = z.infer<typeof dailyForecastSegmentSchema>;
+
+/**
+ * The 0–45 day horizon as served: two ordered segments, each dense.
+ *
+ * It is one response for one field because PRD §4.6 sells one rolling horizon.
+ * The two bands keep separate classes because they come from separate products
+ * and are evaluated at different resolutions; merging them into one series would
+ * erase the difference the horizon map exists to protect.
+ */
+export const climateDailyOutlookSchema = z
+  .strictObject({
+    fieldId: z.uuid(),
+    provider: z.string().min(1),
+    model: z.string().min(1),
+    /** Lead day 0: today in Asia/Jakarta, `YYYY-MM-DD`. */
+    firstDate: isoDateSchema,
+    unit: z.literal("mm"),
+    segments: z.array(dailyForecastSegmentSchema).length(2),
+  })
+  .superRefine((outlook, ctx) => {
+    const bands: readonly DailyHorizonBand[] = ["daily", "subseasonal"];
+    bands.forEach((band, index) => {
+      if (outlook.segments[index]?.band !== band) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["segments", index, "band"],
+          message: `segment ${index} must be ${band}`,
+        });
+      }
+    });
+    for (const [index, segment] of outlook.segments.entries()) {
+      for (const [dayIndex, day] of segment.days.entries()) {
+        const expectedDate = addCalendarDays(outlook.firstDate, day.leadDay);
+        if (day.date !== expectedDate) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["segments", index, "days", dayIndex, "date"],
+            message: `lead day ${day.leadDay} of ${outlook.firstDate} is ${expectedDate}`,
+          });
+        }
+      }
+    }
+  });
+export type ClimateDailyOutlook = z.infer<typeof climateDailyOutlookSchema>;
+
+/**
+ * `firstDate` overrides lead day 0 for tests and for a caller reconstructing a
+ * historical horizon. Omitting it asks for the horizon beginning with the current
+ * Asia/Jakarta day, and the response states which day it answered.
+ */
+export const climateDailyOutlookQuerySchema = z.strictObject({
+  fieldId: fieldIdSchema,
+  provider: z.string().min(1).max(64),
+  model: z.string().min(1).max(128),
+  firstDate: isoDateSchema.optional(),
+});
+export type ClimateDailyOutlookQuery = z.infer<typeof climateDailyOutlookQuerySchema>;

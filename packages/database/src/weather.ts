@@ -698,3 +698,70 @@ export async function revalidateLease(
   `;
   return rows[0]?.ok === true;
 }
+
+/**
+ * The live daily precipitation rows for one cell, over the 0–45 day window
+ * (Priority 2 read model, `loadActiveDailyRecords`).
+ *
+ * Read-only and tenant-scoped like every other read. It mirrors
+ * `loadActiveOutlookMonths`' shape for the same reason: the cell is addressed by
+ * `(provider, model, cell_key)` through `app.outlook_cells`, so a `cell_key` that
+ * exists on two grids cannot be merged. `superseded_at IS NULL` is the only
+ * liveness marker this table has, and `ensemble_member IS NULL` keeps one value
+ * per day: a 50-member spread is not a served value.
+ *
+ * `from`/`to` are UTC ISO instants from `dailyHorizonWindow`, half-open. The
+ * caller's window is the assembler's window, so a row cannot be fetched and then
+ * silently dropped as out of horizon.
+ */
+export interface ActiveDailyRecord {
+  readonly validAt: string;
+  readonly value: number | null;
+  readonly unit: string;
+  readonly dataClass: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly initializedAt: string;
+  readonly temporalResolution: string | null;
+  readonly aggregationLevel: string | null;
+  readonly ensembleMember: number | null;
+}
+
+export async function loadActiveDailyRecords(
+  tx: TenantTransaction,
+  input: {
+    readonly provider: string;
+    readonly model: string;
+    readonly cellKey: string;
+    /** Inclusive start instant, UTC ISO. */
+    readonly from: string;
+    /** Exclusive end instant, UTC ISO. */
+    readonly to: string;
+  },
+): Promise<readonly ActiveDailyRecord[]> {
+  return tx.$queryRaw<ActiveDailyRecord[]>`
+    SELECT to_char(w.valid_at AT TIME ZONE 'UTC',
+                   'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "validAt",
+           w.value,
+           w.unit,
+           w.data_class                            AS "dataClass",
+           w.provider,
+           w.model,
+           to_char(w.initialized_at AT TIME ZONE 'UTC',
+                   'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "initializedAt",
+           w.temporal_resolution                    AS "temporalResolution",
+           w.aggregation_level                      AS "aggregationLevel",
+           w.ensemble_member                        AS "ensembleMember"
+      FROM app.outlook_cells c
+      JOIN app.weather_records w ON w.outlook_cell_id = c.id
+     WHERE c.provider = ${input.provider}
+       AND c.model = ${input.model}
+       AND c.cell_key = ${input.cellKey}
+       AND w.variable = 'precipitation'
+       AND w.superseded_at IS NULL
+       AND w.ensemble_member IS NULL
+       AND w.valid_at >= ${input.from}::timestamptz
+       AND w.valid_at < ${input.to}::timestamptz
+     ORDER BY w.valid_at
+  `;
+}

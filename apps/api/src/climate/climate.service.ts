@@ -1,5 +1,7 @@
 import { Inject, Injectable } from "@nestjs/common";
 import type {
+  ClimateDailyOutlook,
+  ClimateDailyOutlookQuery,
   ClimateOutlook,
   ClimateOutlookQuery,
   GridRegistry,
@@ -7,20 +9,26 @@ import type {
 } from "@agroclimate/contracts";
 import {
   calendarMonthOf,
+  climateDailyOutlookSchema,
   climateOutlookSchema,
   createSpatialResolution,
 } from "@agroclimate/contracts";
-import { assembleOutlookHorizon } from "@agroclimate/climate-core";
+import {
+  assembleDailyHorizon,
+  assembleOutlookHorizon,
+  dailyHorizonWindow,
+} from "@agroclimate/climate-core";
 import type { PrismaClient, TenantScope } from "@agroclimate/database";
 import {
   createTenantScope,
+  loadActiveDailyRecords,
   loadActiveOutlookMonths,
   selectFieldAnchor,
 } from "@agroclimate/database";
 
 import { rethrowCellResolutionError } from "../http/resolution-errors.js";
 import { DATABASE_CLIENT, GRID_REGISTRY } from "../tokens.js";
-import { jakartaMonthOf } from "./calendar.js";
+import { jakartaDateOf, jakartaMonthOf } from "./calendar.js";
 
 /**
  * `GET /v1/climate/outlook` — Phase 5.7B.
@@ -115,6 +123,76 @@ export class ClimateService {
       if (!parsed.success) {
         throw new Error(
           `climate outlook for field ${query.fieldId} does not satisfy its response contract: ${parsed.error.issues[0]?.path.join(".") ?? "root"}`,
+        );
+      }
+      return parsed.data;
+    } catch (error) {
+      rethrowCellResolutionError(error);
+    }
+  }
+
+  /**
+   * `GET /v1/climate/forecast` — the 0–45 day leg.
+   *
+   * Reads live `weather_records` rows directly. No outlook row is materialised:
+   * a day is a stored value, not an aggregation, and the table already carries
+   * the run identity and the supersession marker a second table would copy. The
+   * assembler decides nothing about the clock; this method passes `now` once, so
+   * two days in one response cannot disagree about what "fresh" means.
+   *
+   * The field → cell step is the monthly route's step, unchanged, because
+   * `field_outlook_cells` still has no writer.
+   */
+  async forecast(
+    userId: string,
+    query: ClimateDailyOutlookQuery,
+  ): Promise<ClimateDailyOutlook | null> {
+    const firstDate = query.firstDate ?? jakartaDateOf(new Date());
+
+    try {
+      const window = dailyHorizonWindow(firstDate);
+      const rows = await this.scope.withTenant(userId, async (tx) => {
+        const anchor = await selectFieldAnchor(tx, query.fieldId);
+        if (anchor === null) return null;
+
+        const entry = this.registryEntry(query);
+        const resolution = createSpatialResolution(entry, { lat: anchor.lat, lon: anchor.lon });
+
+        return loadActiveDailyRecords(tx, {
+          provider: query.provider,
+          model: query.model,
+          cellKey: resolution.cellKey,
+          from: window.from,
+          to: window.to,
+        });
+      });
+
+      if (rows === null) return null;
+
+      const assembled = assembleDailyHorizon({
+        firstDate,
+        provider: query.provider,
+        model: query.model,
+        rows,
+        now: new Date().toISOString(),
+      });
+      if (!assembled.ok) {
+        throw new Error(
+          `climate forecast for field ${query.fieldId} cannot be served: ${assembled.message}`,
+        );
+      }
+
+      const parsed = climateDailyOutlookSchema.safeParse({
+        fieldId: query.fieldId,
+        provider: query.provider,
+        model: query.model,
+        firstDate,
+        unit: "mm",
+        segments: assembled.value.segments,
+      });
+      if (!parsed.success) {
+        throw new Error(
+          `climate forecast for field ${query.fieldId} does not satisfy its response contract: ${parsed.error.issues[0]?.path.join(".") ?? "root"}`,
         );
       }
       return parsed.data;

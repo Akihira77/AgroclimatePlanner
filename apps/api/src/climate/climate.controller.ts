@@ -1,5 +1,11 @@
-import type { ClimateOutlook, ClimateOutlookQuery, Envelope } from "@agroclimate/contracts";
-import { climateOutlookQuerySchema } from "@agroclimate/contracts";
+import type {
+  ClimateDailyOutlook,
+  ClimateDailyOutlookQuery,
+  ClimateOutlook,
+  ClimateOutlookQuery,
+  Envelope,
+} from "@agroclimate/contracts";
+import { climateDailyOutlookQuerySchema, climateOutlookQuerySchema } from "@agroclimate/contracts";
 import { Controller, Get, NotFoundException, Query, Req, UseGuards } from "@nestjs/common";
 
 import type { AuthenticatedRequest } from "../auth/auth.guard.js";
@@ -37,5 +43,22 @@ export class ClimateController {
     const outlook = await this.climate.outlook(authenticatedUserId(request), query);
     if (outlook === null) throw new NotFoundException({ code: "FIELD_NOT_FOUND" });
     return { data: outlook };
+  }
+
+  /**
+   * `GET /v1/climate/forecast` — days 0–45, read from live `weather_records`.
+   *
+   * Two ordered segments: 0–14 `weather_forecast`, 15–45 `subseasonal_forecast`.
+   * Each day carries its own model, run, freshness and resolution. The monthly
+   * `outlook` route is unchanged and still the only source of lead months 1–12.
+   */
+  @Get("forecast")
+  async forecast(
+    @Req() request: AuthenticatedRequest,
+    @Query(new ZodValidationPipe(climateDailyOutlookQuerySchema)) query: ClimateDailyOutlookQuery,
+  ): Promise<Envelope<ClimateDailyOutlook>> {
+    const forecast = await this.climate.forecast(authenticatedUserId(request), query);
+    if (forecast === null) throw new NotFoundException({ code: "FIELD_NOT_FOUND" });
+    return { data: forecast };
   }
 }

@@ -19,10 +19,23 @@ export {
   SEAS5_PROVIDER_CONSISTENCY_MS,
   SEAS5_RELEASE_DAY_UTC,
   SEAS5_RELEASE_HOUR_UTC,
+  dailyAvailability,
   seasonalAvailability,
   seasonalStaleBoundary,
+  weatherForecastStaleAfterHours,
   type OutlookAvailability,
 } from "./freshness.js";
+export {
+  assembleDailyHorizon,
+  dailyHorizonWindow,
+  jakartaDateOfInstant,
+  type DailyHorizonReadInput,
+  type DailyReadFailureKind,
+  type DailyReadOutcome,
+  type DailyRecordRow,
+  type ServedDailyDay,
+  type ServedDailySegment,
+} from "./daily-read.js";
 export {
   SEASONAL_OUTLOOK_DERIVATION_VERSION,
   SEASONAL_REQUIRED_MEMBER_COUNT,

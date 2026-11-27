@@ -13,6 +13,18 @@
  */
 const JAKARTA_OFFSET_MS = 7 * 60 * 60 * 1000;
 
+/**
+ * The current day in Asia/Jakarta — lead day 0 of the 0–45 day horizon. Same
+ * constant and same reasoning as `jakartaMonthOf`; the value is a `YYYY-MM-DD`
+ * label, so no timezone database is consulted.
+ */
+export function jakartaDateOf(now: Date): string {
+  if (Number.isNaN(now.getTime())) {
+    throw new RangeError("jakartaDateOf requires a valid instant");
+  }
+  return new Date(now.getTime() + JAKARTA_OFFSET_MS).toISOString().slice(0, 10);
+}
+
 export function jakartaMonthOf(now: Date): string {
   if (Number.isNaN(now.getTime())) {
     throw new RangeError("jakartaMonthOf requires a valid instant");

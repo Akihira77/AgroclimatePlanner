@@ -67,3 +67,43 @@ export function seasonalAvailability(initializedAt: string, now: string): Outloo
   const current = instantOf(now);
   return current < instantOf(seasonalStaleBoundary(initializedAt)) ? "fresh" : "stale";
 }
+
+/**
+ * The soft TTL a short-range day is allowed, from the horizon map
+ * (`temporal-and-weather-semantics.md` §5):
+ *
+ * | Lead day | Stale when the run is older than |
+ * |---|---|
+ * | 0–3 | 6 h |
+ * | 4–14 | 12 h |
+ * | 15–45 | 48 h |
+ *
+ * The daily and subseasonal bands differ because the products differ: a 0-day
+ * value is superseded by every new cycle, a 30-day one by the next weekly run.
+ * This is one constant table in one place; changing it is an owner decision, not
+ * a tuning knob.
+ */
+export function weatherForecastStaleAfterHours(leadDay: number): number {
+  if (!Number.isInteger(leadDay) || leadDay < 0 || leadDay > 45) {
+    throw new RangeError("leadDay must be an integer between 0 and 45");
+  }
+  if (leadDay <= 3) return 6;
+  if (leadDay <= 14) return 12;
+  return 48;
+}
+
+/**
+ * `stale` at or past the band's TTL; `fresh` before it.
+ *
+ * Read-time only, like every other availability in this module: the row keeps its
+ * value and provenance, and a newer run clears staleness by replacing the row.
+ */
+export function dailyAvailability(
+  initializedAt: string,
+  now: string,
+  leadDay: number,
+): OutlookAvailability {
+  const boundary =
+    instantOf(initializedAt) + weatherForecastStaleAfterHours(leadDay) * 60 * 60 * 1000;
+  return instantOf(now) < boundary ? "fresh" : "stale";
+}

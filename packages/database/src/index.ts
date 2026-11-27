@@ -100,6 +100,7 @@ export {
   configureTransactionTimeouts,
   footprintLockKeyOf,
   lockForecastFootprint,
+  loadActiveDailyRecords,
   lockForecastRun,
   lockForecastWriteScope,
   persistForecastRun,
@@ -108,6 +109,7 @@ export {
   revalidateLease,
 } from "./weather.js";
 export type {
+  ActiveDailyRecord,
   ForecastCell,
   ForecastFootprint,
   ForecastRecordInput,
