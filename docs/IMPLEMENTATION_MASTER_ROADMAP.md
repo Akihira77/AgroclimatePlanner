@@ -1886,14 +1886,18 @@ seeding is the last unblocked prerequisite; the provider gates do not touch it.
 **Why:** the product has no usable interface. The stable Farm/Field/Climate APIs
 are enough to begin; waiting for Phase 6–8 delays the only demonstration of value.
 
-## Priority 5 — Complete agronomic engine
+## Priority 5 — Complete agronomic engine — **pure layer DONE, write path still gated**
 
-- [ ] Implement pure suitability dimensions on synthetic fixtures.
-- [ ] Implement growth-stage alignment.
-- [ ] Implement planting-window generation.
+- [x] Implement pure suitability dimensions on synthetic fixtures. `packages/agronomy/src/constraint.ts`: one constraint against one observation, deterministic, no clock. `null` is `insufficient_data`, never a pass; grade C may not gate, grade D may not vote.
+- [x] Implement growth-stage alignment. `packages/agronomy/src/stages.ts`: UTC calendar arithmetic, inclusive stage bounds, a gap is `null` rather than the previous stage, and critical windows are clipped to the cycle at either duration extreme.
+- [ ] Implement planting-window generation. **Blocked by `OPEN-26`**: a window cannot be stored until the `evidenceSegments ∪ missingRanges` partition is validated, and generating one before the validator exists would produce an artifact the write path must refuse.
 - [ ] Resolve `OPEN-26` and implement the EvidenceSegment validator.
 - [ ] Implement tenant-scoped recomputation (`OPEN-27`).
-- [ ] Validate crop scenarios.
+- [ ] Validate crop scenarios. **Blocked by `OPEN-20`** for real profiles; the four-crop scenario matrix needs reviewed thresholds that do not exist yet.
+
+**What is still missing on purpose:** no window, no score, no verdict, no persistence,
+no route. The engine's evidence rules are enforced, not relaxed, so a rulebook row that
+contradicts its own grade raises `ConstraintRuleError` instead of producing a number.
 
 ## Priority 6 — Calendar and AI
 
