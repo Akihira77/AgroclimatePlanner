@@ -88,8 +88,8 @@ The three tables that matter for the boundary:
 | Who owns `app.fields`? | `migration_owner` (the schema owner). Never a runtime role. |
 | Who may read another tenant's field? | Nobody holding `app_api` — RLS denies row-level access. |
 | May `app_system` read a field? | No. It holds `BYPASSRLS` and **zero** grants on tenant tables. |
-| May `app_api` read provider weather? | Yes — `SELECT` only, on the twelve readable climate tables, because the read model needs it. `app.jobs` is the exception: `app_system`-only, because user-facing ingestion state is read from `app.ingestion_runs`. |
-| May `app_api` write provider weather? | No. Ingest runs as `app_system`. |
+| May `app_api` read provider weather? | Yes — `SELECT` at table level, because the read model needs it. Thirteen tables grant `app_api` no other table-level privilege: the catalog (`crops`, `cultivars`, `crop_profile_versions`, `growth_stages`, `constraints`, `source_refs`) and the weather plane (`outlook_cells`, `forecast_runs`, `ingestion_runs`, `weather_records`, `monthly_outlooks`, `climatology_normals`, `climatology_baselines`). One deliberate exception, one column wide: `outlook_cells` also grants column-level `INSERT (provider, model, cell_key)`, so field creation can record a cell's identity before any ingest row exists (D14). `app.jobs` is the exception in the other direction: `app_system`-only, because user-facing ingestion state is read from `app.ingestion_runs`. |
+| May `app_api` write provider weather? | No table-level write. Ingest runs as `app_system`; the only write `app_api` holds is the three-column identity `INSERT` on `outlook_cells` described above. |
 | May `app_api` write the catalog? | No. Catalog rows are seeded by `migration_owner` (D13). |
 
 Full matrix: `ownership-and-rls.md` §2.

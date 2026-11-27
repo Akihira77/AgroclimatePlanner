@@ -2,8 +2,8 @@
 
 `docs/IMPLEMENTATION_MASTER_ROADMAP.md` §13.6 asks for a migration rollback
 strategy. There are no down migrations in this repository and there will not be:
-`prisma migrate deploy` reads `migration.sql` forward only, and the twelve
-directories under `packages/database/prisma/migrations/` contain nothing else.
+`prisma migrate deploy` reads `migration.sql` forward only, and the directories
+under `packages/database/prisma/migrations/` contain nothing else.
 
 So "rollback" is one of three things, in increasing cost:
 

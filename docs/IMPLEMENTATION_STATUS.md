@@ -1964,3 +1964,22 @@ test title in `packages/database/test/schema/schema-conformance.test.mjs`.
 | Finding 4 | `schema-conformance.test.mjs` asserted `globalTables.length === 14` in a test whose name said "the thirteen reference tables are neither". The assertion was right and the name had been wrong since `jobs` was added. Renamed |
 | Why these survived | Every stale count was written when it was true, and nothing re-derives a prose count from the catalogue. The inventory test does check the *set* of 25 tables, which is why the schema was never wrong — only the sentences about it |
 | Evidence | `test:schema` 25 pass; the partition test asserts 10 + 14 + 1 = 25 |
+
+### Stale claims swept, and the ones that were still true — 2026-11-28
+
+`docs/data-model/entity-catalog.md` §2, `docs/operations/backup-restore.md` §3,
+`docs/operations/migration-rollback.md`, and this section. Three fixes, and a list
+of claims that were checked and survived, because a sweep that reports only its
+hits hides how much it looked at.
+
+| Claim checked | Result |
+|---|---|
+| "twelve readable climate tables" for `app_api` | **wrong twice.** Thirteen tables, not twelve: six catalog and seven weather plane. And "nothing but `SELECT`" was false for one of them — `outlook_cells` carries a deliberate column-level `INSERT (provider, model, cell_key)` so field creation can record a cell identity before any ingest exists (`D14`, `ownership-and-rls.md` §2 rule 5). Both fixed: an explicit list, and the exception named. The list is hand-maintained like the count was — nothing compares it with `REFERENCE_TABLES`/`GLOBAL_TABLES` in `privilege-verification.mjs`, so this is a better form, not a guarded one |
+| 23 route decorators, six controllers | holds — `grep` over `*.controller.ts` gives 6 `@Controller` and 23 route decorators (2 `Delete`, 13 `Get`, 2 `Patch`, 6 `Post`). The 24th regex hit in `apps/api/src` is a decorator inside a comment in `zod-validation.pipe.ts` |
+| Column counts in `climate-data-foundation.md` (`forecast_runs` 9, `ingestion_runs` 15, `climatology_normals` 11) | hold — `information_schema.columns` agrees |
+| README: three applications, five shared packages, 25 tables, four roles | holds — `apps/` has three, `packages/` has five, `app` has 25 tables, `bootstrap/roles.sql` defines four |
+| Every variable read by code is in `environment-variables.md` | holds — every name read under `apps/` and `packages/` appears in the guide, whether read literally or through the `ROLE_CONNECTIONS` maps; the one extra hit is Vite's own build flag, not a variable this project defines |
+| `app.jobs` class and grants in `entity-catalog.md` §2 | holds — `tables-climate.md` §7 and the migration agree: global, no `user_id`, no RLS, `app_system` only |
+| Migration count anywhere in the live guides | **one did** — `docs/operations/migration-rollback.md` said "the twelve directories", and there are fourteen. The count was removed rather than updated: the sentence carries no information a reader needs, and the number only decays |
+| `docs/operations/backup-restore.md` §3 comparison queries | **wrong, and in the worst place** — the inline `-- 472` and `-- 263` are what the procedure tells an operator to expect, not a historical log. Both moved since the 2026-11-27 drill (17 `DELETE` grants revoked; one foreign key added), so a correct restore would have shown "mismatch" twice. The values are now current and the section says they are the source database's answer on 2026-11-28, and that the check is *source equals restored*, not *restored equals a constant* |
+| Dated measurements (the §5 drill table, the Phase-3 delivery log, review documents) | left alone — 88 indexes / 472 constraints / 263 grants were the state **at that measurement**, and rewriting a log to match today is how a log stops being evidence. The distinction the first pass missed is between a log recording what happened and a procedure stating what to expect |

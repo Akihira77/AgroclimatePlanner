@@ -52,14 +52,20 @@ failure as a warning and still exits 0.
 Structure and security objects first, because a restore that loses RLS looks fine
 and is not.
 
+The `--` values below are what the source database returned on 2026-11-28. They are
+not expectations: the check is that **both** databases return the same number, so a
+drift here means the restore lost an object, not that the drill failed. Re-derive
+them from the source before treating a difference as a fault, because every one of
+them moves when a migration lands.
+
 ```sql
 -- per database
 select count(*) from information_schema.tables where table_schema = 'app';          -- 26
 select count(*) from pg_policies;                                                    -- 24
 select count(*) from pg_indexes where schemaname = 'app';                            -- 88
 select count(*) from pg_constraint c join pg_namespace n on n.oid = c.connamespace
-  where n.nspname = 'app';                                                           -- 472
-select count(*) from information_schema.role_table_grants where table_schema = 'app'; -- 263
+  where n.nspname = 'app';                                                           -- 473
+select count(*) from information_schema.role_table_grants where table_schema = 'app'; -- 246
 select count(*) from pg_trigger where not tgisinternal;                              -- 5
 select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
   where n.nspname = 'app';                                                           -- 3
