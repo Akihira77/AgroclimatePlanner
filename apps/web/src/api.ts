@@ -214,6 +214,18 @@ export const api = {
     return allPages<Farm>("/farms", {});
   },
 
+  async updateFarm(farmId: string, body: { name?: string; region?: string | null }): Promise<Farm> {
+    const response = await request<{ data: Farm }>(`/farms/${encodeURIComponent(farmId)}`, {
+      method: "PATCH",
+      body,
+    });
+    return response.data;
+  },
+
+  async deleteFarm(farmId: string): Promise<void> {
+    await request<void>(`/farms/${encodeURIComponent(farmId)}`, { method: "DELETE" });
+  },
+
   async createFarm(name: string, region: string | null): Promise<Farm> {
     const body = await request<{ data: Farm }>("/farms", {
       method: "POST",
@@ -232,6 +244,21 @@ export const api = {
       body: { farmId, name, geometry },
     });
     return body.data;
+  },
+
+  async updateField(
+    fieldId: string,
+    body: { name?: string; geometry?: Field["geometry"] },
+  ): Promise<Field> {
+    const response = await request<{ data: Field }>(`/fields/${encodeURIComponent(fieldId)}`, {
+      method: "PATCH",
+      body,
+    });
+    return response.data;
+  },
+
+  async deleteField(fieldId: string): Promise<void> {
+    await request<void>(`/fields/${encodeURIComponent(fieldId)}`, { method: "DELETE" });
   },
 
   async listCrops(): Promise<CropList> {
@@ -285,7 +312,7 @@ export function describeError(error: unknown): string {
     case "UNAUTHENTICATED":
       return "Sesi berakhir. Masuk kembali.";
     case "CONFLICT":
-      return "Alamat email sudah terdaftar.";
+      return "Permintaan bentrok dengan data yang sudah ada.";
     case "VALIDATION_FAILED": {
       const first = error.details?.[0];
       return first === undefined

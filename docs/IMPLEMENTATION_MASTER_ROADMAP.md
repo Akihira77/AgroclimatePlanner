@@ -1875,7 +1875,7 @@ migration can store, not what an evaluation would decide.
 **Why:** the engine cannot start without a readable, versioned catalog. Catalog
 seeding is the last unblocked prerequisite; the provider gates do not touch it.
 
-## Priority 4 — Begin product-facing frontend — **first slice DONE**
+## Priority 4 — Begin product-facing frontend — **DONE except map geometry**
 
 - [x] Implement authentication UI (login, registration, session restore).
 - [x] Implement farm management UI (list, create, select).
@@ -1883,7 +1883,7 @@ seeding is the last unblocked prerequisite; the provider gates do not touch it.
 - [x] Implement crop catalog UI (crops, cultivars, version history, stages, thresholds, citations with their grades).
 - [x] Build the climate outlook view on the shipped monthly contract, and the 0–45 day view beside it.
 - [x] Prepare dashboard layout (session shell, navigation, counts, next actions).
-- [ ] Edit and delete for farms and fields — create-only in this slice; the API supports both, the screens do not yet.
+- [x] Edit and delete for farms and fields. Rename reuses the create form (PATCH accepts a name and region, so the geometry fields hide while editing a field); delete is per row, and a farm with live fields is refused by the server's own `409` rather than by a client guess.
 - [ ] Map-based geometry drawing — the current field form builds a square around a point.
 
 **Why:** the product has no usable interface. The stable Farm/Field/Climate APIs

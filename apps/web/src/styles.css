@@ -629,6 +629,20 @@ a {
   border-color: var(--accent);
 }
 
+/* The card is a container now, so the clickable part is an inner button that must
+   not look like one. */
+.crop-card-select {
+  display: grid;
+  gap: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
 .crop-card h3 {
   font-size: 1.05rem;
 }

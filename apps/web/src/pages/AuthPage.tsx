@@ -1,7 +1,7 @@
 import type { RegisteredUser } from "@agroclimate/contracts";
 import { useState } from "react";
 
-import { api } from "../api.js";
+import { ApiError, api } from "../api.js";
 import { ErrorNotice, Notice } from "../ui.js";
 
 type Mode = "login" | "register";
@@ -39,7 +39,13 @@ export function AuthPage({
       const user = await api.login(email, password);
       onAuthenticated(user);
     } catch (failure) {
-      setError(failure);
+      // `CONFLICT` is the code for "this email exists" and for "this farm still has
+      // fields" alike, so the wording belongs to the screen that knows which.
+      setError(
+        mode === "register" && failure instanceof ApiError && failure.code === "CONFLICT"
+          ? new Error("Alamat email sudah terdaftar.")
+          : failure,
+      );
     } finally {
       setBusy(false);
     }

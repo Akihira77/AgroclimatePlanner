@@ -21,6 +21,8 @@ export function FarmsPage() {
   });
 
   const [selectedFarmId, setSelectedFarmId] = useState<string | null>(null);
+  const [editingFarmId, setEditingFarmId] = useState<string | null>(null);
+  const [editingFieldId, setEditingFieldId] = useState<string | null>(null);
   const [farmName, setFarmName] = useState("");
   const [farmRegion, setFarmRegion] = useState("");
   const [fieldName, setFieldName] = useState("");
@@ -39,17 +41,21 @@ export function FarmsPage() {
   const selectedFields =
     selected === undefined ? [] : fields.filter((field) => field.farmId === selected.id);
 
-  const createFarm = async (event: React.FormEvent) => {
+  const name = farmName.trim();
+  const region = farmRegion.trim() === "" ? null : farmRegion.trim();
+
+  const saveFarm = async (event: React.FormEvent) => {
     event.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      const farm = await api.createFarm(
-        farmName.trim(),
-        farmRegion.trim() === "" ? null : farmRegion.trim(),
-      );
+      const farm =
+        editingFarmId === null
+          ? await api.createFarm(name, region)
+          : await api.updateFarm(editingFarmId, { name, region });
       setFarmName("");
       setFarmRegion("");
+      setEditingFarmId(null);
       setSelectedFarmId(farm.id);
       state.reload();
     } catch (failure) {
@@ -59,18 +65,60 @@ export function FarmsPage() {
     }
   };
 
-  const createField = async (event: React.FormEvent) => {
+  /** The server refuses a farm that still has live fields (`409`); the message says so. */
+  const removeFarm = async (farmId: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.deleteFarm(farmId);
+      if (selectedFarmId === farmId) setSelectedFarmId(null);
+      if (editingFarmId === farmId) {
+        setEditingFarmId(null);
+        setFarmName("");
+        setFarmRegion("");
+      }
+      state.reload();
+    } catch (failure) {
+      setError(failure);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveField = async (event: React.FormEvent) => {
     event.preventDefault();
     if (selected === undefined) return;
     setBusy(true);
     setError(null);
     try {
-      await api.createField(
-        selected.id,
-        fieldName.trim(),
-        squareAround(Number(lat), Number(lon), Number(spanKm)),
-      );
+      if (editingFieldId === null) {
+        await api.createField(
+          selected.id,
+          fieldName.trim(),
+          squareAround(Number(lat), Number(lon), Number(spanKm)),
+        );
+      } else {
+        await api.updateField(editingFieldId, { name: fieldName.trim() });
+      }
       setFieldName("");
+      setEditingFieldId(null);
+      state.reload();
+    } catch (failure) {
+      setError(failure);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeField = async (fieldId: string) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.deleteField(fieldId);
+      if (editingFieldId === fieldId) {
+        setEditingFieldId(null);
+        setFieldName("");
+      }
       state.reload();
     } catch (failure) {
       setError(failure);
@@ -90,29 +138,54 @@ export function FarmsPage() {
         ) : (
           <div className="crop-grid">
             {farms.map((farm) => (
-              <button
+              <div
                 key={farm.id}
-                type="button"
                 className="crop-card"
-                aria-pressed={selected?.id === farm.id}
-                onClick={() => setSelectedFarmId(farm.id)}
                 style={
                   selected?.id === farm.id
                     ? { borderColor: "var(--accent)", background: "var(--accent-tint)" }
                     : undefined
                 }
               >
-                <h3>{farm.name}</h3>
-                <span className="muted">{farm.region ?? "Tanpa wilayah"}</span>
-                <span className="faint">{countLabel(fields, farm.id)}</span>
-              </button>
+                <button
+                  type="button"
+                  className="crop-card-select"
+                  aria-pressed={selected?.id === farm.id}
+                  onClick={() => setSelectedFarmId(farm.id)}
+                >
+                  <h3>{farm.name}</h3>
+                  <span className="muted">{farm.region ?? "Tanpa wilayah"}</span>
+                  <span className="faint">{countLabel(fields, farm.id)}</span>
+                </button>
+                <div className="btn-row">
+                  <button
+                    type="button"
+                    className="btn btn-quiet"
+                    onClick={() => {
+                      setEditingFarmId(farm.id);
+                      setFarmName(farm.name);
+                      setFarmRegion(farm.region ?? "");
+                    }}
+                  >
+                    Ubah
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-danger"
+                    disabled={busy}
+                    onClick={() => void removeFarm(farm.id)}
+                  >
+                    Hapus
+                  </button>
+                </div>
+              </div>
             ))}
           </div>
         )}
 
-        <form className="panel" onSubmit={createFarm}>
+        <form className="panel" onSubmit={saveFarm}>
           <div className="panel-head">
-            <h3>Kebun baru</h3>
+            <h3>{editingFarmId === null ? "Kebun baru" : "Ubah kebun"}</h3>
           </div>
           <div className="panel-body form-grid">
             <div className="field">
@@ -136,8 +209,21 @@ export function FarmsPage() {
             </div>
             <div className="form-actions">
               <button className="btn btn-primary" type="submit" disabled={busy}>
-                Tambah kebun
+                {editingFarmId === null ? "Tambah kebun" : "Simpan kebun"}
               </button>
+              {editingFarmId === null ? null : (
+                <button
+                  type="button"
+                  className="btn btn-quiet"
+                  onClick={() => {
+                    setEditingFarmId(null);
+                    setFarmName("");
+                    setFarmRegion("");
+                  }}
+                >
+                  Batal
+                </button>
+              )}
             </div>
           </div>
         </form>
@@ -162,6 +248,7 @@ export function FarmsPage() {
                   <th className="numeric">Luas (ha)</th>
                   <th>Dibuat</th>
                   <th>Id</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
@@ -173,6 +260,28 @@ export function FarmsPage() {
                     <td>
                       <Mono>{field.id.slice(0, 8)}</Mono>
                     </td>
+                    <td>
+                      <div className="btn-row">
+                        <button
+                          type="button"
+                          className="btn btn-quiet"
+                          onClick={() => {
+                            setEditingFieldId(field.id);
+                            setFieldName(field.name);
+                          }}
+                        >
+                          Ubah
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-danger"
+                          disabled={busy}
+                          onClick={() => void removeField(field.id)}
+                        >
+                          Hapus
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -181,9 +290,9 @@ export function FarmsPage() {
         )}
 
         {selected !== undefined ? (
-          <form className="panel" onSubmit={createField}>
+          <form className="panel" onSubmit={saveField}>
             <div className="panel-head">
-              <h3>Lahan baru</h3>
+              <h3>{editingFieldId === null ? "Lahan baru" : "Ubah nama lahan"}</h3>
             </div>
             <div className="panel-body form-grid">
               <div className="field">
@@ -196,55 +305,72 @@ export function FarmsPage() {
                   onChange={(event) => setFieldName(event.target.value)}
                 />
               </div>
-              <div className="field">
-                <label htmlFor="field-lat">Lintang pusat</label>
-                <input
-                  id="field-lat"
-                  type="number"
-                  step="0.0001"
-                  min="-90"
-                  max="90"
-                  required
-                  value={lat}
-                  onChange={(event) => setLat(event.target.value)}
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="field-lon">Bujur pusat</label>
-                <input
-                  id="field-lon"
-                  type="number"
-                  step="0.0001"
-                  min="-180"
-                  max="180"
-                  required
-                  value={lon}
-                  onChange={(event) => setLon(event.target.value)}
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="field-span">Sisi (km)</label>
-                <input
-                  id="field-span"
-                  type="number"
-                  step="0.1"
-                  min="0.1"
-                  max="50"
-                  required
-                  value={spanKm}
-                  onChange={(event) => setSpanKm(event.target.value)}
-                />
-              </div>
+              {editingFieldId === null ? (
+                <>
+                  <div className="field">
+                    <label htmlFor="field-lat">Lintang pusat</label>
+                    <input
+                      id="field-lat"
+                      type="number"
+                      step="0.0001"
+                      min="-90"
+                      max="90"
+                      required
+                      value={lat}
+                      onChange={(event) => setLat(event.target.value)}
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="field-lon">Bujur pusat</label>
+                    <input
+                      id="field-lon"
+                      type="number"
+                      step="0.0001"
+                      min="-180"
+                      max="180"
+                      required
+                      value={lon}
+                      onChange={(event) => setLon(event.target.value)}
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="field-span">Sisi (km)</label>
+                    <input
+                      id="field-span"
+                      type="number"
+                      step="0.1"
+                      min="0.1"
+                      max="50"
+                      required
+                      value={spanKm}
+                      onChange={(event) => setSpanKm(event.target.value)}
+                    />
+                  </div>
+                </>
+              ) : null}
               <div className="form-actions">
                 <button className="btn btn-primary" type="submit" disabled={busy}>
-                  Tambah lahan
+                  {editingFieldId === null ? "Tambah lahan" : "Simpan nama"}
                 </button>
+                {editingFieldId === null ? null : (
+                  <button
+                    type="button"
+                    className="btn btn-quiet"
+                    onClick={() => {
+                      setEditingFieldId(null);
+                      setFieldName("");
+                    }}
+                  >
+                    Batal
+                  </button>
+                )}
               </div>
             </div>
             <div className="panel-body">
               <p className="faint">
-                Persegi di sekitar titik pusat. Bentuk ini untuk entri cepat; lahan nyata tidak
-                persegi.
+                {editingFieldId === null
+                  ? "Persegi di sekitar titik pusat. Bentuk ini untuk entri cepat; lahan nyata tidak persegi."
+                  : "Geometri tidak berubah di sini: PATCH menerima nama saja."}
               </p>
             </div>
           </form>
