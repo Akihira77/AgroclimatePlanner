@@ -38,6 +38,28 @@ describe("evaluateConstraint — an absent observation is never a value", () => 
     expect(evaluateConstraint(constraint(), 100.1).outcome).toBe("violated");
   });
 
+  it("treats a non-finite observation as unmeasured, not as a pass or an exclusion", () => {
+    // `NaN` compares false against every bound, so it would read as a violation;
+    // `Infinity` satisfies any one-sided bound, so it would read as a pass. Neither
+    // is a measurement, and neither may become a verdict.
+    for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(evaluateConstraint(constraint(), value)).toMatchObject({
+        outcome: "insufficient_data",
+        observed: null,
+      });
+    }
+  });
+
+  it("refuses a non-finite threshold instead of gating on it", () => {
+    // The other side of the same defect: `observed >= NaN` is false for every
+    // field, and `<= Infinity` accepts every one.
+    const nanBound = { ...constraint(), thresholdUpper: Number.NaN };
+    const infiniteBound = { ...constraint(), thresholdUpper: Number.POSITIVE_INFINITY };
+
+    expect(() => evaluateConstraint(nanBound, 10)).toThrow(ConstraintRuleError);
+    expect(() => evaluateConstraint(infiniteBound, 10)).toThrow(/not a finite number/);
+  });
+
   it("treats a count as a floor, which is what every count in the reference matrix is", () => {
     const count = constraint({ comparator: "count", thresholdUpper: null, thresholdCount: 4 });
     expect(evaluateConstraint(count, 4).outcome).toBe("satisfied");

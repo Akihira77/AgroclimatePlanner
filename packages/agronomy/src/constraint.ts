@@ -78,7 +78,11 @@ export function thresholdOf(constraint: Constraint): ConstraintThreshold {
           "a min constraint without its lower bound and unit cannot be evaluated",
         );
       }
-      return { kind: "min", lower: constraint.thresholdLower, unit: constraint.unit };
+      return {
+        kind: "min",
+        lower: finiteBound(constraint.thresholdLower, constraint.id, "thresholdLower"),
+        unit: constraint.unit,
+      };
     case "max":
       if (constraint.thresholdUpper === null || constraint.unit === null) {
         throw new ConstraintRuleError(
@@ -87,7 +91,11 @@ export function thresholdOf(constraint: Constraint): ConstraintThreshold {
           "a max constraint without its upper bound and unit cannot be evaluated",
         );
       }
-      return { kind: "max", upper: constraint.thresholdUpper, unit: constraint.unit };
+      return {
+        kind: "max",
+        upper: finiteBound(constraint.thresholdUpper, constraint.id, "thresholdUpper"),
+        unit: constraint.unit,
+      };
     case "range":
       if (
         constraint.thresholdLower === null ||
@@ -102,8 +110,8 @@ export function thresholdOf(constraint: Constraint): ConstraintThreshold {
       }
       return {
         kind: "range",
-        lower: constraint.thresholdLower,
-        upper: constraint.thresholdUpper,
+        lower: finiteBound(constraint.thresholdLower, constraint.id, "thresholdLower"),
+        upper: finiteBound(constraint.thresholdUpper, constraint.id, "thresholdUpper"),
         unit: constraint.unit,
       };
     case "count":
@@ -114,8 +122,29 @@ export function thresholdOf(constraint: Constraint): ConstraintThreshold {
           "a count constraint without its count cannot be evaluated",
         );
       }
-      return { kind: "count", count: constraint.thresholdCount };
+      return {
+        kind: "count",
+        count: finiteBound(constraint.thresholdCount, constraint.id, "thresholdCount"),
+      };
   }
+}
+
+/**
+ * A non-finite bound is not a bound: `observed >= NaN` is false, so a hard gate
+ * would exclude every field without ever being evaluated, and `<= Infinity` would
+ * accept every one. The boundary schema already refuses these; the engine does not
+ * rely on it, for the same reason it refuses a null observation rather than
+ * trusting the caller.
+ */
+function finiteBound(value: number, constraintId: string, field: string): number {
+  if (!Number.isFinite(value)) {
+    throw new ConstraintRuleError(
+      constraintId,
+      "malformed_threshold",
+      `${field} is not a finite number`,
+    );
+  }
+  return value;
 }
 
 /**
@@ -123,7 +152,10 @@ export function thresholdOf(constraint: Constraint): ConstraintThreshold {
  *
  * `observed: null` means the dimension was not measured. It is not zero, not an
  * average, and not "no violation": the outcome is `insufficient_data`, which the
- * caller must propagate as coverage rather than as a pass.
+ * caller must propagate as coverage rather than as a pass. A non-finite number is
+ * the same case — `NaN` compares false against every bound (a fabricated
+ * exclusion) and `Infinity` satisfies any one-sided bound (a fabricated pass), so
+ * it is recorded as `observed: null` rather than allowed to vote.
  */
 export function evaluateConstraint(
   constraint: Constraint,
@@ -132,18 +164,19 @@ export function evaluateConstraint(
   assertEvaluable(constraint);
 
   const threshold = thresholdOf(constraint);
+  const usable = observed !== null && Number.isFinite(observed) ? observed : null;
   const base = {
     constraintId: constraint.id,
     dimension: constraint.dimension,
     severity: constraint.severity,
     grade: constraint.grade,
-    observed,
+    observed: usable,
     threshold,
   } as const;
 
-  if (observed === null) return { ...base, outcome: "insufficient_data" };
+  if (usable === null) return { ...base, outcome: "insufficient_data" };
 
-  return { ...base, outcome: satisfies(threshold, observed) ? "satisfied" : "violated" };
+  return { ...base, outcome: satisfies(threshold, usable) ? "satisfied" : "violated" };
 }
 
 function satisfies(threshold: ConstraintThreshold, observed: number): boolean {

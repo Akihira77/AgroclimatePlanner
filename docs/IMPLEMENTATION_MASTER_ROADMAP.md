@@ -983,8 +983,9 @@ there is no scheduler to produce them.
 
 # 10. Phase 6 — Agronomic Suitability & Planting Window Engine
 
-**Status: `PARTIAL`** — contracts, catalog reads, constraint evaluation and stage
-alignment are implemented; the catalog seed, scoring, window generation, persistence and
+**Status: `PARTIAL`** — contracts, catalog reads, constraint evaluation, stage
+alignment, verdict classification, the partition validator and suitability assembly are
+implemented; the catalog seed, scoring, window generation, persistence and
 recomputation are blocked by `OPEN-20`, `OPEN-26` and `OPEN-27`. See §18 Priority 5 for
 what each blocked item waits on.
 
@@ -1909,6 +1910,7 @@ are enough to begin; waiting for Phase 6–8 delays the only demonstration of va
 
 - [x] Implement pure suitability dimensions on synthetic fixtures. `packages/agronomy/src/constraint.ts`: one constraint against one observation, deterministic, no clock. `null` is `insufficient_data`, never a pass; grade C may not gate, grade D may not vote.
 - [x] Implement growth-stage alignment. `packages/agronomy/src/stages.ts`: UTC calendar arithmetic, inclusive stage bounds, a gap is `null` rather than the previous stage, and critical windows are clipped to the cycle at either duration extreme.
+- [x] Implement suitability assembly — one profile's rules, one observation each, one verdict. `packages/agronomy/src/suitability.ts`: `assessSuitability({ constraints, observations, primaryBasis })` evaluates every rule, summarises the five dimensions, derives the hard-gated dimensions from the rulebook itself, and hands both to `classifyVerdict`; it returns the verdict, its reasons, per-dimension coverage, the weakest evidence grade in a fully observed dimension (`null` when no dimension is `known`) and every evaluation. **Observations are keyed by `constraint.id` on purpose**: the schema carries a dimension, a comparator, a bound and a unit but no metric name, so "water means total mm over the critical stage" is an agronomic mapping with a citation, not something an engine may infer from a unit string — that mapping belongs to the seed `OPEN-20` gates. A missing key and a `null` are both "not measured", and a non-finite number joins them at the comparison in `constraint.ts`: `NaN` would read as a violation and `±Infinity` as a pass. An id matching no constraint, a duplicated constraint id, or an empty rulebook raises `SuitabilityInputError` with a code, rather than producing a verdict.
 - [ ] Implement planting-window generation. **`OPEN-26` no longer blocks it** — the validator exists and is tested. It still needs a profile with real thresholds (`OPEN-20`) and a field→cell writer (`OPEN-27`), so a generated window would have nothing to evaluate against.
 - [x] Resolve `OPEN-26` and implement the EvidenceSegment validator. `packages/agronomy/src/partition.ts`: one violation per failed check, not a boolean; impossible dates refused rather than normalised; a zero-coverage segment treated as a missing range; a gap measured from the farthest covered day; the union required to touch both window extremes; coverage reconciled in both directions, so a segment whose uncovered days are declared nowhere is refused. One limit named in the code: no writer calls the function yet, so the invariant is enforced by the absence of a write path.
 - [ ] Implement tenant-scoped recomputation (`OPEN-27`).

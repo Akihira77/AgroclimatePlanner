@@ -17,3 +17,6 @@ export { validatePartition } from "./partition.js";
 export type { PartitionInput, PartitionViolation, PartitionViolationCode } from "./partition.js";
 export { classifyVerdict } from "./verdict.js";
 export type { Verdict, VerdictInput, VerdictReason, VerdictReasonCode } from "./verdict.js";
+export { assessSuitability } from "./suitability.js";
+export type { SuitabilityAssessment, SuitabilityInput } from "./suitability.js";
+export { SuitabilityInputError } from "./suitability.js";
