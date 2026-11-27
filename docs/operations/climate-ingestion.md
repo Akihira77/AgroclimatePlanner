@@ -117,11 +117,13 @@ LIMIT 50;
 
 -- Live duplicate candidates. Each should return zero rows while the unique index
 -- above is in place; a non-zero count means an index was dropped, not that the
--- ingestion is wrong.
-SELECT cell_key, variable, valid_at, ensemble_member, count(*)
+-- ingestion is wrong. `forecast_run_id` belongs in the key: the same cell, variable
+-- and instant in two different runs is two valid rows, and omitting the run id would
+-- report them as duplicates.
+SELECT forecast_run_id, cell_key, variable, valid_at, ensemble_member, count(*)
 FROM app.weather_records
 WHERE superseded_at IS NULL
-GROUP BY 1, 2, 3, 4
+GROUP BY 1, 2, 3, 4, 5
 HAVING count(*) > 1;
 
 -- Run lifecycle: a succeeded run with no records is a real incident.
