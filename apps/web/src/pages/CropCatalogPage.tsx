@@ -32,8 +32,8 @@ function CropList() {
   if (state.data.crops.length === 0) {
     return (
       <Empty>
-        Katalog kosong. Baris komoditas diisi oleh seed `migration_owner`; cakupan seed v1 masih
-        menunggu keputusan <Mono>OPEN-20</Mono>.
+        Katalog kosong. Jalankan <Mono>pnpm db:seed:catalog</Mono> — baris komoditas diisi oleh seed
+        berjalan sebagai `migration_owner`.
       </Empty>
     );
   }

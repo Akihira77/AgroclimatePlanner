@@ -216,8 +216,11 @@ without asking. Use it when you mean it.
 
 Installed is not finished. These are absent by decision, not by omission:
 
-- **No catalog rows.** The crop catalog tables exist but are not seeded; the seed
-  is blocked on the crop data itself (`OPEN-20`, `OPEN-21`).
+- **No catalog rows yet.** The tables exist and the seed ships with the repository:
+  run `pnpm db:seed:catalog` to insert the four v1 crops. An installation that skips
+  it has working screens with empty states, not broken ones. Field-to-snapshot
+  mapping (`OPEN-21`) is still open, so a seeded catalogue still cannot judge a
+  field.
 - **No validated provider grid.** `ingest.forecast` is registered, and every real
   job dies with `grid_not_validated` before a provider is called (`OPEN-18`).
 - **No scheduler.** A job runs only because something inserted it.

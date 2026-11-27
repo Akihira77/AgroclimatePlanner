@@ -18,11 +18,13 @@ named subsystem rather than a phase-wide stop. A blocker is never widened to P0 
 signal that it matters — an item that blocks an entire subsystem still does not stop
 a migration from applying.
 
-**The register is 29 items: 14 P1 and 15 P2.** The 14 are classified by what they
-stop in §1.1 — none blocks the Phase 3 DDL, twelve block a slice built on top of
-it, one is mitigated by a labelled fallback, and one's DDL half is settled by
-omission (`D26`). The 15 P2 items are in §3 and block nothing in Phase 3 by
-definition. §5 records the Phase 2.4 disposition of every id.
+**The register is 29 items: 14 P1 and 15 P2**, of which **three are resolved**
+(`OPEN-01`, `OPEN-13`, `OPEN-20`). The 14 P1 are classified by what they stop in
+§1.1 — none blocks the Phase 3 DDL, twelve block a slice built on top of it, one is
+mitigated by a labelled fallback, and one's DDL half is settled by omission (`D26`).
+The 15 P2 items are in §3 and block nothing in Phase 3 by definition; one of them,
+`OPEN-20`, was answered 2026-11-28 and is no longer open. §5 records the Phase 2.4
+disposition of every id.
 
 Nothing in this list is a design preference. Each one is a question where a
 plausible answer exists and choosing it silently would put an unapproved decision
@@ -499,10 +501,11 @@ if that threat is in scope before production.
 
 ## 3. Settle during implementation
 
-The remaining **15 items, all P2**: none blocks a Phase 3 deliverable, because each
-affects code that is not on the path yet. `OPEN-12` is the farthest out — it blocks
-Phase 9's verification tables, not Phase 3. Each is listed with its effect so the
-question is not lost.
+The remaining **14 open items, all P2**: none blocks a Phase 3 deliverable, because
+each affects code that is not on the path yet. `OPEN-12` is the farthest out — it
+blocks Phase 9's verification tables, not Phase 3. Each is listed with its effect so
+the question is not lost. The fifteenth P2, `OPEN-20`, was answered 2026-11-28 —
+see below.
 
 | ID | Question | Effect |
 |---|---|---|
@@ -515,12 +518,41 @@ question is not lost.
 | `OPEN-15` | the `area_weighted` weight set | the resolution row cannot describe multi-cell weighting; `centroid` is the v1 policy |
 | `OPEN-16` | `weather_records` growth/retention policy | ~56 000 rows per ensemble run; first real at Phase 5.4. **Owner decision 2026-11-21:** no automatic pruning until at least one month of measured ingestion, and never delete data needed for provenance or audit |
 | `OPEN-19` | `updated_at` trigger | application-maintained today; raw SQL bypasses it |
-| `OPEN-20` | v1 catalog seed scope | which graded thresholds ship in the first published profiles |
 | `OPEN-22` | `fields_geom_gist_idx` justification | no query uses it; drop or keep at Phase 6 |
 | `OPEN-23` | `cultivars.cycle_start` vs `plantings.cycle_start_used` disagreement | application invariant, not a database one |
 | `OPEN-24` | `constraints.growth_stage_id` may name a stage of another profile | one composite FK + one unique key |
 | `OPEN-25` | supersession cycles | not prevented; a looping chain is a writer bug |
 | `OPEN-29` | `observationsUsed` embeds ids, not values | an edited observation does not change `fieldSnapshotHash` |
+
+### `OPEN-20` — v1 catalogue seed — **RESOLVED 2026-11-28**
+
+**Question:** which graded thresholds ship in the first published crop profiles?
+
+**Answer:** option (b) — all four crops, with the thresholds that have no defensible
+number absent rather than replaced. This is the same answer §5 and §7 of
+`docs/research/agronomic-reference-matrix.md` reached on 2026-11-18; the owner's
+decision makes it the seed rather than a recommendation.
+
+**What shipped:** `packages/database/scripts/seed-catalog.mjs`, run with
+`pnpm db:seed:catalog` as `migration_owner`. Four crops (padi, jagung, kedelai,
+cabai), one cultivar each, one published rulebook each under rule version
+`agronomic-matrix-2026-11-18`: 14 growth stages, 12 constraints, 5 citations.
+Kedelai and cabai carry **no water rule**, because their water evidence is
+`insufficient_data` and a constraint row cannot state "unknown"; the absence is
+asserted by `test/unit/catalog-seed-data.test.mjs` so a later seed cannot fill it
+with an invented band. Only grade A thresholds gate, and only the paddy
+standing-water rule does.
+
+**What it does not settle:** three of the five citations are weaker than a stored
+row suggests. The FAO pair are the documents themselves; the BRMP and Balitsa rows
+link an institutional homepage, because the variety descriptions and the 2014 SOP
+are not published at a stable URL, and their titles say exactly that. A link that
+answers `200` is not a link that shows the figure, and a grade A tag beside a
+homepage reads as verification when it is not. The matrix's remaining sources are
+not stored at all — the IRRI Rice Knowledge Bank returned `500`/timeout and the
+theses never resolved. Every one of those gaps must close before a profile is used
+for a real planting decision. Window generation and suitability persistence stay
+gated by `OPEN-26`/`OPEN-27`, not by this.
 
 ## 4. Decisions made here
 
@@ -593,7 +625,7 @@ and "deferred" were doing too much work:
 | `OPEN-15` | **DEFERRED** | resolution engine, when multi-cell weighting exists | `centroid` is the v1 policy |
 | `OPEN-16` | **DEFERRED** | after at least one month of 5.4 ingestion, against measured growth | an empty table has no growth policy to enforce; the owner approved no pruning until measured (2026-11-21) |
 | `OPEN-19` | **DEFERRED** | `updated_at` maintenance, when a writer exists | `DEFAULT now()` is applied; no trigger |
-| `OPEN-20` | **DEFERRED** | catalog seed authoring | the catalogs are empty until seeded |
+| `OPEN-20` | **RESOLVED** | — | answered 2026-11-28: option (b), all four crops, missing thresholds absent rather than guessed; seed shipped as `pnpm db:seed:catalog`, with a unit test over its content |
 | `OPEN-22` | **DEFERRED** | Phase 6 spatial queries | the index exists and is unused |
 | `OPEN-23` | **DEFERRED** | application invariant, with the planting writer | not expressible as a database constraint |
 | `OPEN-24` | **DEFERRED** | catalog constraint authoring | one composite FK plus one unique key, added later |
@@ -605,18 +637,20 @@ value the matrix in §1.1 assigns (`conditional` for both), not a fifth disposit
 putting it in the disposition column is how the earlier count drifted. The counts
 below follow the disposition alone.
 
-**Counts (recomputed from the table, 2026-11-21):** 2 RESOLVED (`OPEN-01`,
-`OPEN-13`), 19 DEFERRED, 8 BLOCKED_EXTERNAL_INPUT, 0 NOT_APPLICABLE. The earlier
+**Counts (recomputed from the table, 2026-11-28):** 3 RESOLVED (`OPEN-01`,
+`OPEN-13`, `OPEN-20`), 18 DEFERRED, 8 BLOCKED_EXTERNAL_INPUT, 0 NOT_APPLICABLE. The earlier
 count of 9 BLOCKED_EXTERNAL_INPUT did not match the seven BLOCKED rows in the table;
 `OPEN-18` moved from DEFERRED to BLOCKED_EXTERNAL_INPUT when its generic contract was
 approved, which is the eighth.
 
-Both `RESOLVED` items earned the word, and neither earned it from a decision alone:
+All three `RESOLVED` items earned the word, and none earned it from a decision alone:
 `OPEN-13` from an accepted ADR, an applied migration, and a real-role suite green on the
 canonical database; `OPEN-01` from the confirmed boundary plus a login path that reads a
-credential through it, with a real-role test proving `current_user = app_auth`. The other
-27 still need an owner outside this task — a product decision, a licence, an agronomic
-vocabulary, or a security review.
+credential through it, with a real-role test proving `current_user = app_auth`;
+`OPEN-20` from an owner answer plus a seed that runs, a contract-valid read of all four
+profiles, and a unit test over the seed's content. The other 26 still need an owner
+outside this task — a product decision, a licence, an agronomic vocabulary, or a
+security review.
 
 Note that `RESOLVED` is still not the goal. A phase that resolved `OPEN-17` by assuming a
 500 m radius "for now" would have made the database lie about a plot's area, and that lie

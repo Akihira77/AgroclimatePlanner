@@ -16,7 +16,7 @@ guess" — no threshold or vocabulary is invented to fill a gap.
 
 | ID | Question | Options | Recommendation | Unblocks | Cost of waiting |
 |---|---|---|---|---|---|
-| `OPEN-20` | Which graded thresholds ship in the first published crop profiles? | (a) padi + jagung only, hard gates only where evidence is grade A; (b) all four crops with `water = insufficient_data` where evidence is thin; (c) wait for a full agronomic baseline | (b) — shipping a profile that says "insufficient_data" is honest and lets the engine, UI, and window generator be exercised end to end; a profile set of two crops does not | Catalog seed, suitability runs, window generation, the agronomy screens | Phase 6 stays at "engine primitives", cannot be demonstrated |
+| `OPEN-20` — **SETTLED 2026-11-28** | *Answered (b).* Which graded thresholds ship in the first published crop profiles? | (a) padi + jagung only, hard gates only where evidence is grade A; **(b) all four crops with `water = insufficient_data` where evidence is thin — chosen**; (c) wait for a full agronomic baseline | (b) — shipping a profile that says "insufficient_data" is honest and lets the engine, UI, and window generator be exercised end to end; a profile set of two crops does not | Catalog seed, suitability runs, window generation, the agronomy screens | Settled: seed shipped as `pnpm db:seed:catalog`; resolution recorded in `docs/data-model/open-decisions.md` §3 |
 | `OPEN-21` | How do `soil_type`, `drainage_class`, `irrigation_availability` become a `FieldSnapshot`, and how does `irrigation_available` become the boolean the contract requires? | (a) `CHECK` list per column + an explicit mapping table; (b) lookup tables with FK; (c) a boolean column replacing the text | (a) — a `CHECK` plus one documented mapping keeps the values closed without a join, and the mapping is the part that must be written down | Field → snapshot construction, every water-dependent verdict, `fieldSnapshotHash` | No field can produce a snapshot; suitability cannot run at all |
 | `OPEN-27` | How does the worker learn which fields a cell serves without reading tenant rows? | (a) a `security definer` function returning field ids for a cell; (b) a narrow `app_system` grant on a projection table maintained by trigger; (c) worker reads nothing — API enqueues per-field jobs | (c) first, if the API can enqueue cheaply; otherwise (a) — no standing cross-tenant grant on a tenant-owned table | `recompute.windows`, the job that delivers a new forecast to a dashboard | Phase 9's recomputation pipeline, and the "new run changes the window" scenario |
 | `OPEN-11` | What shape is a `ClimateBriefing` body? | (a) a bounded JSON document with sections that each cite evidence segment ids; (b) free-form text plus citations; (c) not in v1 | (a) — deterministic validation is the point; free text cannot be checked against evidence and cannot be tested | `ai_briefings` writes and validation, the AI slice | AI slice stays unimplementable |
@@ -64,7 +64,8 @@ Recorded so the answer to "why is work still happening?" is on the page:
 - Monitoring, observability, and operational documentation that reads existing tables.
 - Test and type hardening of anything already merged.
 
-These stay blocked until §1 is answered: catalog seed content (`OPEN-20`), field
-snapshot construction (`OPEN-21`), real-data cell resolution (`OPEN-18`), production
-recomputation (`OPEN-27`), AI briefing (`OPEN-11`), point-field snapshots
-(`OPEN-17`), planting records (`OPEN-09`), account deletion (`OPEN-04`).
+These stay blocked until §1 is answered: field snapshot construction (`OPEN-21`),
+real-data cell resolution (`OPEN-18`), production recomputation (`OPEN-27`), AI
+briefing (`OPEN-11`), point-field snapshots (`OPEN-17`), planting records
+(`OPEN-09`), account deletion (`OPEN-04`). Catalog seed content (`OPEN-20`) came off
+this list on 2026-11-28; the queue keeps the answered row for its record.

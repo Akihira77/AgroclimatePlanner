@@ -237,7 +237,8 @@ GET    /health  |  /health/ready
 The catalog routes are `GET` only, by construction: `app_api` holds `SELECT` on the
 six catalog tables and a published profile is frozen by trigger. A seed run as
 `migration_owner` is the only writer, and publishing, duplicating, and editing a
-profile are not HTTP operations in v1 — `OPEN-20` still decides what a seed may
+profile are not HTTP operations in v1 — the seed is a `migration_owner` script
+(`pnpm db:seed:catalog`), and `OPEN-20` decided what it may
 contain.
 
 `GET /v1/climate/forecast` takes the same `provider`, `model` and `fieldId`, plus an

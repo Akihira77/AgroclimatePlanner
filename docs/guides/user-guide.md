@@ -22,9 +22,11 @@ for every number on every screen:
 - **The climate values come from fixtures.** The only grid configured is
   `synthetic/synthetic_1deg_20x20`. A real provider answers `GRID_NOT_FOUND`,
   because the field → cell mapping has no writer until `OPEN-18` is decided.
-- **No crop catalogue is seeded.** Until `OPEN-20` settles what the v1 catalogue
-  ships, the Katalog screen may be empty, and it says so instead of showing a
-  blank grid.
+- **The crop catalogue arrives by running a command.** `pnpm db:seed:catalog`
+  inserts four crops with one cultivar and one published rulebook each, as
+  `migration_owner`. Until it runs, the Katalog screen is empty and says how to
+  fill it. The seed ships no water threshold for kedelai or cabai, because the
+  evidence for one is missing — those two profiles say so rather than guessing.
 - **No account management.** No password reset, no email verification, no account
   deletion. Registration and login are the whole lifecycle (`OPEN-04` is the open
   decision for deletion).
@@ -169,9 +171,10 @@ Two things to read carefully:
 2. **This is a rulebook, not a recommendation.** The footer of every version says
    so. Nothing on this screen has been applied to any field of yours.
 
-If the catalogue is empty, the screen says the rows are seeded by
-`migration_owner` and that v1 coverage waits on `OPEN-20` — the seed is a
-migration decision, not something the interface can do.
+If the catalogue is empty, the screen names the command that fills it
+(`pnpm db:seed:catalog`). The seed runs as `migration_owner`, because catalogue
+rows are global reference data and no runtime role may write them; it is not
+something the interface can do, and it will not overwrite a published profile.
 
 ---
 
@@ -250,8 +253,8 @@ Recorded so the absence is a decision rather than an oversight:
 - No map view, tiles or basemap — no projection decision, no provider.
 - No alerts, notifications or exports.
 - No password reset, email verification or account deletion.
-- No admin surface for the catalogue — it is seeded by migration, and
-  administering it is a database operation today.
+- No admin surface for the catalogue — it is seeded by a script run as the schema
+  owner, and administering it is a database operation today.
 - No read-only or shared link; every route requires a session.
 
 Each of these is gated by a decision recorded in

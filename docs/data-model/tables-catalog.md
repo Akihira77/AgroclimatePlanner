@@ -11,8 +11,10 @@ already given (`domain-model.md` §3 invariant).
 **No agronomic threshold is invented in this document.** Every value that appears
 below is a *column definition*, not a number. The values themselves come from
 `docs/research/agronomic-reference-matrix.md`, are graded A–D there, and are seeded
-later with their `source_refs`. Phase 3 created the tables; it did not seed them,
-and the catalog is empty.
+with their `source_refs` by `packages/database/scripts/seed-catalog.mjs`
+(`pnpm db:seed:catalog`, owner decision `OPEN-20`, 2026-11-28). Phase 3 created the
+tables; the seed arrived later, and it is a script because published rows are
+immutable.
 
 ---
 
@@ -163,10 +165,12 @@ transition rule, not a row-state rule. Two mechanisms, both required:
    row would change any column other than `status`, or `NEW.status` is `draft`.
    Allowed transitions are `published → retired` and nothing else.
 
-The trigger is specified here and **not created** in this phase. It exists because
-`migration_owner` can write the table: without it, a seed script correcting a typo
-in place would silently change what every stored window was evaluated against,
-while the windows still name this id.
+The trigger is specified here; it was created later, by
+`20261127120000_crop_profile_immutability`, together with the child-table triggers
+for stages, constraints and citations. It exists because `migration_owner` can write
+the table: without it, a seed script correcting a typo in place would silently
+change what every stored window was evaluated against, while the windows still name
+this id.
 
 Retiring does not rewrite history: a retired profile still serves every artifact
 that references it. Retiring means "no new recommendation may choose this version".

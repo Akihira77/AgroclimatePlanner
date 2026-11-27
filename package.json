@@ -19,6 +19,7 @@
     "db:generate": "pnpm --filter @agroclimate/database db:generate",
     "db:bootstrap": "pnpm --filter @agroclimate/database db:bootstrap",
     "db:verify": "pnpm --filter @agroclimate/database db:verify",
+    "db:seed:catalog": "pnpm --filter @agroclimate/database db:seed:catalog",
     "db:verify:probes": "pnpm --filter @agroclimate/database db:verify:probes",
     "db:status": "pnpm --filter @agroclimate/database db:status",
     "format": "prettier --write .",

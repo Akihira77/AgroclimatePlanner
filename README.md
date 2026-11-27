@@ -12,8 +12,9 @@ suitability engine. The web app has screens for all of it.
 
 What is not there is a production deployment and the decisions it depends on: no
 hosting or TLS, no validated provider grid (`OPEN-18`), no commercial ingestion
-licence (`OPEN-03`), no scheduler, no seeded crop catalog (`OPEN-20`, `OPEN-21`),
-and no AI briefing (`OPEN-11`). `docs/OWNER_DECISIONS.md` holds those decisions;
+licence (`OPEN-03`), no scheduler, and no AI briefing (`OPEN-11`). The crop catalog
+ships by running `pnpm db:seed:catalog`; field-to-snapshot mapping (`OPEN-21`) is
+still open, so nothing evaluates a field yet. `docs/OWNER_DECISIONS.md` holds those decisions;
 `docs/IMPLEMENTATION_MASTER_ROADMAP.md` holds the phase state.
 
 | Layer           | State                                                                                                                                                                                         |

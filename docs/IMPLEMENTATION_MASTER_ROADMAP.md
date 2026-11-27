@@ -534,13 +534,15 @@ Do not introduce a new geometry interpretation merely to make a snapshot pass va
 
 ## 7.5 Crop catalog — Phase 4.6 / Phase 3 product domain
 
-**Status: `DONE` for catalog reads; seed still gated**
+**Status: `DONE` — reads and seed**
 
 Every read contract, the repository, the service, the three routes and the
-version-immutability triggers exist and are tested. What is missing is the seed
-itself: no catalog row is inserted, so the screens render empty states. That waits
-on `OPEN-20` (v1 seed scope) and `OPEN-21` (field vocabulary mapping), and on
-evidence grades that nobody has reviewed.
+version-immutability triggers exist and are tested. The seed shipped 2026-11-28 as
+`packages/database/scripts/seed-catalog.mjs` (`pnpm db:seed:catalog`), after
+`OPEN-20` was answered with option (b): four crops, one cultivar and one published
+rulebook each, with the thresholds that have no defensible number left out rather
+than guessed. Field vocabulary mapping (`OPEN-21`) still blocks snapshots, not the
+catalogue.
 
 - [x] Define crop catalog read contracts. `packages/contracts/src/crop.ts`.
 - [x] Implement crop catalog repository. `packages/database/src/crops.ts`, SELECT-only.
@@ -941,7 +943,7 @@ function being wired into one.
 - [ ] Validate temporal resolution consistency — same reason.
 - [ ] Reject invalid partition before persistence — the caller contract is "refuse to write when non-empty", and there is no caller. A boolean shortcut was deliberately not provided, because it invites a warning instead of a refusal.
 - [ ] Add property-based or exhaustive boundary tests — nine cases cover adjacency, containment, gap edges, span and coverage; they are not exhaustive.
-- [ ] Add real database write-path integration tests — needs the write path that `OPEN-20` and `OPEN-27` still gate.
+- [ ] Add real database write-path integration tests — needs the write path that `OPEN-27` still gates.
 
 This is a hard blocker for persisting valid planting windows.
 
@@ -983,11 +985,12 @@ there is no scheduler to produce them.
 
 # 10. Phase 6 — Agronomic Suitability & Planting Window Engine
 
-**Status: `PARTIAL`** — contracts, catalog reads, constraint evaluation, stage
-alignment, verdict classification, the partition validator and suitability assembly are
-implemented; the catalog seed, scoring, window generation, persistence and
-recomputation are blocked by `OPEN-20`, `OPEN-26` and `OPEN-27`. See §18 Priority 5 for
-what each blocked item waits on.
+**Status: `PARTIAL`** — contracts, catalog reads, the four-crop seed, constraint
+evaluation, stage alignment, verdict classification, the partition validator and
+suitability assembly are implemented; scoring, window generation, persistence and
+recomputation are blocked by `OPEN-26` and `OPEN-27` (the seed no longer blocks
+anything — `OPEN-20` was answered 2026-11-28). See §18 Priority 5 for what each
+blocked item waits on.
 
 ## Objective
 
@@ -1145,8 +1148,9 @@ if introduced, must not be interpreted as the probability of crop success.
 
 ## 10.7 EvidenceSegment validation and persistence — 6.6
 
-**Dependency: `OPEN-26` resolved for the code half; persistence waits on `OPEN-20`
-and `OPEN-27`.**
+**Dependency: `OPEN-26` resolved for the code half; persistence waits on `OPEN-27`.
+The catalogue half is no longer a dependency: `OPEN-20` was answered 2026-11-28 and the
+seed ships with the repository.
 
 - [x] Implement the approved six-check validator.
 - [x] Validate segments against the complete planting-window interval.
@@ -1617,16 +1621,15 @@ Daftar berikut harus menjadi referensi utama ketika menentukan urutan implementa
 | `OPEN-09` | Planting status vocabulary | Planting status default/index and corresponding workflow |
 | `OPEN-16` | Weather-record growth and retention policy | Long-running ingestion volume |
 | `OPEN-28` | Signed tenant context, required only if a leaked DSN is in scope | RLS is the only tenant boundary until then; `docs/security/review.md` §3 states what that does and does not bound |
-| `OPEN-20` | v1 catalog seed scope (which graded thresholds ship) | Crop catalog seeding and Phase 6 profiles |
 | `OPEN-12` | Verification/scoring table shape | Phase 9 forecast verification |
 | `OPEN-06`/`OPEN-07`/`OPEN-08`/`OPEN-10`/`OPEN-14`/`OPEN-23`/`OPEN-24` | Catalog and vocabulary details | Phase 6 constraint authoring |
 | `OPEN-22`/`OPEN-25`/`OPEN-29`/`OPEN-19`/`OPEN-15` | Maintenance and snapshot details | Phase 6/9 hardening |
 | Agronomic citation gaps | Threshold evidence | Production-grade crop profiles |
 
 The table above is the cross-phase subset only. The authoritative list, with resolution state and revisit
-conditions for all 29 items, is `docs/data-model/open-decisions.md`. Reconciled 2026-11-28: 27 of the 29 are
-live and appear above, singly or in the two grouped rows; `OPEN-01` and `OPEN-13` are resolved and absent
-because a resolved decision is not a blocker. `OPEN-28` was the gap — a live conditional decision, and the
+conditions for all 29 items, is `docs/data-model/open-decisions.md`. Reconciled 2026-11-28: 26 of the 29 are
+live and appear above, singly or in the two grouped rows; `OPEN-01`, `OPEN-13` and `OPEN-20` are resolved and
+absent, because a resolved decision is not a blocker. `OPEN-28` was the gap — a live conditional decision, and the
 security one, missing from a table that otherwise read as if nothing about tenant context were open.
 
 ## 14.1 Parallelizable work
@@ -1881,18 +1884,19 @@ direct read of live `weather_records`; the monthly contract is unchanged.
 agronomic calculations" above the engine itself. Growth-stage alignment cannot
 evaluate 0–45 days without it.
 
-## Priority 3 — Crop catalog and Phase 6 contracts — **catalog reads DONE, seed still gated**
+## Priority 3 — Crop catalog and Phase 6 contracts — **catalog reads and seed DONE**
 
 - [x] Implement crop catalog API (crops, cultivars, profile versions, growth stages, constraints, source refs).
-- [ ] Seed the four v1 crops with graded evidence; kedelai and cabai keep `water = insufficient_data`. **Blocked by `OPEN-20`**: the seed scope is an owner decision, and no threshold may be promoted from grade C to a hard gate to fill it.
+- [x] Seed the four v1 crops with graded evidence; kedelai and cabai keep `water = insufficient_data`. `packages/database/scripts/seed-catalog.mjs` + `pnpm db:seed:catalog`, content in `scripts/lib/catalog-seed-data.mjs`, asserted by `test/unit/catalog-seed-data.test.mjs` (17 assertions) and exercised against a real database by `test/integration/catalog-seed.test.mjs` (4 tests: insert-then-publish, idempotency, the second-rulebook refusal, and the immutability refusal the second run depends on). Four crops, four cultivars, four published profiles, 14 stages, 12 constraints, 5 citations; only grade A gates, and only the paddy standing-water rule is hard. Run against the development database: `GET /v1/crops` returns four slugs and every profile satisfies `cropProfileVersionSchema`.
 - [x] Enforce profile-version immutability, on the version and on its stages, thresholds and citations.
-- [ ] Resolve `OPEN-20` (seed scope) and `OPEN-21` (field vocabulary mapping). Neither is a code decision; both stay recorded as blockers.
+- [x] Resolve `OPEN-20` (seed scope) — answered option (b) by the owner, 2026-11-28, seed shipped. `OPEN-21` (field vocabulary mapping) is still open and still blocks snapshots.
 - [x] Define CropProfile, FieldSnapshot, suitability and planting-window row contracts, and the engine-version fields.
 - [x] Define the deterministic hash input. `derivationDescriptorSchema` already covered `suitability_run` and `planting_window`; the row contracts now carry the same versions and hashes they hash.
 
-**What is still missing on purpose:** no suitability engine, no window generator, no
-`OPEN-26` partition validator, and no catalog rows. The contracts describe what the
-migration can store, not what an evaluation would decide.
+**What is still missing on purpose:** no window generator, no scoring, no persisted
+verdict. The contracts, the evaluator, the partition validator and the seed all exist;
+what does not is anything that turns a field into a judgment — that needs `OPEN-21`
+for the snapshot mapping and `OPEN-27` for the recompute fan-out.
 
 **Why:** the engine cannot start without a readable, versioned catalog. Catalog
 seeding is the last unblocked prerequisite; the provider gates do not touch it.
@@ -1916,10 +1920,10 @@ are enough to begin; waiting for Phase 6–8 delays the only demonstration of va
 - [x] Implement pure suitability dimensions on synthetic fixtures. `packages/agronomy/src/constraint.ts`: one constraint against one observation, deterministic, no clock. `null` is `insufficient_data`, never a pass; grade C may not gate, grade D may not vote.
 - [x] Implement growth-stage alignment. `packages/agronomy/src/stages.ts`: UTC calendar arithmetic, inclusive stage bounds, a gap is `null` rather than the previous stage, and critical windows are clipped to the cycle at either duration extreme.
 - [x] Implement suitability assembly — one profile's rules, one observation each, one verdict. `packages/agronomy/src/suitability.ts`: `assessSuitability({ constraints, observations, primaryBasis })` evaluates every rule, summarises the five dimensions, derives the hard-gated dimensions from the rulebook itself, and hands both to `classifyVerdict`; it returns the verdict, its reasons, per-dimension coverage, the weakest evidence grade in a fully observed dimension (`null` when no dimension is `known`) and every evaluation. **Observations are keyed by `constraint.id` on purpose**: the schema carries a dimension, a comparator, a bound and a unit but no metric name, so "water means total mm over the critical stage" is an agronomic mapping with a citation, not something an engine may infer from a unit string — that mapping belongs to the seed `OPEN-20` gates. A missing key and a `null` are both "not measured", and a non-finite number joins them at the comparison in `constraint.ts`: `NaN` would read as a violation and `±Infinity` as a pass. An id matching no constraint, a duplicated constraint id, or an empty rulebook raises `SuitabilityInputError` with a code, rather than producing a verdict.
-- [ ] Implement planting-window generation. **`OPEN-26` no longer blocks it** — the validator exists and is tested. It still needs a profile with real thresholds (`OPEN-20`) and a field→cell writer (`OPEN-27`), so a generated window would have nothing to evaluate against.
+- [ ] Implement planting-window generation. **`OPEN-26` no longer blocks it** — the validator exists and is tested. The profiles now exist too (four crops seeded 2026-11-28), so what remains is a field→cell writer (`OPEN-27`): without one there is no observation to evaluate a generated window against.
 - [x] Resolve `OPEN-26` and implement the EvidenceSegment validator. `packages/agronomy/src/partition.ts`: one violation per failed check, not a boolean; impossible dates refused rather than normalised; a zero-coverage segment treated as a missing range; a gap measured from the farthest covered day; the union required to touch both window extremes; coverage reconciled in both directions, so a segment whose uncovered days are declared nowhere is refused. One limit named in the code: no writer calls the function yet, so the invariant is enforced by the absence of a write path.
 - [ ] Implement tenant-scoped recomputation (`OPEN-27`).
-- [ ] Validate crop scenarios. **Blocked by `OPEN-20`** for real profiles; the four-crop scenario matrix needs reviewed thresholds that do not exist yet.
+- [ ] Validate crop scenarios. The v1 thresholds exist as of 2026-11-28, but they have not been reviewed by an agronomist — `OPEN-20` settled which rows ship, not whether the numbers are right for a given locality. Scenario validation waits on that review, not on a decision.
 
 **What is still missing on purpose:** no window, no persistence, no route, no score.
 The engine's evidence rules are enforced, not relaxed, so a rulebook row that

@@ -604,9 +604,9 @@ The provider's `precipitation_mean` is not automatically the monthly accumulatio
 ## 4.7 Agronomic Suitability Engine
 
 **Status repository: partially implemented.** The rulebook's contracts, its immutability,
-one-threshold evaluation and stage alignment exist (`0937838`, `738f001`). No seed, no
-score, no verdict, no window, and no route: those wait on `OPEN-20`, `OPEN-26` and
-`OPEN-27`.
+one-threshold evaluation, stage alignment and the four-crop seed exist (`0937838`,
+`738f001`; seed added 2026-11-28). No score, no verdict, no window, and no route: those
+wait on `OPEN-26` and `OPEN-27`. `OPEN-20`, the seed scope, was answered 2026-11-28.
 
 ### Objective
 
@@ -1477,11 +1477,11 @@ These decisions supersede older documentation that still says seasonal 1–7 and
 | Sub-phase | Deliverable | Status |
 |---|---|---|
 | 6.1 | Agronomic domain contracts and profile versioning | Contracts and immutability triggers shipped (`0937838`) |
-| 6.2 | Crop catalog and seed data | Catalog reads shipped; **seed blocked by `OPEN-20`** |
+| 6.2 | Crop catalog and seed data | Catalog reads shipped; four-crop seed shipped as `pnpm db:seed:catalog` (`OPEN-20` answered 2026-11-28) |
 | 6.3 | Pure deterministic suitability engine | Constraint evaluation and per-dimension coverage shipped (`738f001`); scoring and reasons not started |
 | 6.4 | Growth-stage alignment | Stage and critical-window alignment shipped (`738f001`) |
-| 6.5 | Planting window generation | **Blocked by `OPEN-26`** |
-| 6.6 | EvidenceSegment validation and persistence | **Blocked by `OPEN-26`** |
+| 6.5 | Planting window generation | **Blocked by `OPEN-27`** (the `OPEN-26` validator exists) |
+| 6.6 | EvidenceSegment validation and persistence | Validator shipped and tested; persistence waits on `OPEN-27` |
 | 6.7 | API and recomputation integration | **Blocked by `OPEN-26`/`OPEN-27`** |
 
 What shipped is the half that needs no owner threshold and no provider grid: the

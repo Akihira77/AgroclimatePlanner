@@ -124,8 +124,8 @@ database and is checked by the Phase 5 audit.
 Rules:
 
 1. **Publication is one-way.** `draft → published → retired`. `published →
-   draft` is refused by the immutability trigger (`D5`), which is specified and
-   not yet created.
+   draft` is refused by the immutability trigger (`D5`), created by
+   `20261127120000_crop_profile_immutability` (§6).
 2. **Retiring does not rewrite history.** A retired profile still serves every
    artifact that names it. Retiring means "no new recommendation may choose this
    version" — enforced by the partial unique index on
@@ -208,15 +208,15 @@ No table in this model has a `TTL`, a `expires_at`, or a scheduled purge. A purg
 is a destructive operation on a provenance record, and it does not exist as a
 capability in Phase 3.
 
-## 6. Lifecycle events that need a trigger, and do not have one
+## 6. Lifecycle events that need a trigger — and which of them have one
 
 | Event | Mechanism now | Gap |
 |---|---|---|
 | `updated_at` maintenance | application (Prisma `@updatedAt`) | raw SQL bypasses it — `OPEN-19` |
-| `crop_profile_versions` immutability | no `UPDATE` grant; trigger **specified, not created** | `migration_owner` can still edit a published row by typo |
+| `crop_profile_versions` immutability | no `UPDATE` grant; `crop_profile_versions_immutable` and its three child triggers, created by `20261127120000_crop_profile_immutability` | closed: a published row can be retired, never edited |
 | supersession ordering | partial unique index + single transaction | a writer that violates the order gets a unique violation, which is the intended failure |
 | `served_updated_at` | writer's responsibility | a direct `UPDATE` of `served_lat` without the timestamp is possible; the column is metadata, not an invariant |
 | partition invariant on `evidence_segments` | nothing | `OPEN-26` |
 
-Only the second is a data-integrity gap with a specified fix. The rest are
-review-enforced or tracked.
+Only the second was a data-integrity gap with a specified fix, and that fix landed
+on 2026-11-27. The rest are review-enforced or tracked.
