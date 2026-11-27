@@ -154,11 +154,18 @@ port on the first state-changing request. Moving the dev server is therefore two
 variables that must agree:
 
 ```bash
-PORT=3010 WEB_PORT=5174 CORS_ORIGINS=http://localhost:5174 \
+PORT=3010 WEB_PORT=5174 \
+CORS_ORIGINS='http://localhost:5174,http://127.0.0.1:5174' \
   node apps/api/dist/main.js            # terminal 1
 PORT=3010 WEB_PORT=5174 \
   pnpm --filter @agroclimate/web dev    # terminal 2
 ```
+
+Both hostnames are listed because the browser sends whichever one was typed, and an
+allowlist entry is an exact match: opening `127.0.0.1:5174` while the list names
+`localhost:5174` loads the page and refuses every write with `403 FORBIDDEN`. The
+API log line names the origin it refused, so the mismatch is visible there rather
+than only in the browser's network tab.
 
 Verify the API:
 
@@ -216,6 +223,7 @@ without asking. Use it when you mean it.
 | Prisma `P3009` — failed migrations in the target database | a migration failed and `deploy` will not proceed | read `docs/operations/migration-rollback.md`; resolve the row deliberately, never edit the file |
 | `ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL` with no compiler error shown | pnpm's wrapper hides the inner exit | run the package script directly, e.g. `cd apps/api && npx tsc -p tsconfig.json --noEmit` |
 | Port 5173 in use | `strictPort` by design | set `WEB_PORT` to a free port **and** add that origin to `CORS_ORIGINS`; a moved port alone fails on the first `POST` |
+| `403 FORBIDDEN` on every write, reads fine | the browser's `Origin` is not in `CORS_ORIGINS` — usually `127.0.0.1` vs `localhost`, or a moved `WEB_PORT` | add the exact origin you typed; the API logs which one it refused |
 | Worker exits with `config_error` | `APP_SYSTEM_DATABASE_URL` is unset | export it (see §6) |
 
 ---
