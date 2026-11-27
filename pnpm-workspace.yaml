@@ -39,5 +39,11 @@ allowBuilds:
 # A security pin, not a version choice. Prisma's config package depends on
 # effect 3.20.0, which falls inside GHSA-7589-6fvf-x4pw (ReDoS in
 # Schema.TemplateLiteral). The advisory's fixed release is 3.22.1.
+#
+# Remove this the moment a Prisma release pins a fixed effect itself: an override
+# that outlives its reason silently hides what upstream resolves. Check with
+# `pnpm why effect` after a Prisma bump. Nothing in this workspace imports effect;
+# the only consumer is the Prisma CLI reading a file this repository controls, so
+# the advisory was never a reachable attack path here — the failing audit was.
 overrides:
   effect: 3.22.1
