@@ -131,15 +131,16 @@ days 0..3       → BMKG + Open-Meteo deterministic (forecast, not observation)
 days 4..14      → Open-Meteo deterministic + IFS ensemble (50 members)
 days 15..45     → EC46 daily / weekly (50 / 100 members) — subseasonal
 months 2..7     → SEAS5 monthly mean + anomaly (7 rows only when forecast_days≥200)
-months 8..12    → climatology 1991–2020, explicitly labelled "Normal historis (1991–2020)"
+lead 7..12      → climatology 1991–2020, explicitly labelled "Normal historis (1991–2020)"
 ```
 
 The seasonal/climatology split is **6 or 7 months depending on the pinned `forecast_days`**, so the boundary must be an asserted property of the adapter, not a comment. Daily rows extend past the monthly product (to 2027-06-05 at 200 days); the monthly axis is authoritative for the seasonal layer, and June 2027 must not be rolled up as a seasonal month.
 
-> **Band note (2026-11-24).** "months 2..7" above is provider-capability research, not the product
-> band. The approved band is lead months **1–7** inclusive (`Q-P5-BAND`,
-> `climate-data-foundation.md` §8.7C.2), and what lead month 1 anchors to is still an open owner
-> decision. Read §8.7C.2 before deriving a month from a forecast run.
+> **Band note (resolved 2026-11-24).** "months 2..7" above is provider-capability research, not
+> the product band. The shipped band is lead months **1–6** `seasonal_forecast` and **7–12**
+> `climatology` (`Q-P5-BAND` resolved; `climate-data-foundation.md` §8.7C.2): lead month 1 is the
+> calendar month after a run's initialisation month, so a seven-month run window fills six leads.
+> Read §8.7C.2 before deriving a month from a forecast run.
 
 Every month record must carry `dataClass` (the 9-value enum from ADR-001 D9) plus `evaluationBasis` and `dataAvailability`. Mixing classes inside one value is prohibited at storage and at render time.
 
@@ -148,7 +149,7 @@ Every month record must carry `dataClass` (the 9-value enum from ADR-001 D9) plu
 ## 3. Hard constraints derived from the evidence
 
 1. **BMKG cannot be the backbone.** 3 days, village points only, no probability. It is a *validation and local-trust layer*, not the 12-month engine.
-2. **No free verified annual outlook exists at farm-point level.** Months 8–12 are climatology, by necessity, and must say so.
+2. **No free verified annual outlook exists at farm-point level.** Months 7–12 are climatology, by necessity, and must say so.
 3. **SEAS5 refreshes once a month (5th).** A "live" 12-month view will legitimately show a 1–31 day old seasonal initialization. Freshness must be shown, not hidden.
 4. **Anomalies are model-climatology anomalies.** They are not anomalies against local station normals. Displaying them as "X mm below normal for your field" without a caveat is a scientific error. The platform must either (a) label them as model-relative, or (b) recompute anomaly against the ERA5 1991–2020 baseline and label the method.
 5. **6-hourly native seasonal data must not be rendered as daily weather.** SEAS5 floor is **monthly** — a dekadal value cannot be derived from a monthly mean without inventing a within-month distribution. EC46 daily is legitimate but only to day 45 (42 for weekly statistics), and it is subseasonal, not "weather".

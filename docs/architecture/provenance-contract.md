@@ -549,7 +549,7 @@ This is the distinction that prevents climatology from disguising an operational
 ```ts
 type MissingReason =
   | "beyond_horizon"      // structural: no genuine forecast exists at this lead time
-  | "not_requested"       // cell not in scope for this run
+  | "not_requested"       // cell not in scope for this run — retained for pre-5.7D rows; nothing emits it since every lead month has an approved class
   | "pending"             // ingest queued or running
   | "ingest_failed"       // adapter/job failed
   | "provider_unavailable"// provider supplied no complete value; also the generic fallback when no cause is stored

@@ -83,6 +83,12 @@ export const canonicalArrayRules: Readonly<Record<string, SetRule | SequenceRule
   // `sampleYears` are content, so two rows for one identity with different
   // values are a conflict rather than a duplicate to drop.
   monthlyNormals: { kind: "set", orderBy: ["cellKey", "month"], dedupe: true },
+
+  // Seasonal record-set preimage (5.7D). Identity is the member's own position —
+  // `(month, memberIndex)` — so a reordered population hashes identically and two
+  // values for one member are a conflict rather than a duplicate to drop.
+  memberCountByMonth: { kind: "set", orderBy: ["month"], dedupe: true },
+  members: { kind: "set", orderBy: ["month", "memberIndex"], dedupe: true },
 };
 
 /**

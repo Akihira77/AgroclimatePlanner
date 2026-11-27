@@ -75,8 +75,9 @@ const CELL_KEY = "-7.00,106.00";
 const OTHER_CELL_KEY = "0.00,110.00";
 
 const FIRST_MONTH = "2026-11-01";
-/** Lead months 8–12 — the only band `MONTHLY_OUTLOOK_BANDS` lets climatology fill. */
+/** Lead months 7–12 — the only band `MONTHLY_OUTLOOK_BANDS` lets climatology fill. */
 const CLIMATOLOGY_MONTHS = [
+  ["2027-05-01", 154.75],
   ["2027-06-01", 120.5],
   ["2027-07-01", 98.25],
   ["2027-08-01", 76],
@@ -283,7 +284,7 @@ describe("climate outlook — field visibility and grid selection", () => {
 });
 
 describe("climate outlook — serving stored months", () => {
-  it("serves twelve months in order, with climatology at leads 8–12", async () => {
+  it("serves twelve months in order, with climatology at leads 7–12", async () => {
     const field = await createField(alice, (await createFarm(alice)).id);
     const cellId = await mintCell(alice, field.id);
     await seedClimatologyBand(cellId);
@@ -321,18 +322,18 @@ describe("climate outlook — serving stored months", () => {
       ],
     );
 
-    for (const month of outlook.months.slice(0, 7)) {
-      assert.equal(month.valueMm, null, `lead ${month.leadMonth} has no source in this build`);
+    for (const month of outlook.months.slice(0, 6)) {
+      assert.equal(month.valueMm, null, `lead ${month.leadMonth} has no stored row`);
       assert.equal(month.dataClass, null);
       assert.equal(month.estimator, null);
       assert.equal(month.derivationVersion, null);
-      assert.equal(month.missingReason, "not_requested");
+      assert.equal(month.missingReason, "pending");
       assert.equal(month.unit, "mm");
     }
 
     for (const [index, [month, valueMm]] of CLIMATOLOGY_MONTHS.entries()) {
-      const served = outlook.months[7 + index];
-      assert.equal(served.leadMonth, 8 + index);
+      const served = outlook.months[6 + index];
+      assert.equal(served.leadMonth, 7 + index);
       assert.equal(served.month, month);
       assert.equal(served.valueMm, valueMm);
       assert.equal(served.dataClass, "climatology");
@@ -352,20 +353,20 @@ describe("climate outlook — serving stored months", () => {
     const field = await createField(alice, (await createFarm(alice)).id, ELSEWHERE);
     const cellId = await mintCell(alice, field.id);
     assert.equal(await cellIdOf(OTHER_CELL_KEY), cellId);
-    // Leads 9 and 11 are seeded; 8, 10, and 12 are not.
+    // Leads 8 and 10 are seeded; 9, 11, and 12 are not.
     await seedClimatologyMonth(cellId, CLIMATOLOGY_MONTHS[1]);
     await seedClimatologyMonth(cellId, CLIMATOLOGY_MONTHS[3]);
 
     const { response, body } = await getOutlook(alice, { fieldId: field.id });
     assert.equal(response.status, 200, JSON.stringify(body));
 
-    const band = body.data.months.slice(7);
+    const band = body.data.months.slice(6);
     assert.deepEqual(
       band.map((month) => month.valueMm),
-      [null, CLIMATOLOGY_MONTHS[1][1], null, CLIMATOLOGY_MONTHS[3][1], null],
+      [null, CLIMATOLOGY_MONTHS[1][1], null, CLIMATOLOGY_MONTHS[3][1], null, null],
     );
     // A gap in the baseline is absence, not a failure and not a zero.
-    for (const month of [band[0], band[2], band[4]]) {
+    for (const month of [band[0], band[2], band[4], band[5]]) {
       assert.equal(month.dataClass, null);
       assert.equal(month.missingReason, "pending");
       assert.notEqual(month.valueMm, 0);
@@ -376,13 +377,15 @@ describe("climate outlook — serving stored months", () => {
     const field = await createField(alice, (await createFarm(alice)).id, ELSEWHERE);
     const cellId = await mintCell(alice, field.id);
 
-    const activeId = await seedClimatologyMonth(cellId, ["2027-06-01", 111.5]);
+    // Lead 7: the first month the climatology band may fill, and distinct from
+    // the months the previous case seeded into this same cell.
+    const activeId = await seedClimatologyMonth(cellId, ["2027-05-01", 111.5]);
     const superseded = await harness.owner.$queryRawUnsafe(
       `INSERT INTO app.monthly_outlooks
          (outlook_cell_id, variable, month, data_class, evaluation_basis, value_mm,
           missing_reason, baseline_version, derivation_version, input_refs,
           input_snapshot_hash, spread_unavailable_reason, status, superseded_by_id)
-       VALUES ($1::uuid, 'precipitation', '2027-06-01'::date, 'climatology', 'climatology',
+       VALUES ($1::uuid, 'precipitation', '2027-05-01'::date, 'climatology', 'climatology',
                999.5, 'beyond_horizon', $2, $3, '[]'::jsonb, $4,
                'climatology_has_no_ensemble', 'superseded', $5::uuid)
        RETURNING id::text AS id`,
@@ -397,8 +400,8 @@ describe("climate outlook — serving stored months", () => {
     const { response, body } = await getOutlook(alice, { fieldId: field.id });
     assert.equal(response.status, 200, JSON.stringify(body));
 
-    const june = body.data.months[7];
-    assert.equal(june.valueMm, 111.5);
+    const may = body.data.months[6];
+    assert.equal(may.valueMm, 111.5);
     assert.equal(
       body.data.months.some((month) => month.valueMm === 999.5),
       false,

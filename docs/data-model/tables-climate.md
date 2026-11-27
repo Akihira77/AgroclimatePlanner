@@ -305,6 +305,8 @@ Notes:
 | `derivation_version` | `text` | no | — | assembly rule-set version |
 | `input_refs` | `jsonb` | no | — | `DataInputRef[]`; `CHECK (jsonb_typeof(input_refs) = 'array')` |
 | `input_snapshot_hash` | `text` | no | — | `^[0-9a-f]{64}$`; over the `monthly_outlook` descriptor variant |
+| `forecast_run_id` | `uuid` | yes | — | FK → `forecast_runs.id`, `NO ACTION`. The run that produced a seasonal month; `NULL` for a climatology month. Added by `20261124000000_monthly_outlook_run_identity` (5.7D) as the enforceable rank the supersession rule compares — `input_refs` carries the same id as provenance, not as a key |
+| `ingestion_run_id` | `uuid` | yes | — | FK → `ingestion_runs.id`, `NO ACTION`. The conversion of that run; the tie-breaker when two rows cite one initialisation. `NULL` for a climatology month |
 | `computed_at` | `timestamptz(6)` | no | `now()` | — |
 | `status` | `text` | no | `'active'` | `CHECK (IN ('active','superseded','failed'))` |
 | `superseded_by_id` | `uuid` | yes | — | FK → self |
@@ -322,7 +324,7 @@ month are different rows with different reasons. Encoded:
 | a climatology month with no forecast axis at all | set | `climatology` | `beyond_horizon` |
 | ingest pending | `NULL` | `NULL` | `pending` |
 | ingest failed / provider down | `NULL` | `NULL` | `ingest_failed` / `provider_unavailable` |
-| cell not in scope | `NULL` | `NULL` | `not_requested` |
+| cell not in scope | `NULL` | `NULL` | `not_requested` — **retired as a producer in 5.7D**: every lead month now has an approved class, so a no-row month is `pending`. The value stays in the CHECK so pre-5.7D rows remain readable |
 | baseline missing | `NULL` | `NULL` | `insufficient_history` |
 | coverage too low to claim a month | `NULL` | `NULL` | `below_coverage_threshold` |
 
@@ -333,6 +335,8 @@ Constraints:
 | `monthly_outlooks_pkey` | `PRIMARY KEY (id)` | — |
 | `monthly_outlooks_cell_fkey` | `FOREIGN KEY (outlook_cell_id) REFERENCES app.outlook_cells (id)` | an outlook for no cell |
 | `monthly_outlooks_superseded_fkey` | `FOREIGN KEY (superseded_by_id) REFERENCES app.monthly_outlooks (id)` | a broken audit chain |
+| `monthly_outlooks_forecast_run_fkey` | `FOREIGN KEY (forecast_run_id) REFERENCES app.forecast_runs (id)`, `NO ACTION` | a month citing a run that never existed; deleting a run that still backs a served month |
+| `monthly_outlooks_ingestion_run_fkey` | `FOREIGN KEY (ingestion_run_id) REFERENCES app.ingestion_runs (id)`, `NO ACTION` | the same for the conversion |
 | `monthly_outlooks_month_check` | `EXTRACT(DAY FROM month) = 1` | a month key that is not a month |
 | `monthly_outlooks_variable_check` | `variable = 'precipitation'` | an assembled variable with no approved assembly |
 | `monthly_outlooks_missing_reason_check` | `missing_reason IS NULL OR missing_reason IN (…)` — the `MissingReason` enum | a reason the API cannot map to a rendering |
@@ -352,6 +356,7 @@ Indexes:
 | `monthly_outlooks_active_key` | `UNIQUE (outlook_cell_id, variable, month) WHERE status = 'active'` | one live answer per cell-month |
 | `monthly_outlooks_cell_month_idx` | `(outlook_cell_id, month)` | render a 12-month outlook for a cell |
 | `monthly_outlooks_superseded_idx` | `(superseded_by_id) WHERE superseded_by_id IS NOT NULL` | trace a recompute chain |
+| `monthly_outlooks_forecast_run_idx` | `(forecast_run_id) WHERE forecast_run_id IS NOT NULL` | "which months did this run produce?" — audit and maintenance; partial because a climatology row has no run |
 
 Notes:
 
@@ -365,7 +370,9 @@ Notes:
   report in `provenance-contract.md` §6.
 - No `data_availability` column: availability is computed at read time
   (`temporal-and-weather-semantics.md` §5). Storing it would let a stale value
-  persist as `available`.
+  persist as `available`. 5.7D serves it as `availability: fresh | stale` from the
+  joined `forecast_runs.initialized_at`, so the label needs no column and clears
+  itself when a newer run is materialised.
 - **`value_mm` is a monthly accumulation estimated by a named rule, not a provider
   column copied across.** `Q-P5-7` settled the quantity on 2026-11-24: mm per
   calendar month, with the estimator determined by `data_class` through
@@ -388,7 +395,7 @@ shape which rows exist:
 | Rule | Consequence |
 |---|---|
 | A row needs real provenance | `input_refs` is `NOT NULL`, array-shaped, and the contract requires **≥ 1** ref. A month with no input has no honest ref, so it has **no row** |
-| Only climatology months are materialised | Lead months 8–12. Lead 1–7 exist as no-value entries in the assembled horizon (`packages/climate-core/src/aggregate.ts`) and are synthesised by the read path, not stored |
+| Only climatology months are materialised | Lead months 7–12 (5.7D restated the band from 8–12). Lead 1–6 are synthesised by the read path as `pending`, not stored |
 | A missing normal is a horizon gap, not a row | A cell-baseline with no normal for that calendar month emits `insufficient_history` in the in-memory horizon. No `pending` / `not_requested` row is written to stand for it |
 | The baseline is an explicit input | `baselineVersion` comes from the job payload. No `latest` query exists, and an unknown version is a terminal `baseline_unknown`, never a silent fallback (`Q-P5-8`) |
 
@@ -418,6 +425,21 @@ recompute rolls the whole transaction back and leaves the previous active row
 intact.
 
 ---
+
+### 5.2 The seasonal write path (Phase 5.7D)
+
+`persistSeasonalOutlook` writes the six months one SEAS5 run covers, and adds rules the
+climatology writer does not need:
+
+| Rule | Consequence |
+|---|---|
+| Rank, not arrival order | The candidate's rank is `(forecast_runs.initialized_at, ingestion_runs.created_at)`, read inside the transaction after the footprint lock. An older candidate writes nothing: `skipped` counts the months it was refused, `inserted` stays 0. Job completion order is invisible to the comparison |
+| Class precedence | A `seasonal_forecast` month may retire a `climatology` month; a `climatology` month may **not** retire a `seasonal_forecast` one, and `persistClimatologyOutlook` counts that refusal in its own `skipped` |
+| Run identity on the row | `forecast_run_id` and `ingestion_run_id` are written from the assembler's derivation, so a later job can rank the row without parsing `input_refs` |
+| All-or-nothing | A population that fails §8.7C.3's conditions for any one of the six months writes nothing and leaves the previous active answer in place |
+
+Both writers share `monthly_outlooks_active_key` and the stage-failed → retire-old →
+promote-new order, so two classes cannot both hold a month and no reader sees a gap.
 
 ## 6. `app.climatology_normals`
 

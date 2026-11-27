@@ -6,10 +6,11 @@ gates; 5.6 implemented behind its gates — values, storage, and the SEAS5
 per-member monthly aggregates required by ADR-001 D8b; ensemble **spread itself
 is not computed**); 5.7A (climatology materialisation) and 5.7B (climatology read
 route) implemented; 5.7C (seasonal source-selection and materialisation contract)
-documented with nothing implemented; 5.7's seasonal half is not written and 5.7D is
-partially blocked — the lead-month anchor (§8.7C.2) gates month selection, while run
-identity, the freshness field and member-count storage gate enforcement, labelling and
-provenance respectively (§8.7C.9); 5.8 not started.**
+documented; 5.7D (seasonal materialisation, SEAS5) implemented in the working tree on
+2026-11-24 — the anchor is resolved as "lead 1 is the month after the initialisation
+month", the band is restated as lead months 1–6 `seasonal_forecast` and 7–12
+`climatology`, run identity is two nullable FK columns, and freshness is served as a
+read-time `availability` label (§8.7C); 5.8 not started.**
 5.2.1–5.2.8 are complete as of `8a6f2ec` (2026-11-22): generic grid resolution, a
 synthetic registry instance, the tenant-scoped field centroid read, cell identity
 persistence, and `POST /v1/fields/:fieldId/resolve-cell`. 5.3 is complete as of the
@@ -200,7 +201,7 @@ inherited as facts:
 
 ### 4.1 Constraints that this table is written to honour
 
-1. **No 12-month daily forecast exists, and none is claimed.** Months 8–12 are
+1. **No 12-month daily forecast exists, and none is claimed.** Months 7–12 are
    `climatology`, labelled "Normal historis (1991–2020)".
 2. **BMKG stays disabled by default** until written permission is on file. With the
    flag off, days 0–3 are Open-Meteo, labelled `weather_forecast` — never "BMKG".
@@ -1377,7 +1378,7 @@ new file, dependency, or sub-phase.
 
 | Finding | Correction |
 |---|---|
-| **F-03** | `leadMonth` is 1-based, `1–12` inclusive. `MONTHLY_OUTLOOK_BANDS` is `1–7` (`seasonal_forecast`) and `8–12` (`climatology`) after the source-capability correction below; the 1–2 band no longer admits short-range classes. `monthlyOutlookHorizonSchema` enforces exactly twelve entries, in order, one per lead month, each bound to `calendarMonthOf(firstMonth, leadMonth)` — a pure year-rollover-safe resolver. Zero-based numbering is gone from every public contract |
+| **F-03** | `leadMonth` is 1-based, `1–12` inclusive. `MONTHLY_OUTLOOK_BANDS` is `1–6` (`seasonal_forecast`) and `7–12` (`climatology`); 5.7D restated it from `1–7` / `8–12` when the lead-month anchor was resolved (§8.7C.2), and the 1–2 band no longer admits short-range classes. `monthlyOutlookHorizonSchema` enforces exactly twelve entries, in order, one per lead month, each bound to `calendarMonthOf(firstMonth, leadMonth)` — a pure year-rollover-safe resolver. Zero-based numbering is gone from every public contract |
 | **F-04** | `coveragePercentOf` is the single rounding rule (basis points, half away from zero); `requestedCells ≥ 1` removes the zero-request case instead of defining it; `complete` requires 100%, `partial` requires an unanswered cell; counts and percentage must agree |
 | **F-05** | `outlookMonthSchema` cross-checks `dataClass` against `evaluationBasis`: climatology only with the climatology basis, forecast only with the monthly basis, pending with the monthly basis and no value. Every issue carries the offending path |
 | **F-06** | `defineGridSpec` copies and freezes `latRange`/`lonRange`, freezes the spec, and the registry stores a re-defined frozen spec rather than the caller's object |
@@ -1412,7 +1413,7 @@ Capability status after 5.2, stated so no reader infers more than exists:
 | Objective | one real provider payload can be turned into contract-valid records, offline |
 | Prerequisites | 5.0 |
 | Scope, as built | `@agroclimate/weather-core` created with `src/{failures,http,runtime,index}.ts`, `src/adapters/open-meteo-seasonal.ts`, `src/normalize/monthly.ts`; `apps/worker` untouched |
-| Scope, changed | the plan named `adapters/open-meteo-forecast.ts` (daily) first. SEAS5 monthly was built instead: it is the only product with a verified monthly quantity, and it is the only class a monthly outlook accepts at lead months 1–7. The daily adapter is deferred because it needs record assembly and the daily coverage threshold |
+| Scope, changed | the plan named `adapters/open-meteo-forecast.ts` (daily) first. SEAS5 monthly was built instead: it is the only product with a verified monthly quantity, and it is the only class a monthly outlook accepts at lead months 1–6. The daily adapter is deferred because it needs record assembly and the daily coverage threshold |
 | Contracts | `failures.ts` derives its four shared failure kinds from the contract's `AdapterResult` (`Extract<AdapterResult, { kind: … }>["kind"]`), so a rename there fails this package at compile time instead of letting two unions drift. `weather-core` depends on `@agroclimate/contracts` for that. Its own `AdapterOutcome<T>` stays narrower on purpose: the contract's success variants need observations and a cell-count coverage figure, which a monthly series does not have |
 | Not built | `normalize/*` does not produce `{ values, coverage, rejects }` or `weather_records`-shaped records — it validates a monthly series and stops at the provider's quantity (F-09). `fixtures/*` do not exist; the tests build labelled synthetic payloads inline |
 | Database impact | none |
@@ -1499,7 +1500,7 @@ column — never by inventing the value.
 
 | | |
 |---|---|
-| Objective | 1991–2020 monthly normals per cell, versioned — the class that fills months 8–12 |
+| Objective | 1991–2020 monthly normals per cell, versioned — the class that fills months 7–12 |
 | Prerequisites | 5.1, 5.3 |
 | Scope | **as built:** `packages/climate-core/src/climatology.ts` (the pure builder — a new workspace package, no I/O and no clock), `packages/weather-core/src/adapters/open-meteo-archive.ts` (ERA5 via `archive-api.open-meteo.com/v1/archive`), `apps/worker/src/ingest/climatology.ts` and its registration in `apps/worker/src/main.ts`, `packages/database/src/climatology.ts` (the versioned write), and the contract additions in `packages/contracts/src/{climate,hash,canonical,job}.ts`. The plan's path `packages/climate-core/climatology.ts` is realised as `src/` inside the package |
 | Contracts | `baselineVersion` is derived, not carried: `ERA5:1991-2020:v1` from dataset label, the fixed period and the algorithm version — no timestamp and no UUID, so a retry of the same calculation is the same version. The `v1` token is the calculation/source-semantics revision: aggregation, missing-data, sample-year, unit-interpretation, or provider endpoint/model/product changes must bump it; a refactor, a log line or a byte-identical adapter patch must not. `baselineHash` is `SHA256(canonicalJson(BaselineNormalsPayload))` over the stored monthly normals of the cells a derivation actually consumed, ordered by `(cellKey, month)`; it is not a hash of the table, it is not persisted in a column, and two conflicting normals for one `(cellKey, month)` are a canonicalisation error rather than a silent collapse. `climatologyJobPayloadSchema` is separate from the forecast payload because a baseline opens no run and carries no `forecastRunId` |
@@ -1530,10 +1531,10 @@ column — never by inventing the value.
 | Objective | `GET /v1/climate/outlook?fieldId=…` returns 12 labelled months from stored data |
 | Prerequisites | 5.5 (climatology alone is enough for a first honest release), 5.2 |
 | Scope | `packages/climate-core/aggregate.ts`, `apps/worker/src/aggregate/outlook.ts`, `apps/api/src/climate/*`, `packages/contracts/src/climate.ts` (response schema) |
-| Contracts | `MonthlyOutlook` response: month key, `dataClass`, `valueMm`, `missingReason`, coverage, spread, freshness per source |
-| Database impact | none; writes and reads `monthly_outlooks` |
+| Contracts | `MonthlyOutlook` response: month key, `dataClass`, `valueMm`, `missingReason`, coverage, spread, `availability` (`fresh` \| `stale`, read-time) |
+| Database impact | one additive migration, `20261124000000_monthly_outlook_run_identity`: nullable `forecast_run_id` / `ingestion_run_id` FKs on `monthly_outlooks` plus their index |
 | Tests | §7.1 rows 8–9; §7.2 read-path tenancy; a month with `ingest_failed` is not promoted; a 12-month response always has 12 entries |
-| Acceptance | with only climatology ingested, the API returns 12 entries: **five** (lead months 8–12) labelled `climatology` with `missing_reason = 'beyond_horizon'`, and lead months 1–7 present as `pending` / `not_requested` with no value, so no month claims a forecast; with seasonal data present, lead months 1–7 change class and 8–12 do not (`Q-P5-BAND`; the lead-1 anchor is still open — §8.7C.2) |
+| Acceptance | with only climatology ingested, the API returns 12 entries: **six** (lead months 7–12) labelled `climatology` with `missing_reason = 'beyond_horizon'`, and lead months 1–6 present as `pending` with no value, so no month claims a forecast; with seasonal data present, lead months 1–6 change class and 7–12 do not. `not_requested` is no longer emitted (§8.7C.2, §8.7C.7) |
 | Dependencies | 5.2, 5.5 (minimum), 5.4 and 5.6 (for a complete timeline) |
 | Risks | shipping a read API before the data exists and calling it done; the acceptance criterion above is written to prevent exactly that. **Missing-reason boundary:** a stored seasonal member-month null carries no cause, and raw payloads are not retained (`OPEN-05` closed), so 5.7 must not invent `provider_null`/`member_incomplete`/`axis_incomplete`. With no surviving evidence it reports the generic `provider_unavailable`; a finer reason needs a new contract value and migration, not a guess. **Superseded in part by §8.7C.3/§8.7C.7:** an incomplete member population is recommended to write no row at all, and a month with no row is never reported as `provider_unavailable`. `provider_unavailable` remains correct only where a row exists and carries it |
 
@@ -1552,10 +1553,10 @@ Boundaries this sub-phase holds:
 
 | Boundary | Rule | Why |
 |---|---|---|
-| Band | Only lead months 8–12 carry a value; 1–7 are explicit no-value entries | `permittedMonthlyDataClasses` refuses a climatology class outside that band, and nothing may be shifted forward to fill the grid |
+| Band | Only lead months 7–12 carry a value; 1–6 are explicit no-value entries (band restated by 5.7D, §8.7C.2 — it was 8–12 / 1–7 before the anchor was resolved) | `permittedMonthlyDataClasses` refuses a climatology class outside that band, and nothing may be shifted forward to fill the grid |
 | Source | Only `climatology_normals` | `value_mm` there is a mean of monthly totals; a provider mean read as an amount is the wrong number `Q-P5-7` exists to prevent |
 | Provenance | `input_refs` = one `baseline` ref (`role: climatology`), `inputSnapshotHash` = `hashDerivationDescriptor({ artifact: "monthly_outlook", inputRefs, derivationVersion })`, `baselineHash` = `hashBaselineNormals` over the consumed subset | Reuses the existing canonical hashing; no second format |
-| Persistence | Only months with a real normal become rows | `MonthlyOutlook` requires ≥ 1 `inputRef`; a `not_requested` or `insufficient_history` month has none, so it is synthesised by the read path instead of persisted with a fabricated ref |
+| Persistence | Only months with a real normal become rows | `MonthlyOutlook` requires ≥ 1 `inputRef`; a `pending` or `insufficient_history` month has none, so it is synthesised by the read path instead of persisted with a fabricated ref |
 | Identity | `(outlook_cell_id, variable, month)` + `derivation_version` + `input_snapshot_hash` + `baseline_version` | A retry of identical inputs writes nothing; changed inputs or baseline supersede |
 | Baseline | Explicit `baselineVersion` in the payload; unknown ⇒ terminal `baseline_unknown` | No `latest` rule exists (`Q-P5-8`); an implicit one would move published numbers silently |
 
@@ -1579,9 +1580,9 @@ transaction ends, and a rollback leaves it reclaimable.
 materialisation, mean→total conversion, ensemble spread, probabilities/terciles/
 confidence, temperature outlooks, bias correction, skill.
 
-Phase 5.7 is therefore **not complete**. The acceptance row above remains the target and
-needs the seasonal path to be met: with climatology alone, five months carry a value and
-seven are honestly empty.
+Phase 5.7 was therefore **not complete** at 8.7A: with climatology alone, five months
+carried a value and seven were honestly empty. 5.7D closes the seasonal half; the acceptance
+row above is now met by six climatology months and six seasonal months (§8.7C.9).
 
 #### 8.7B Climatology-only read API (delivered 2026-11-24)
 
@@ -1592,7 +1593,7 @@ months §8.7A materialised, behind the same `AuthGuard` as the Farm and Field ro
 |---|---|---|
 | Resolution | The field's stored geometry → `selectFieldAnchor` → registry `specFor`/`evidenceFor` → `createSpatialResolution`; the cell id is **looked up**, never created | `field_outlook_cells` has no writer (5.2 defers it), so there is no persisted mapping to read. Minting on a `GET` would make a read into a migration, and a coordinate guess would be a mapping nobody approved (`OPEN-18`) |
 | Selection | `status = 'active'`, `variable = 'precipitation'`, `month BETWEEN firstMonth AND firstMonth + 11` | `monthly_outlooks_active_key` guarantees at most one active row per cell-month, so a superseded answer can never sit beside its replacement; the range uses `monthly_outlooks_cell_month_idx` |
-| Absence | A month with no row is served with `valueMm: null`, `dataClass: null`, no estimator and no derivation — lead 1–7 → `not_requested`, lead 8–12 → `pending` | `input_refs` is `NOT NULL` with ≥ 1 ref, so a no-value month is never a row. `pending` is the weakest true claim: `ingest_failed` would need evidence nothing retains, and `insufficient_history` would need a baseline the read path never consults |
+| Absence | A month with no row is served with `valueMm: null`, `dataClass: null`, no estimator, no derivation and no `availability` — `pending` for every lead month (5.7D removed the lead-dependent split; `not_requested` is no longer emitted) | `input_refs` is `NOT NULL` with ≥ 1 ref, so a no-value month is never a row. `pending` is the weakest true claim: `ingest_failed` would need evidence nothing retains, and `insufficient_history` would need a baseline the read path never consults |
 | Zero | Never served for an absent month | A zero is a measurement. Filling one would be the fabricated value `C5` forbids |
 | Estimator | `estimatorForDataClass(data_class)` is emitted per month, with `unit: "mm"` and the row's `derivationVersion` | `Q-P5-7` says the client must not infer a forecast from a number. A row whose class has no approved estimator, or whose stored state contradicts the response contract, is a stored-state defect and surfaces as an error — not as a silently dropped month |
 | Tenancy | The field anchor is read inside `withTenant`; a foreign, missing, or soft-deleted field is `FIELD_NOT_FOUND`, identically in all three cases | Grid lookup happens after the field is resolved, so a foreign `fieldId` never becomes a registry query |
@@ -1605,17 +1606,14 @@ mapping that does not exist.
 
 #### 8.7C Seasonal source selection and materialisation contract (5.7C, 2026-11-24)
 
-**Status: contract prepared; nothing implemented.** No payload, assembler, writer, route,
-schema, migration or test was changed to produce this section. 5.7D is the implementation
-phase this section authorises; it is not started and nothing here may be cited as runtime
-behaviour.
-
-**5.7D is partially blocked, not wholly blocked** (§8.7C.9 classifies each dependency). The
-lead-month anchor is the only item that gates the value: without it the writer cannot decide
-which calendar month a run fills. Run-identity storage gates enforceable supersession, the
-response field gates the `stale` label, and member-count storage gates provenance
-completeness — none of them gates the payload branch, run validation, the population read, the
-assembler, or the read-path switch.
+**Status: delivered in 5.7D, 2026-11-24.** Every open dependency this section listed was
+resolved by an owner decision and implemented: the lead-month anchor and band (§8.7C.2), run
+identity as two nullable FK columns (§8.7C.5), freshness as a read-time
+`availability: fresh | stale` response field (§8.7C.4), and the member population as a
+record-set hash preimage (§8.7C.6). Statements below are runtime behaviour unless they
+explicitly say "was" or name a deferred item. What stays deferred is named in §8.7C.8 and
+§8.7C.10 and was not implemented: spread, any distribution statistic, any probability,
+`not_requested` as a produced token, and identification of the omitted physical member.
 
 ##### 8.7C.1 What the source actually is (verified)
 
@@ -1667,72 +1665,43 @@ derives the position from the horizon it is asked for. `firstMonth` is the paylo
 horizon anchor, documented as "the calendar month lead month 1 describes"
 (`outlookAggregationJobPayloadSchema`, `climateOutlookQuerySchema`).
 
-**Band, reconciled to the approved direction (1–7 inclusive):**
+**Band, resolved to the approved direction: lead months 1–6 `seasonal_forecast`, 7–12
+`climatology`.** The owner resolved `Q-P5-BAND` on 2026-11-24 by adopting reading **B** —
+lead month 1 is the calendar month **after** the initialisation month — and restating the
+band with it, because B leaves a seven-month run window filling six leads.
 
-| Text                                                          | Before                         | Now             |
-| ------------------------------------------------------------- | ------------------------------ | --------------- |
-| `MONTHLY_OUTLOOK_BANDS` (`packages/contracts/src/climate.ts`) | 1–7                            | 1–7 (unchanged) |
-| `docs/PROJECT.md` §3                                          | "months 2–7 seasonal"          | lead months 1–7 |
-| This document §8.7 acceptance row and §8.9                    | "lead months 3–7 change class" | lead months 1–7 |
-| `docs/data-model/temporal-and-weather-semantics.md` §6        | 1–7                            | 1–7 (unchanged) |
+| Text                                                          | Before           | Now             |
+| ------------------------------------------------------------- | ---------------- | --------------- |
+| `MONTHLY_OUTLOOK_BANDS` (`packages/contracts/src/climate.ts`) | 1–7 / 8–12       | 1–6 / 7–12      |
+| `docs/PROJECT.md` §3                                          | "months 2–7"     | lead months 1–6 |
+| This document §8.7 acceptance row and §8.9                    | "lead months 3–7" | lead months 1–6 |
+| `docs/data-model/temporal-and-weather-semantics.md` §6        | 1–7 / 8–12       | 1–6 / 7–12      |
 
-**Conflict — the approved sentence and the provider window disagree.** The owner direction
-states that lead month 1 is the next calendar month after the initialisation month. The
-provider window is seven consecutive months that _start with_ the initialisation month.
-For a 1 November 2026 run the stored months are November 2026 … May 2027:
+**Why the band moved and not the direction.** The owner's sentence and the provider window
+disagreed on one thing only: whether a run fills seven leads or six. A 1 November 2026 run
+stores November 2026 … May 2027, so under B lead 1 is December 2026 and lead 6 is May 2027 —
+exactly six months — and `climatology` begins at lead 7, the first month no SEAS5 run
+supplies for that initialisation. Keeping the 1–7 band would have left lead 7 unfillable by
+any run, which is why the band was restated rather than the direction.
 
-| Reading                                         | Lead 1   | Last month one run can fill | Band 1–7                             |
-| ----------------------------------------------- | -------- | --------------------------- | ------------------------------------ |
-| **A** — lead 1 = initialisation month           | Nov 2026 | May 2027 = lead 7           | exactly seven months; band satisfied |
-| **B** — lead 1 = the month after initialisation | Dec 2026 | May 2027 = **lead 6**       | lead 7 has no input; band unfillable |
+**Implemented, verified.** `seasonalOutlookMonths(initializedAt)` in
+`packages/climate-core/src/seasonal.ts` is the only function that maps a run to the months it
+may fill: it returns the six first-of-month keys starting at the calendar successor of the
+initialisation month, uses integer month arithmetic (no `Date` rollover, no elapsed-time
+division), and returns `null` for an instant that is not UTC or not parseable — the worker
+turns that into a terminal `payload_invalid` rather than guessing. The band constant, the
+assembler's `climatology` band, the API's `firstMonth` default and the worker's seasonal
+branch all read from these two definitions.
 
-ECMWF's own vocabulary separates the two, which is why the sentence and the band are both
-defensible in isolation: "Forecast lead time" is defined … to be the months elapsed since
-forecast initialisation but prior to the month being discussed, while "forecast month"
-includes the month being discussed, one more than forecast lead. For example, if a forecast
-is initialised on 1 January, February has 1-month forecast lead time and is month 2 of the
-forecast (Johnson et al. 2019, *GMD* 12, 1087–1117,
-<https://gmd.copernicus.org/articles/12/1087/2019/>, retrieved 2026-11-24). SEAS5's
-forecast months are therefore 1–7 = initialisation month … +6, and its forecast leads are
-0–6. `leadMonth` here is 1-based `1–12`, and its band `1–7` has always meant forecast
-months; the owner's sentence matches ECMWF's forecast-*lead* numbering, which is 0-based at
-the initialisation month.
+**Accepted cost.** The run's own initialisation month is never materialised as a seasonal
+month: no lead describes it. A client reading the horizon sees `pending` there unless a
+climatology normal fills that lead, which it may, because `climatology` also covers 7–12.
 
-One further verified data point supports reading A: the read API defaults `firstMonth` to
-the current Asia/Jakarta month (`apps/api/src/climate/climate.service.ts`), which under A
-coincides with the initialisation month of a run ingested in that month, and under B is one
-month short of the first month such a run can fill.
-
-**Unresolved; owner decision required. The owner's direction is not adopted by this
-contract, and it is not overridden by it either.** The approved direction — lead month 1 is
-the calendar month after the initialisation month — is the one that must be implemented
-unless the owner changes it. What this section records is that it cannot be implemented
-against the seven-month window as things stand:
-
-| Consequence | Reading A (lead 1 = initialisation month) | Reading B (owner direction: lead 1 = month after) |
-|---|---|---|
-| Months one run can fill | 7 (forecast months 1–7) | 6 (leads 1–6) |
-| Band 1–7 fully filled | yes | no — lead 7 has no input from any run |
-| `climatology` would begin at | lead 8 (unchanged) | lead 7 (a different band) |
-| Consistent with `MONTHLY_OUTLOOK_BANDS` | yes | no, unless the band is restated as 1–6 |
-| Consistent with the owner's stated example | no | yes |
-
-So the conflict is not a wording problem to be tidied. Choosing B is a **band change**
-(1–6 seasonal, 7–12 climatology, `MONTHLY_OUTLOOK_BANDS` edited, §8.9 restated); choosing A
-is a **direction change** (the owner's sentence restated as forecast-month numbering).
-Neither happens in this task, and no implementation may assume either: 5.7D's month
-selection stays blocked until the owner picks, and any interim code must take the anchor as
-an explicit input rather than defaulting to one reading.
-
-For completeness, the engineering case for A: it keeps the approved band representable, it
-matches ECMWF's forecast-month numbering, it keeps `climatology` at the first month no SEAS5
-run supplies, and the read API's `firstMonth` default (current Asia/Jakarta month, verified
-in `apps/api/src/climate/climate.service.ts`) coincides with the initialisation month of a
-run ingested in that month. That case is a recommendation to the owner, not a decision, and
-it does not make the owner's direction wrong — it makes it expensive.
-
-What this does **not** block: the quantity, the population rule, the payload shape, the
-persistence order, the read-path rules, and the provenance mapping.
+ECMWF still separates forecast *lead* (0 at the initialisation month) from forecast *month*
+(1 = the initialisation month), which is why both readings were defensible. Under B this
+repository's 1-based `leadMonth` equals ECMWF's forecast lead **plus one**. Nothing stored
+records which vocabulary produced a row, because the row's `month` is the identity either
+way.
 
 ##### 8.7C.3 The member population (approved: all 50, or nothing)
 
@@ -1810,13 +1779,16 @@ month's population is not complete" and nothing finer. This is the risk already 
 §8.7 and it has not changed; `provider_null` and `member_incomplete` must not be invented
 as stored values.
 
-**An incomplete month never supersedes a complete older answer.** A newer run whose
-population is incomplete writes nothing, so the previous run's active row stays served.
-Writing a valueless row instead would occupy the same active slot and erase a valid answer
-— the failure §8.7C.5 exists to prevent. Whether a valueless row with an explicit reason
-should ever exist is an open question (§8.7C.9), not something this contract decides.
+**An incomplete month never supersedes a complete older answer — implemented.** A newer run
+whose population is incomplete writes nothing, so the previous run's active row stays
+served. Writing a valueless row instead would occupy the same active slot and erase a valid
+answer — the failure §8.7C.5 exists to prevent. The question this section left open ("should
+a valueless row with an explicit reason ever exist") is answered **no**: no producer writes
+one, because a row is an active claim and the absence of a population is not a claim about
+the weather. The refusal is observable at the job, which dies `population_incomplete` with
+the month and member index it lacked.
 
-##### 8.7C.4 Freshness (approved: soft TTL; representation unresolved)
+##### 8.7C.4 Freshness (implemented: soft TTL, derived at read time)
 
 Provider schedule, verified externally rather than assumed:
 
@@ -1861,19 +1833,27 @@ value for this system**: it bounds provider-side copying, not the interval betwe
 release exists" and "we have materialised a month". Adopting it here would conflate
 instants 3 and 4. Adjusting zero requires one of: a measured ingest→materialisation
 latency, or an owner decision to window the boundary by the provider's consistency advice.
-Until one of those exists, zero stays labelled provisional, and no constant is introduced
-into any runtime file.
+Until one of those exists, zero stays labelled provisional. It is now a named constant
+rather than an unnamed omission: `SEAS5_PROVIDER_CONSISTENCY_MS = 600_000` in
+`packages/climate-core/src/freshness.ts` records the provider's 10 minutes and is
+deliberately **not** added to the boundary — a greppable reminder that the figure is known
+and rejected, not forgotten.
 
-**Evaluation point: read time, derived, not stored.** Staleness is a function of the run's
-`initialized_at` and the clock, and a stored copy would be wrong the moment the clock
-moved. Two consequences, both implementation work rather than schema work:
+**Evaluation point: read time, derived, not stored — implemented.** Staleness is a function
+of the run's `initialized_at` and the clock, so a stored copy would be wrong the moment the
+clock moved. All three pieces now exist:
 
-1. The read path cannot currently compute it: `loadActiveOutlookMonths` does not select
-   provenance, and the row has no `initialized_at`. It can be derived by selecting
-   `input_refs` and joining `forecast_runs.initialized_at` — no migration.
-2. It cannot be served: `climateOutlookMonthSchema` has no availability field, and the
-   response contract is strict. `stale` is a `dataAvailability` value, never a
-   `missingReason` — a stale month still carries its value and its provenance unchanged.
+1. `loadActiveOutlookMonths` joins `forecast_runs` and returns `initializedAt` as a UTC ISO
+   instant (`null` for a climatology row). The join is why the run identity is read from a
+   column and not parsed out of `input_refs`.
+2. `seasonalAvailability(initializedAt, now)` and `seasonalStaleBoundary(initializedAt)` in
+   `packages/climate-core/src/freshness.ts` decide the label; the boundary is
+   `(init month + 1)-05T12:00:00.000Z`. A row without `initializedAt` cannot be labelled
+   and is served without one rather than defaulted to `fresh`.
+3. `climateOutlookMonthSchema` carries `availability: "fresh" | "stale"`, added by 5.7D.
+   `stale` is an availability value, never a `missingReason` — a stale month still carries
+   its value and its provenance unchanged. A month with no stored row (`pending`) carries
+   no availability, because there is no run to be stale about.
 
 Non-negotiable properties: staleness never rewrites a value, never rewrites a provenance
 ref, never suppresses a usable row, and clears automatically when a newer run is
@@ -1906,22 +1886,43 @@ Rules this contract proposes, each with the evidence behind it:
 | A `seasonal_forecast` month may supersede a `climatology` month for the same calendar month                                                  | a normal replaced by a real forecast is an upgrade; the active slot is per month, so the two classes cannot coexist                 |
 | A `climatology` month must **not** supersede an active `seasonal_forecast` month                                                             | the reverse direction is the substitution the product forbids (`monthly_outlooks_beyond_horizon_check`, §8.9)                       |
 | Everything happens in the caller's transaction, under the existing footprint lock, in the existing stage-failed → retire-old → promote order | `monthly_outlooks_active_key` + `monthly_outlooks_superseded_fkey` force that order; concurrency is already proven by the 5.7A test |
+| A refused month is counted, not silently dropped | `persistSeasonalOutlook` and `persistClimatologyOutlook` return `{ inserted, superseded, unchanged, skipped }`; `skipped` is the number of months an older or broader candidate was not allowed to write, so a job can log "nothing written because a newer seasonal month holds the slot" without inventing a row |
 
-**Storage gap.** Ranking requires the active row's run identity. Today only `input_refs`
-(jsonb, unvalidated, no FK) carries it, so a rank comparison would parse jsonb that
-nothing enforces. **Recommendation for 5.7D: two columns, `forecast_run_id` and
-`ingestion_run_id`, both nullable with FKs** — nullable because a climatology row has
-neither. This is the one schema change this contract needs; without it, ranking is
-possible but not enforceable. It is not applied here.
+**Storage gap — closed by 5.7D.** Ranking needs the active row's run identity, and
+`input_refs` (jsonb, no FK, unvalidated) is provenance, not a key. Migration
+`20261124000000_monthly_outlook_run_identity` adds `forecast_run_id` and `ingestion_run_id`
+to `monthly_outlooks`, both nullable with FKs to `forecast_runs` / `ingestion_runs` —
+nullable because a climatology row has neither — plus the partial index
+`monthly_outlooks_forecast_run_idx` on `(forecast_run_id) WHERE forecast_run_id IS NOT
+NULL` for the "which months did this run produce" audit query. Both FKs are `NO ACTION`,
+matching every other climate-plane FK: a run with derived outlooks is retained, never
+cascaded away. `input_refs` and
+`input_snapshot_hash` stay exactly as they were: the columns are additive, so the existing
+provenance contract keeps its shape and old rows keep reading.
+
+The writer enforces rank by reading the candidate's `(forecast_runs.initialized_at,
+ingestion_runs.created_at)` and the active row's, and writing nothing when the candidate is
+older. Both counters are read inside the transaction, after the footprint lock, so a job's
+completion order is invisible to the comparison. A seasonal row with a `NULL` run column
+cannot be ranked and is treated as the weaker party: the storage gap is not allowed to
+become a supersession loophole.
 
 ##### 8.7C.6 Payload, validation, and provenance
 
-**Payload.** `outlookAggregationJobPayloadSchema` today carries `provider`, `model`,
-`baselineVersion`, `firstMonth`, `targetSelectorHash`, `targetSelector` — and no run
-identity, because climatology has none. A seasonal materialisation needs
-`forecastRunId` and does not need `baselineVersion`. Recommendation: a discriminated
-payload on the materialisation source (`climatology` | `seasonal`), not a new job kind —
-`aggregate` already exists in `jobs_kind_check` and needs no migration.
+**Payload — implemented as two strict schemas on one job kind.** The discriminator is the
+presence of `forecastRunId`, not a new `kind`: `aggregate` already exists in
+`jobs_kind_check` and no migration was needed. `outlookAggregationJobPayloadSchema` keeps
+`provider`, `model`, `baselineVersion`, `firstMonth`, `targetSelectorHash`,
+`targetSelector`; `seasonalOutlookAggregationJobPayloadSchema` carries `provider`, a
+`model` literal of exactly `ecmwf_seas5`, `forecastRunId`, `targetSelectorHash`,
+`targetSelector` and **no** `firstMonth` and **no** `baselineVersion`. Both are strict, so
+a seasonal job that also sends `baselineVersion` is refused rather than ignored, and a
+climatology job that sends `forecastRunId` cannot be read as seasonal.
+
+`firstMonth` is gone from the seasonal payload because the run decides it: the writer
+derives the six months from `initialized_at` (§8.7C.2). Accepting a caller-supplied anchor
+would let a job materialise months the run does not cover, which is the failure the
+all-or-nothing rule exists to prevent.
 
 **Validation chain a seasonal job must perform, in order:**
 
@@ -1960,35 +1961,45 @@ which run produced the month.
 | input snapshot hash             | yes: `input_snapshot_hash` (`hashDerivationDescriptor({artifact:"monthly_outlook",…})`) | —                                                             |
 | computation timestamp           | yes: `computed_at`                                                                      | —                                                             |
 
-So provenance is _shaped_ correctly and _incomplete_ in substance. Three additions are
-needed in 5.7D, none of them a new concept: a `hashRecordSet`-style function whose preimage
-includes the member identity set and each member's total; the two run columns from
-§8.7C.5; and a decision on whether member count is a column or a hash preimage field.
+So provenance was _shaped_ correctly and _incomplete_ in substance. All three additions
+landed in 5.7D, none of them a new concept:
+
+- **`hashSeasonalRecordSet`** (`packages/contracts/src/hash.ts`) hashes a
+  `seasonalRecordSetPayloadSchema` preimage: `artifact: "seasonal_outlook_population"`,
+  the run and ingestion ids, the `cellKey`, `memberCountByMonth` (`[{ month, memberCount }]`)
+  and `members` (`[{ month, memberIndex, valueMm }]`). Member identity is
+  `(month, memberIndex)` and each member's monthly total is in the preimage, so the hash
+  identifies the population, not just the mean. Both arrays are canonical **sets** ordered
+  by their own keys (`month`; `month`, `memberIndex`), so emission order never reaches the
+  hash. A duplicate `(month, memberIndex)` cannot collapse silently: the canonicaliser
+  refuses a conflict rather than dropping one.
+- **The two run columns** from §8.7C.5 hold the ids the hash names.
+- **Member count is a hash preimage field, not a column.** A count column would restate what
+  the population query already enforces (exactly 50, indices `0..49`) and could disagree
+  with it; inside the preimage it is covered by `input_snapshot_hash` and by the record-set
+  hash, which is where a reader can verify it. No migration adds a count.
 
 **A "50 members" claim in prose is not provenance.** Storing the mean while hashing only
 the 50 values would let a future reader verify the number but not the population.
 
 ##### 8.7C.7 Read path
 
-**Current behaviour (verified).** A month with no active row is synthesised:
-`leadMonth <= 7` → `not_requested`, otherwise `pending` (`outlook-read.ts`). The
-justification recorded there is "no product materialises them" — which a seasonal writer
-falsifies. A row that exists is passed through, and a stored row that cannot be served is
-`inconsistent_row`, never a dropped month.
+**Implemented behaviour.** A month with no active row is synthesised as `pending` for every
+lead month; `not_requested` is no longer produced. A row that exists is passed through, and a
+stored row that cannot be served is `inconsistent_row`, never a dropped month.
 
-**Required behaviour once seasonal materialisation exists:**
+| Row state                                              | Served                                                                 |
+| ------------------------------------------------------ | ---------------------------------------------------------------------- |
+| active `seasonal_forecast` row, complete population    | value, class, `evaluationBasis = monthly`, no reason, `availability` from the run |
+| active `climatology` row                               | unchanged (`beyond_horizon`), no `availability` — a normal has no run  |
+| no row, any lead 1–12                                  | `pending`, no value, no class, no `availability`                       |
+| stale (read-time derivation, §8.7C.4)                  | value served, `availability: "stale"`; nothing else changes            |
 
-| Row state                                               | Served                                                            |
-| ------------------------------------------------------- | ----------------------------------------------------------------- |
-| active `seasonal_forecast` row, complete population     | value, class, `evaluationBasis = monthly`, no reason              |
-| active `climatology` row                                | unchanged (`beyond_horizon`)                                      |
-| no row, lead 1–7, seasonal job has not produced a month | `pending` — not `not_requested`                                   |
-| no row, lead 8–12                                       | `pending`, unchanged                                              |
-| stale (read-time derivation, §8.7C.4)                   | value served, availability `stale` once the response can carry it |
-
-`not_requested` becomes unreachable for outlook months: after this change every lead month
-1–12 has an approved source class, so the token would only restate a band rule that no
-longer excludes anything. It should stop being emitted rather than be repurposed.
+`not_requested` stays in the enum and in `monthly_outlooks_missing_reason_check` so rows
+written before 5.7D remain readable, but nothing emits it: after this change every lead month
+1–12 has an approved source class, so the token would only restate a band rule that no longer
+excludes anything. `apps/api/test/integration/climate-outlook.test.mjs` asserts the absence,
+not the token.
 
 **Tokens that must not be invented or inferred.** The `missingReason` enum already holds
 `beyond_horizon`, `not_requested`, `pending`, `ingest_failed`, `provider_unavailable`,
@@ -2017,50 +2028,40 @@ should be recorded rather than rediscovered:
 - what remains genuinely open is the descriptor (population SD, sample SD, IQR, P10–P90,
   min–max), its naming, and whether an interval endpoint pair needs its own columns.
 
-##### 8.7C.9 What 5.7D must implement
+##### 8.7C.9 What 5.7D delivered
 
-| Work item                                                                                             | Where                                               | Needs                                   |
-| ----------------------------------------------------------------------------------------------------- | --------------------------------------------------- | --------------------------------------- |
-| Work item | Where | Needs | Blocked? |
-|---|---|---|---|
-| Seasonal payload branch with `forecastRunId` | `packages/contracts/src/job.ts` | §8.7C.6 | no |
-| Run validation including `model = 'ecmwf_seas5'` | `apps/worker/src/aggregate/` | §8.7C.6 | no |
-| Population completeness predicate, exactly as §8.7C.3 states it | `packages/database/src/` | §8.7C.3 | no |
-| Seasonal assembler + record-set hash | `packages/climate-core/src/` | §8.7C.6 | no (member-count storage only narrows the hash preimage) |
-| Month selection: map a run's initialisation month to the months it may fill | `packages/climate-core/src/`, worker | §8.7C.2 | **yes — lead-month anchor** |
-| `persistSeasonalOutlook`, class precedence and stage→retire→promote | `packages/database/src/outlook.ts` | §8.7C.5 | no for the insert path; rank comparison needs the run columns |
-| Read path: `pending` instead of `not_requested` for an absent lead 1–7 month; keep `inconsistent_row` | `packages/climate-core/src/outlook-read.ts` | §8.7C.7 | no |
-| Read path: freshness derivation and response field | `packages/database/src/outlook.ts`, `packages/contracts/src/climate.ts` | §8.7C.4 | **yes — response representation** |
+Every dependency this section once classified as blocking was resolved by owner decision and
+is now code:
 
-**Blocker classification.** Four open dependencies are owner decisions, and they do not
-carry the same weight. Distinguishing them decides what 5.7D can start on:
-
-| Dependency | Blocks | Does **not** block | Evidence needed |
-|---|---|---|---|
-| **Lead-month anchor** (§8.7C.2, `Q-P5-BAND`) | the writer's **month selection** — which calendar month it writes for a given run. This is the only item that gates the value itself | payload shape, run validation, population read, assembler, record-set hash, writer ordering, read-path switch | one owner decision (A or B, with the band restated if B) |
-| **Run-identity storage** (§8.7C.5, `Q-P5-RUN`) | **enforceable** seasonal supersession: comparing an existing active row's rank against a candidate's. A writer that only inserts where nothing active exists is possible, but cannot tell "newer" from "older" | everything except rank comparison; the rank rule itself is approved | owner decision: two FK columns, or jsonb parsing |
-| **Freshness response representation** (§8.7C.4, `Q-P5-RUN`) | serving `stale` in the API response. `climateOutlookMonthSchema` is strict and has no availability field | a **value-only** seasonal writer: a month can be materialised and served without a staleness label, because staleness never changes the value | owner decision on the response field, then a contract change |
-| **Member-count provenance representation** (§8.7C.6) | provenance **completeness**: whether a future reader can verify the population, not the mean | mean correctness: the value is the mean of the 12 conditions in §8.7C.3 whether or not the count is hashed | owner decision: column or hash preimage field |
-
-Two further open items are narrower still, and neither is an implementation blocker:
-
-| Item | Scope | Evidence needed |
+| Work item | Implemented in | Resolution it depended on |
 |---|---|---|
-| Whether an incomplete population may ever be stored as a valueless row | read-path reason granularity; §8.7C.3 recommends it writes nothing | owner decision |
-| Which physical member the 50 columns omit (control vs perturbed) | nothing today; spread or probability language later | provider documentation that does not exist — Open-Meteo publishes no column↔member mapping |
+| Seasonal payload branch with `forecastRunId` | `packages/contracts/src/job.ts` (`seasonalOutlookAggregationJobPayloadSchema`) | discriminator is the field's presence; `model` is a literal `ecmwf_seas5` |
+| Run validation including `model = 'ecmwf_seas5'` | `apps/worker/src/aggregate/outlook.ts` (`loadSeasonalForecastRun`) | a run of another model is refused even though the product matches; `SeasonalRunRefusedError` maps to a terminal failure |
+| Population completeness predicate, exactly as §8.7C.3 | `packages/database/src/outlook.ts` (`loadSeasonalMemberPopulation`) | complete or nothing |
+| Seasonal assembler + record-set hash | `packages/climate-core/src/seasonal.ts`, `packages/contracts/src/hash.ts` (`hashSeasonalRecordSet`) | member count is a hash preimage field, not a column |
+| Month selection: run initialisation → the six months it may fill | `packages/climate-core/src/seasonal.ts` (`seasonalOutlookMonths`) | anchor **B** adopted; band restated 1–6 / 7–12 |
+| `persistSeasonalOutlook`, class precedence, stage→retire→promote | `packages/database/src/outlook.ts` | run identity as two nullable FK columns |
+| Read path: `pending` for an absent month, `inconsistent_row` kept | `packages/climate-core/src/outlook-read.ts` | `not_requested` stops being emitted |
+| Read path: freshness derivation and response field | `packages/climate-core/src/freshness.ts`, `packages/contracts/src/climate.ts` | `availability: fresh \| stale`, read-time |
 
-**What can proceed without any of the four.** The payload branch, run validation including
-`model = 'ecmwf_seas5'`, the population read exactly as §8.7C.3 states it, the assembler and
-record-set hash, and the read-path change from `not_requested` to `pending` are all
-independent of the four dependencies. Only month selection, rank enforcement and the stale
-label wait. An implementation that stops at "every part of 5.7D is blocked" overstates the
-coupling and delays work the contract already authorises.
+Two implementation details that were decisions rather than transcription:
 
-**Provider gates, unchanged.** `OPEN-18` still means the shipped registry has no
-`validated` provider grid, so no real seasonal job can run; `OPEN-03` still blocks
-commercial ingestion; `OPEN-05` means no raw payload is retained. 5.7D would therefore be
-exercised by fixture registries and fixture rows, which is a limit on what its tests can
-prove, not on what it may implement.
+1. **The whole run window is all-or-nothing, not each month separately.** §8.7C.3 states the
+   rule per month; 5.7D applies it to the six-month set. A population that is complete for
+   five months and short one member in the sixth writes **nothing**, because a horizon that
+   silently mixes two answers is worse than a horizon that keeps the previous one. The
+   refusal is `population_incomplete`, carrying which month and which member index is
+   missing, and the job dies without a row touched.
+2. **A shipment gate lives in the writer, not in the handler.** `persistSeasonalOutlook`
+   re-checks the rank itself; the handler's checks are for error messages and early exit,
+   not for correctness. A caller that bypassed the handler still cannot let an older run
+   retire a newer one.
+
+**Still deferred, by decision:** ensemble spread and every distribution statistic
+(§8.7C.8, `Q-P5-SPREAD` stays open); the physical identity of the omitted member
+(§8.7C.10); `not_requested` as a produced token; and every production provider gate.
+`OPEN-03`, `OPEN-05` and `OPEN-18` are unchanged, so 5.7D is exercised by fixture
+registries and fixture rows only.
 
 ##### 8.7C.10 The 50-versus-51 question, answered as far as evidence goes
 
@@ -2118,17 +2119,17 @@ What that supports:
 
 ### 8.9 What "first usable capability" means here
 
-After 5.7 with climatology only, a farmer can be shown **five** correctly labelled
-months of historical normals (lead months 8–12) plus an explicit pending state for
+After 5.7 with climatology only, a farmer can be shown **six** correctly labelled
+months of historical normals (lead months 7–12) plus an explicit pending state for
 the months that require a forecast — not twelve months presented as normals, which
-would be the same substitution the product forbids. After 5.6, lead months 1–7
-become a real seasonal forecast. After 5.4, days 0–14 become a real short-range forecast.
+would be the same substitution the product forbids. After 5.7D, lead months 1–6
+carry a real seasonal forecast once a run exists. After 5.4, days 0–14 become a real short-range forecast.
 That is the order in which the product becomes useful, and it is why 5.5 precedes
 5.6 and 5.4 rather than following them.
 
 The count is a contract, not a convenience: 0–14 d is `weather_forecast`, 15–45 d is
-`subseasonal_forecast`, lead months 1–7 (seven) are `seasonal_forecast`, and lead
-months 8–12 (five) are `climatology`. Lead month is 1-based, `1–12`, exactly twelve
+`subseasonal_forecast`, lead months 1–6 (six) are `seasonal_forecast`, and lead
+months 7–12 (six) are `climatology`. Lead month is 1-based, `1–12`, exactly twelve
 entries, no month 0 and no month 13. A 12-month response always has twelve entries
 and never promotes one class into another to fill the grid.
 

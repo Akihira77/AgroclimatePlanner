@@ -77,10 +77,10 @@ describe("assembleClimatologyOutlook — the twelve-month horizon", () => {
 });
 
 describe("assembleClimatologyOutlook — class boundaries", () => {
-  it("fills lead months 8–12 with climatology and the baseline that produced them", () => {
+  it("fills lead months 7–12 with climatology and the baseline that produced them", () => {
     const horizon = ok(assemble()).horizon;
 
-    for (const month of horizon.months.slice(7)) {
+    for (const month of horizon.months.slice(6)) {
       expect(month.dataClass).toBe("climatology");
       expect(month.evaluationBasis).toBe("climatology");
       expect(month.missingReason).toBe("beyond_horizon");
@@ -91,10 +91,13 @@ describe("assembleClimatologyOutlook — class boundaries", () => {
     }
   });
 
-  it("values lead 8–12 from the normal of the same calendar month-of-year", () => {
+  it("values lead 7–12 from the normal of the same calendar month-of-year", () => {
     const horizon = ok(assemble()).horizon;
 
-    // Lead 8 of 2026-08 is 2027-03, so the March normal (index 2) is used.
+    // Lead 7 of 2026-08 is 2027-02, so the February normal (index 1) is used.
+    expect(horizon.months[6]?.month).toBe("2027-02-01");
+    expect(horizon.months[6]?.valueMm).toBe(101);
+    // Lead 8 of 2026-08 is 2027-03, the March normal (index 2).
     expect(horizon.months[7]?.month).toBe("2027-03-01");
     expect(horizon.months[7]?.valueMm).toBe(102);
     // Lead 12 of 2026-08 is 2027-07, the July normal (index 6).
@@ -102,13 +105,13 @@ describe("assembleClimatologyOutlook — class boundaries", () => {
     expect(horizon.months[11]?.valueMm).toBe(106);
   });
 
-  it("never fills lead months 1–7 with climatology", () => {
+  it("never fills lead months 1–6 with climatology", () => {
     const horizon = ok(assemble()).horizon;
 
-    for (const month of horizon.months.slice(0, 7)) {
+    for (const month of horizon.months.slice(0, 6)) {
       expect(month.dataClass).toBeNull();
       expect(month.valueMm).toBeNull();
-      expect(month.missingReason).toBe("not_requested");
+      expect(month.missingReason).toBe("pending");
       expect(month.evaluationBasis).toBe("monthly");
       expect(month.baselineVersion).toBeNull();
       expect(month.spreadUnavailableReason).toBe(SPREAD_REASON_NO_VALUE);
@@ -126,7 +129,7 @@ describe("assembleClimatologyOutlook — baseline gaps", () => {
     expect(march?.dataClass).toBeNull();
     expect(march?.valueMm).toBeNull();
     expect(march?.missingReason).toBe("insufficient_history");
-    expect(value.derivation?.months).toHaveLength(4);
+    expect(value.derivation?.months).toHaveLength(5);
     expect(value.derivation?.months.map((month) => month.month)).not.toContain("2027-03-01");
   });
 
@@ -134,7 +137,7 @@ describe("assembleClimatologyOutlook — baseline gaps", () => {
     const value = ok(assemble({ normals: [] }));
 
     expect(value.derivation).toBeNull();
-    for (const month of value.horizon.months.slice(7)) {
+    for (const month of value.horizon.months.slice(6)) {
       expect(month.missingReason).toBe("insufficient_history");
       expect(month.dataClass).toBeNull();
     }

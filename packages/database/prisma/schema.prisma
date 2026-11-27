@@ -365,6 +365,7 @@ model ForecastRun {
 
   ingestionRuns  IngestionRun[]
   weatherRecords WeatherRecord[]
+  monthlyOutlooks MonthlyOutlook[]
 
   @@unique([provider, model, product, initializedAt], map: "forecast_runs_natural_key")
   @@index([provider, model, initializedAt(sort: Desc)], map: "forecast_runs_recent_idx")
@@ -394,6 +395,7 @@ model IngestionRun {
   forecastRun    ForecastRun     @relation(fields: [forecastRunId], references: [id])
   weatherRecords WeatherRecord[]
   jobs           Job[]
+  monthlyOutlooks MonthlyOutlook[]
 
   // A retry must not mint a row; the unique key deliberately excludes `attempt`.
   @@unique([forecastRunId, ingestionVersion], map: "ingestion_runs_identity_key")
@@ -519,6 +521,9 @@ model MonthlyOutlook {
   ensembleSpreadMm          Float?   @map("ensemble_spread_mm")
   spreadUnavailableReason   String?  @map("spread_unavailable_reason")
   derivationVersion         String   @map("derivation_version")
+  // Enforceable run identity (5.7D). NULL for a climatology row, which has no run.
+  forecastRunId             String?  @map("forecast_run_id") @db.Uuid
+  ingestionRunId            String?  @map("ingestion_run_id") @db.Uuid
   // DataInputRef[]; hashed contract document, hence JSONB.
   inputRefs                 Json     @map("input_refs")
   inputSnapshotHash         String   @map("input_snapshot_hash")
@@ -528,6 +533,8 @@ model MonthlyOutlook {
   createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   outlookCell  OutlookCell      @relation(fields: [outlookCellId], references: [id])
+  forecastRun  ForecastRun?     @relation(fields: [forecastRunId], references: [id])
+  ingestionRun IngestionRun?    @relation(fields: [ingestionRunId], references: [id])
   supersededBy MonthlyOutlook?  @relation("MonthlyOutlookSupersedes", fields: [supersededById], references: [id])
   supersedes   MonthlyOutlook[] @relation("MonthlyOutlookSupersedes")
 

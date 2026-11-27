@@ -3,6 +3,7 @@ import {
   isoDateSchema,
   isoInstantSchema,
   missingReasonSchema,
+  opaqueIdSchema,
   weatherDataClassSchema,
   type WeatherDataClass,
 } from "./enums.js";
@@ -410,9 +411,10 @@ export type AdapterResult = z.infer<typeof adapterResultSchema>;
  * 28–31 days, so a class is permitted only when one documented product supplies a
  * monthly quantity for the whole month:
  *
- * - `seasonal_forecast` — SEAS5 monthly rows are observed (`monthly=` returns 6–7
- *   rows). This is the only forecast product with a monthly product.
- * - `climatology` — a 1991–2020 monthly normal.
+ * - `seasonal_forecast` — SEAS5 monthly rows are observed. One run supplies the
+ *   initialisation month plus six following months; under the approved lead-month
+ *   definition (lead 1 = the month *after* initialisation) that is leads 1–6.
+ * - `climatology` — a 1991–2020 monthly normal. Approved band: leads 7–12.
  *
  * `weather_forecast` (16 d) and `subseasonal_forecast` (EC46, 46 d, and **no**
  * monthly product: `models=ecmwf_ec46&monthly=…` returns 0 rows) cannot supply a
@@ -421,8 +423,8 @@ export type AdapterResult = z.infer<typeof adapterResultSchema>;
  * that is `Q-P5-6`, not a class this contract may accept.
  */
 export const MONTHLY_OUTLOOK_BANDS = [
-  { fromLeadMonth: 1, toLeadMonth: 7, permitted: ["seasonal_forecast"] },
-  { fromLeadMonth: 8, toLeadMonth: 12, permitted: ["climatology"] },
+  { fromLeadMonth: 1, toLeadMonth: 6, permitted: ["seasonal_forecast"] },
+  { fromLeadMonth: 7, toLeadMonth: 12, permitted: ["climatology"] },
 ] as const satisfies ReadonlyArray<{
   fromLeadMonth: number;
   toLeadMonth: number;
@@ -746,8 +748,60 @@ export function estimatorForDataClass(
 }
 
 /* ------------------------------------------------------------------ *
+ * Seasonal record-set provenance — Phase 5.7D
+ * ------------------------------------------------------------------ */
+
+/**
+ * The canonical preimage of a seasonal month's `recordSetHash`.
+ *
+ * The hash identifies the **population actually consumed**, not merely its size:
+ * the run and ingestion identities, the cell, every member index with its monthly
+ * total, and the valid member count per month. Changing a member identity, a
+ * consumed value, the member count, or the set of months changes the hash.
+ *
+ * Ordering is the producer's responsibility: the assembler sorts members by
+ * `(month, memberIndex)` before hashing, so an equivalent population in a
+ * different emission order hashes identically. The schema does not re-sort, since
+ * a hash function that silently rewrites its input hides a caller's mistake.
+ */
+export const seasonalRecordSetPayloadSchema = z.strictObject({
+  artifact: z.literal("seasonal_outlook_population"),
+  forecastRunId: opaqueIdSchema,
+  ingestionRunId: opaqueIdSchema,
+  cellKey: z.string().min(1),
+  memberCountByMonth: z
+    .array(
+      z.strictObject({
+        month: isoDateSchema,
+        memberCount: z.number().int().positive(),
+      }),
+    )
+    .min(1),
+  members: z
+    .array(
+      z.strictObject({
+        month: isoDateSchema,
+        memberIndex: z.number().int().min(0).max(49),
+        valueMm: z.number().nonnegative(),
+      }),
+    )
+    .min(1),
+});
+export type SeasonalRecordSetPayload = z.infer<typeof seasonalRecordSetPayloadSchema>;
+
+/* ------------------------------------------------------------------ *
  * Monthly outlook read path — 5.7B
  * ------------------------------------------------------------------ */
+
+/**
+ * Read-time freshness of a materialised seasonal month — Phase 5.7D.
+ *
+ * `fresh` and `stale` are both **usable**. A month with no investment-derived
+ * value (climatology, or no row at all) carries `null`: freshness is a property
+ * of a forecast run, not of a normal or of an absence.
+ */
+export const outlookAvailabilitySchema = z.enum(["fresh", "stale"]);
+export type OutlookAvailability = z.infer<typeof outlookAvailabilitySchema>;
 
 /**
  * One served month: the stored month state (`outlookMonthSchema`) plus what a
@@ -767,9 +821,22 @@ export const climateOutlookMonthSchema = outlookMonthSchema
     estimator: monthlyOutlookEstimatorSchema.nullable(),
     /** The derivation that wrote the row; `null` when no row exists for the month. */
     derivationVersion: z.string().min(1).nullable(),
+    /** Read-time only. Never stored, never inferred for a normal or an absence. */
+    availability: outlookAvailabilitySchema.nullable(),
   })
   .superRefine((month, ctx) => {
     const expected = estimatorForDataClass(month.dataClass);
+
+    const isForecast = month.dataClass === "seasonal_forecast";
+    if (isForecast !== (month.availability !== null)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["availability"],
+        message: isForecast
+          ? "a seasonal forecast month must state whether it is fresh or stale"
+          : "only a seasonal forecast month carries read-time availability",
+      });
+    }
 
     if (month.dataClass === null) {
       if (month.estimator !== null) {

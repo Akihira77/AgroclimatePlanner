@@ -130,6 +130,30 @@ export const outlookAggregationJobPayloadSchema = z.strictObject({
 export type OutlookAggregationJobPayload = z.infer<typeof outlookAggregationJobPayloadSchema>;
 
 /**
+ * The payload of an `aggregate` job that materialises a seasonal outlook —
+ * Phase 5.7D.
+ *
+ * The run is named **explicitly**. This system resolves no "latest run": an
+ * implicit lookup would materialise a different forecast whenever a newer run
+ * arrived between enqueue and execution.
+ *
+ * `model` is a literal because `product = 'seasonal'` cannot distinguish SEAS5
+ * from EC46 (`forecast_runs_product_check` admits both); the model can. The
+ * initialisation month, not a payload `firstMonth`, is what selects the months:
+ * lead month 1 is the calendar month after it, so one run fills leads 1–6.
+ */
+export const seasonalOutlookAggregationJobPayloadSchema = z.strictObject({
+  provider: z.string().min(1),
+  model: z.literal("ecmwf_seas5"),
+  forecastRunId: z.uuid({ version: "v7" }),
+  targetSelectorHash: z.string().regex(/^[0-9a-f]{64}$/),
+  targetSelector: targetSelectorSchema,
+});
+export type SeasonalOutlookAggregationJobPayload = z.infer<
+  typeof seasonalOutlookAggregationJobPayloadSchema
+>;
+
+/**
  * One persisted job.
  *
  * The two refinements restate database CHECKs (`jobs_lease_check`,

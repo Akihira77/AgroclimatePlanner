@@ -169,7 +169,7 @@ after(async () => {
 describe("persistClimatologyOutlook — the derivation row", () => {
   it("writes one active climatology row per month, with real provenance", async () => {
     const result = await persist();
-    assert.deepEqual(result, { inserted: 5, superseded: 0, unchanged: 0 });
+    assert.deepEqual(result, { inserted: 5, superseded: 0, unchanged: 0, skipped: 0 });
 
     const rows = await storedRows();
     assert.equal(rows.length, 5);
@@ -199,7 +199,7 @@ describe("persistClimatologyOutlook — the derivation row", () => {
 
   it("is idempotent: the same derivation writes nothing new", async () => {
     const result = await persist();
-    assert.deepEqual(result, { inserted: 0, superseded: 0, unchanged: 5 });
+    assert.deepEqual(result, { inserted: 0, superseded: 0, unchanged: 5, skipped: 0 });
 
     const rows = await storedRows();
     assert.equal(rows.length, 5);
@@ -208,7 +208,7 @@ describe("persistClimatologyOutlook — the derivation row", () => {
 
   it("supersedes the previous answer when the input snapshot changes", async () => {
     const result = await persist({ inputSnapshotHash: HASH_B });
-    assert.deepEqual(result, { inserted: 5, superseded: 5, unchanged: 0 });
+    assert.deepEqual(result, { inserted: 5, superseded: 5, unchanged: 0, skipped: 0 });
 
     const rows = await storedRows();
     const active = rows.filter((row) => row.status === "active");

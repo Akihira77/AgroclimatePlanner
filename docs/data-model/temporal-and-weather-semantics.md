@@ -81,8 +81,8 @@ twelve entries describe the horizon.
 
 | Lead month | Permitted `dataClass` | Product that supplies it |
 |---|---|---|
-| 1–7 | `seasonal_forecast` | SEAS5 monthly rows — the observed monthly product |
-| 8–12 | `climatology` | a 1991–2020 monthly normal, labelled `beyond_horizon` |
+| 1–6 | `seasonal_forecast` | SEAS5 monthly rows — the observed monthly product |
+| 7–12 | `climatology` | a 1991–2020 monthly normal, labelled `beyond_horizon` |
 | — | beyond 12 | no entry; there is no month 13 |
 
 A calendar month is **not** a 30-day window, so the monthly class is not the day
@@ -93,7 +93,7 @@ permitted only when **one product supplies a monthly quantity for that month**:
 |---|---|---|---|
 | `weather_forecast` | 16 d | none | **no** — a month is 28–31 days |
 | `subseasonal_forecast` | 46 d | **none**: `models=ecmwf_ec46&monthly=…` returns 0 rows | **no** — only days 0–45, and no monthly statistic |
-| `seasonal_forecast` | 7 months | SEAS5 monthly, observed 6–7 rows | **yes**, lead months 1–7 |
+| `seasonal_forecast` | 7 months | SEAS5 monthly, observed 6–7 rows | **yes**, lead months 1–6 |
 | `annual_outlook` | 8–13 months | Set VII, access unverified | **not permitted** until the licence and GRIB proof of concept succeed |
 | `climatology` | any month | 1991–2020 normal | **yes**, labelled as a normal |
 
@@ -116,7 +116,7 @@ calendar month, never a bare index. A forecast failure inside a band stays
 
 Derived rules:
 
-1. **A 12-month outlook is never a daily forecast.** Lead months 8–12 are
+1. **A 12-month outlook is never a daily forecast.** Lead months 7–12 are
    `climatology` and labelled as such; the UI string is "Normal historis
    (1991–2020)", never "prakiraan".
 2. **Missing bands are stated, not filled.** If `ecmwf_ec46` fails for a cycle,
@@ -124,7 +124,7 @@ Derived rules:
    the seasonal run and not silently dropped.
 3. **`annual_outlook` requires Set VII.** No row may claim it from SEAS5, which
    ends at month 7. Availability of Set VII is unverified (licence enquiry + GRIB
-   proof of concept pending), so in practice months 8–12 are climatology.
+   proof of concept pending), so in practice months 7–12 are climatology.
 4. **BMKG is gated.** `BMKG_SHORT_RANGE_ENABLED` defaults off pending written
    permission; with it off, 0–3 d is Open-Meteo, which is correctly labelled
    `weather_forecast` and not "BMKG".
@@ -160,7 +160,7 @@ lying.
 | Forecast values 0–3 d | `initialized_at` age | > 6 h |
 | Forecast values 4–14 d | `initialized_at` age | > 12 h |
 | Subseasonal values | `initialized_at` age | > 48 h |
-| Seasonal values | `initialized_at` age | > 35 d |
+| Seasonal values | the next scheduled SEAS5 release: `(init month + 1)-05 12:00 UTC` | at or past that instant |
 | Climatology | `baseline_version` age | baseline > 13 months old |
 | `MonthlyOutlook` | derived from inputs; `oldestInputInitializedAt` **excludes climatology** | any non-climatology input stale |
 | `PlantingWindow` | derived from the segments' sources | any segment's source stale |
@@ -170,7 +170,7 @@ Two rules that are easy to get wrong:
 
 1. **Climatology contributes nothing to `oldestInputInitializedAt`.** There is no
    initialisation time to be old. Treating it as infinitely old would mark every
-   month 8–12 outlook permanently stale and train users to ignore the flag.
+   month 7–12 outlook permanently stale and train users to ignore the flag.
 2. **A derived artifact reports the set of stale roles, not a boolean.** "Seasonal
    stale, climatology fresh" and "both fresh" are different states and the UI
    says which source is behind.
@@ -223,7 +223,7 @@ generic fallback below; it must never fabricate a specific cause.
 | ingest pending | `NULL` | `NULL` | `pending` |
 | ingest failed / provider down | `NULL` | `NULL` | `ingest_failed` / `provider_unavailable` |
 | stored member-month null, cause unrecoverable | `NULL` | `NULL` | `provider_unavailable` — generic; no specific cause is claimed |
-| cell not in scope | `NULL` | `NULL` | `not_requested` |
+| cell not in scope | `NULL` | `NULL` | `not_requested` — retired as a producer by 5.7D; every lead month now has an approved class, so a no-row month is `pending` |
 | baseline missing | `NULL` | `NULL` | `insufficient_history` |
 | coverage too low to claim a month | `NULL` | `NULL` | `below_coverage_threshold` |
 

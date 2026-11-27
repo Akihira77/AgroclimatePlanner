@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { CanonicalizationError, canonicalJson } from "./canonical.js";
-import type { BaselineNormalsPayload } from "./climate.js";
+import type { BaselineNormalsPayload, SeasonalRecordSetPayload } from "./climate.js";
 import type { DerivationDescriptor, FieldSnapshotPayload } from "./provenance.js";
 
 /**
@@ -50,5 +50,16 @@ export function hashDerivationDescriptor(descriptor: DerivationDescriptor): stri
  * claiming to be a hash of the whole table.
  */
 export function hashBaselineNormals(payload: BaselineNormalsPayload): string {
+  return sha256Hex(canonicalJson(payload));
+}
+
+/**
+ * `recordSetHash = SHA256(canonicalJson(SeasonalRecordSetPayload))`.
+ *
+ * The preimage is the consumed population: member identities, their monthly
+ * totals, the member count per month, and the run/ingestion/cell identities. A
+ * hash of the values alone could not prove which members produced them.
+ */
+export function hashSeasonalRecordSet(payload: SeasonalRecordSetPayload): string {
   return sha256Hex(canonicalJson(payload));
 }

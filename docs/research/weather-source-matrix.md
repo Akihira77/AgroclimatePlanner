@@ -93,7 +93,7 @@ Note: raw EC46 gridded fields are **not** in ECMWF Open Data (**doc**); Open-Met
 | Update | monthly, on the **5th** (**doc**) |
 | Anomaly basis | forecast − **model** climatology (20–30 y hindcast of same system) — **not** station normals (**doc**) |
 | Bias correction | none (**doc**) |
-| Role | months 2–7 seasonal layer; weekly/monthly aggregates preferred over daily |
+| Role | lead months 1–6 seasonal layer; weekly/monthly aggregates preferred over daily |
 
 Caveat that must reach the UI: a SEAS5 "anomaly" is model-relative. Showing it as "your field will get 100 mm below normal" without recomputation against a station-grade baseline is scientifically wrong. Product rule: display SEAS5 anomaly as *model anomaly*, and compute the user-facing anomaly against the ERA5/CHIRPS 1991–2020 baseline, labelled as such.
 
@@ -101,7 +101,7 @@ Caveat that must reach the UI: a SEAS5 "anomaly" is model-relative. Showing it a
 
 **Verified as a product, not as data.** ECMWF states annual forecasts extend 13 months (**doc**, seasonal documentation page). Access found: charts only (`charts.ecmwf.int/.../seasonal_system5_nino_annual_plumes`), no free gridded point feed, not in ECMWF Open Data, not in the C3S seasonal CDS datasets (which stop at 7 months).
 
-**Consequence:** months 8–12 cannot be served from a genuine forecast at farm point. See §E.
+**Consequence:** lead months 7–12 cannot be served from a genuine forecast at farm point. See §E.
 
 ---
 

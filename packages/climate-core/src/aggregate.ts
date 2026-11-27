@@ -21,12 +21,13 @@ import {
  *
  * Three boundaries are deliberately hard:
  *
- * 1. **Only lead months 8–12 may carry climatology.** `permittedMonthlyDataClasses`
+ * 1. **Only lead months 7–12 may carry climatology.** `permittedMonthlyDataClasses`
  *    already refuses a climatology class outside that band, and this module never
- *    asks it to. Lead months 1–7 are assembled as explicit no-value entries; a
- *    climatology normal is never shifted into them to fill the grid.
+ *    asks it to. Lead months 1–6 are assembled as explicit no-value entries; a
+ *    climatology normal is never shifted into them to fill the grid — those months
+ *    belong to the seasonal forecast band.
  * 2. **A month with no value is never persisted.** `MonthlyOutlook` requires at
- *    least one `inputRef`, and a `not_requested` month has none. Fabricating a
+ *    least one `inputRef`, and a `pending` month has none. Fabricating a
  *    sentinel ref would make the provenance record lie. Those months exist in the
  *    assembled horizon and nowhere else; the read path synthesises them.
  * 3. **A normal is not a forecast.** `climatology_normals.value_mm` is a mean of
@@ -49,7 +50,7 @@ import {
 export const CLIMATOLOGY_OUTLOOK_DERIVATION_VERSION = "climatology-outlook@1.0.0";
 
 /** The band `permittedMonthlyDataClasses` allows climatology in. Never widened here. */
-export const CLIMATOLOGY_FIRST_LEAD_MONTH = 8;
+export const CLIMATOLOGY_FIRST_LEAD_MONTH = 7;
 export const CLIMATOLOGY_LAST_LEAD_MONTH = 12;
 
 /**
@@ -63,8 +64,12 @@ export const CLIMATOLOGY_LAST_LEAD_MONTH = 12;
 export const SPREAD_REASON_NO_VALUE = "no_value";
 export const SPREAD_REASON_CLIMATOLOGY = "climatology_has_no_ensemble";
 
-/** A lead month 1–7 has no requested forecast source in this phase. */
-export const NO_FORECAST_SOURCE_REASON = "not_requested";
+/**
+ * The one reason a month with no stored row is served with. Every lead month
+ * 1–12 now has an approved source class, so "no product exists" is no longer true
+ * of any of them; `pending` is the weakest true claim the read path can make.
+ */
+export const PENDING_OUTLOOK_REASON = "pending";
 
 /** The baseline holds no normal for that calendar month (`tables-climate.md` §5). */
 export const MISSING_BASELINE_REASON = "insufficient_history";
@@ -104,7 +109,7 @@ export interface ClimatologyOutlookDerivation {
   readonly inputRefs: readonly DataInputRef[];
   readonly inputSnapshotHash: string;
   readonly baselineHash: string;
-  /** Only the climatology months. Lead months 1–7 are absent by construction. */
+  /** Only the climatology months. Lead months 1–6 are absent by construction. */
   readonly months: readonly ClimatologyOutlookMonth[];
 }
 
@@ -144,7 +149,7 @@ function monthIndexOf(month: string): number {
 function noValueMonth(
   leadMonth: number,
   month: string,
-  missingReason: "not_requested" | "insufficient_history",
+  missingReason: "pending" | "insufficient_history",
 ): OutlookMonth {
   return {
     leadMonth,
@@ -184,7 +189,7 @@ function climatologyMonth(
 
 /**
  * Assemble twelve labelled months and, when real inputs exist, the derivation
- * that may be persisted for lead months 8–12.
+ * that may be persisted for lead months 7–12.
  */
 export function assembleClimatologyOutlook(
   input: ClimatologyOutlookInput,
@@ -242,7 +247,7 @@ export function assembleClimatologyOutlook(
     }
 
     if (leadMonth < CLIMATOLOGY_FIRST_LEAD_MONTH) {
-      months.push(noValueMonth(leadMonth, month, NO_FORECAST_SOURCE_REASON));
+      months.push(noValueMonth(leadMonth, month, PENDING_OUTLOOK_REASON));
       continue;
     }
 

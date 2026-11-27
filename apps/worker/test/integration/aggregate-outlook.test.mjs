@@ -37,8 +37,15 @@ const BASELINE = `ERA5:1991-2020:p57aw${token}`;
 const UNKNOWN_BASELINE = `ERA5:1991-2020:p57aw${token}unknown`;
 const FIRST_MONTH = "2026-08-01";
 
-/** Lead 8–12 of 2026-08-01, i.e. the five months a climatology may fill. */
-const EXPECTED_MONTHS = ["2027-03-01", "2027-04-01", "2027-05-01", "2027-06-01", "2027-07-01"];
+/** Lead 7–12 of 2026-08-01, i.e. the six months a climatology may fill. */
+const EXPECTED_MONTHS = [
+  "2027-02-01",
+  "2027-03-01",
+  "2027-04-01",
+  "2027-05-01",
+  "2027-06-01",
+  "2027-07-01",
+];
 
 const NOW = new Date("2026-08-01T00:00:00.000Z");
 
@@ -209,7 +216,7 @@ after(async () => {
 });
 
 describe("aggregate — climatology materialisation", () => {
-  it("writes lead months 8–12 and settles a job that opens no ingestion run", async () => {
+  it("writes lead months 7–12 and settles a job that opens no ingestion run", async () => {
     const { queue, runner } = makeRunner();
     const { id } = await enqueue(queue, payloadFor());
 
@@ -220,7 +227,7 @@ describe("aggregate — climatology materialisation", () => {
     assert.equal(job.ingestionRunId, null, "a derived artifact invents no IngestionRun");
 
     const rows = await outlookRows();
-    assert.equal(rows.length, 5, "lead months 1–7 are not rows");
+    assert.equal(rows.length, 6, "lead months 1–6 are not rows");
     assert.deepEqual(
       rows.map((row) => row.month),
       EXPECTED_MONTHS,
@@ -237,9 +244,9 @@ describe("aggregate — climatology materialisation", () => {
       assert.match(row.inputSnapshotHash, /^[0-9a-f]{64}$/);
       assert.equal(row.derivationVersion, "climatology-outlook@1.0.0");
     }
-    // Lead 8 of 2026-08 is 2027-03, so the March normal is used.
-    assert.equal(rows[0].valueMm, 102);
-    assert.equal(rows[4].valueMm, 106);
+    // Lead 7 of 2026-08 is 2027-02, so the February normal is used.
+    assert.equal(rows[0].valueMm, 101);
+    assert.equal(rows[5].valueMm, 106);
   });
 
   it("is idempotent: the same derivation leaves one active row per month", async () => {
@@ -250,7 +257,7 @@ describe("aggregate — climatology materialisation", () => {
     assert.equal((await jobRow(id)).status, "succeeded");
 
     const rows = await outlookRows();
-    assert.equal(rows.length, 5, "no second row is written for an identical derivation");
+    assert.equal(rows.length, 6, "no second row is written for an identical derivation");
     assert.ok(rows.every((row) => row.status === "active"));
   });
 
@@ -269,7 +276,7 @@ describe("aggregate — climatology materialisation", () => {
 
     for (const cellKey of [CELL, CELL_TWO]) {
       const rows = await outlookRows(cellKey);
-      assert.equal(rows.length, 5, `${cellKey} has five climatology months`);
+      assert.equal(rows.length, 6, `${cellKey} has six climatology months`);
       assert.ok(rows.every((row) => row.status === "active"));
     }
   });

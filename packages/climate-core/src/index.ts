@@ -3,7 +3,7 @@ export {
   CLIMATOLOGY_LAST_LEAD_MONTH,
   CLIMATOLOGY_OUTLOOK_DERIVATION_VERSION,
   MISSING_BASELINE_REASON,
-  NO_FORECAST_SOURCE_REASON,
+  PENDING_OUTLOOK_REASON,
   SPREAD_REASON_CLIMATOLOGY,
   SPREAD_REASON_NO_VALUE,
   assembleClimatologyOutlook,
@@ -15,6 +15,27 @@ export {
   type ClimatologyOutlookOutcome,
   type StoredBaselineNormal,
 } from "./aggregate.js";
+export {
+  SEAS5_PROVIDER_CONSISTENCY_MS,
+  SEAS5_RELEASE_DAY_UTC,
+  SEAS5_RELEASE_HOUR_UTC,
+  seasonalAvailability,
+  seasonalStaleBoundary,
+  type OutlookAvailability,
+} from "./freshness.js";
+export {
+  SEASONAL_OUTLOOK_DERIVATION_VERSION,
+  SEASONAL_REQUIRED_MEMBER_COUNT,
+  SPREAD_REASON_SEASONAL,
+  assembleSeasonalOutlook,
+  seasonalOutlookMonths,
+  type SeasonalMemberTotal,
+  type SeasonalOutlookDerivation,
+  type SeasonalOutlookFailureKind,
+  type SeasonalOutlookInput,
+  type SeasonalOutlookMonth,
+  type SeasonalOutlookOutcome,
+} from "./seasonal.js";
 export {
   BASELINE_PERIOD,
   BASELINE_UNIT,
@@ -32,7 +53,6 @@ export {
   type DailyPrecipitationInput,
 } from "./climatology.js";
 export {
-  PENDING_OUTLOOK_REASON,
   assembleOutlookHorizon,
   type OutlookHorizonReadInput,
   type OutlookReadFailureKind,

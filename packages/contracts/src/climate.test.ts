@@ -330,8 +330,9 @@ describe("MonthlyOutlook", () => {
     expect(permittedMonthlyDataClasses(1)).toEqual(["seasonal_forecast"]);
     expect(permittedMonthlyDataClasses(2)).toEqual(["seasonal_forecast"]);
     expect(permittedMonthlyDataClasses(3)).toEqual(["seasonal_forecast"]);
-    expect(permittedMonthlyDataClasses(7)).toEqual(["seasonal_forecast"]);
-    expect(permittedMonthlyDataClasses(8)).toEqual(["climatology"]);
+    expect(permittedMonthlyDataClasses(6)).toEqual(["seasonal_forecast"]);
+    expect(permittedMonthlyDataClasses(7)).toEqual(["climatology"]);
+    expect(permittedMonthlyDataClasses(12)).toEqual(["climatology"]);
     expect(permittedMonthlyDataClasses(12)).toEqual(["climatology"]);
     expect(permittedMonthlyDataClasses(0)).toEqual([]);
     expect(permittedMonthlyDataClasses(13)).toEqual([]);
@@ -386,7 +387,7 @@ describe("MonthlyOutlook", () => {
       valueMm: null,
       missingReason: "pending",
       ensembleSpreadMm: null,
-      spreadUnavailableReason: "not_requested",
+      spreadUnavailableReason: "no_value",
     };
     expect(monthlyOutlookSchema.safeParse(pending).success).toBe(true);
   });
@@ -403,7 +404,7 @@ describe("MonthlyOutlook", () => {
       valueMm: null,
       missingReason: null,
       ensembleSpreadMm: null,
-      spreadUnavailableReason: "not_requested",
+      spreadUnavailableReason: "no_value",
     });
     expect(result.success).toBe(false);
   });
@@ -455,7 +456,7 @@ describe("MonthlyOutlook", () => {
   });
 
   it("rejects a seasonal value in the climatology band", () => {
-    expect(monthlyOutlookSchema.safeParse({ ...base, leadMonth: 8 }).success).toBe(false);
+    expect(monthlyOutlookSchema.safeParse({ ...base, leadMonth: 7 }).success).toBe(false);
   });
 
   it("ties spread presence to its reason", () => {
@@ -632,7 +633,7 @@ describe("MonthlyOutlook cross-field validation — F-05", () => {
         valueMm: null,
         missingReason: "pending",
         ensembleSpreadMm: null,
-        spreadUnavailableReason: "not_requested",
+        spreadUnavailableReason: "no_value",
       }),
     );
     expect(result.success).toBe(false);
@@ -647,7 +648,7 @@ describe("MonthlyOutlook cross-field validation — F-05", () => {
           valueMm: null,
           missingReason: "pending",
           ensembleSpreadMm: null,
-          spreadUnavailableReason: "not_requested",
+          spreadUnavailableReason: "no_value",
         }),
       ).success,
     ).toBe(true);
@@ -694,7 +695,7 @@ describe("12-month horizon — F-03", () => {
   };
 
   const entryFor = (leadMonth: number) => {
-    const dataClass = leadMonth <= 7 ? "seasonal_forecast" : "climatology";
+    const dataClass = leadMonth <= 6 ? "seasonal_forecast" : "climatology";
     const isClimatology = dataClass === "climatology";
     return {
       leadMonth,
@@ -838,7 +839,7 @@ describe("Monthly source capability — a month needs a monthly product", () => 
   });
 
   it("accepts the seasonal product across every month it can cover", () => {
-    for (let leadMonth = 1; leadMonth <= 7; leadMonth += 1) {
+    for (let leadMonth = 1; leadMonth <= 6; leadMonth += 1) {
       expect(
         outlookMonthSchema.safeParse(forecastMonth(leadMonth, "seasonal_forecast")).success,
       ).toBe(true);
@@ -846,7 +847,7 @@ describe("Monthly source capability — a month needs a monthly product", () => 
   });
 
   it("rejects weather_forecast for a calendar month, whose horizon is 16 days", () => {
-    for (const leadMonth of [1, 2, 3, 7]) {
+    for (const leadMonth of [1, 2, 3, 6]) {
       expect(
         outlookMonthSchema.safeParse(forecastMonth(leadMonth, "weather_forecast")).success,
       ).toBe(false);
@@ -854,7 +855,7 @@ describe("Monthly source capability — a month needs a monthly product", () => 
   });
 
   it("rejects subseasonal_forecast, which has no monthly product", () => {
-    for (const leadMonth of [1, 2, 3, 7]) {
+    for (const leadMonth of [1, 2, 3, 6]) {
       expect(
         outlookMonthSchema.safeParse(forecastMonth(leadMonth, "subseasonal_forecast")).success,
       ).toBe(false);
@@ -866,10 +867,10 @@ describe("Monthly source capability — a month needs a monthly product", () => 
   });
 
   it("accepts climatology only where the seasonal product cannot reach", () => {
-    expect(outlookMonthSchema.safeParse(forecastMonth(7, "climatology")).success).toBe(false);
+    expect(outlookMonthSchema.safeParse(forecastMonth(6, "climatology")).success).toBe(false);
     expect(
       outlookMonthSchema.safeParse({
-        ...forecastMonth(8, "climatology"),
+        ...forecastMonth(7, "climatology"),
         evaluationBasis: "climatology",
         missingReason: "beyond_horizon",
         baselineVersion: "ERA5:1991-2020:v1",
@@ -926,10 +927,40 @@ describe("monthly outlook estimator — Q-P5-7", () => {
     unit: "mm",
     estimator: "climatological_mean",
     derivationVersion: "climatology-outlook@1.0.0",
+    availability: null,
   };
 
   it("accepts a climatology month carrying climatological_mean", () => {
     expect(climateOutlookMonthSchema.safeParse(climatologyMonth).success).toBe(true);
+  });
+
+  it("requires a forecast month to state fresh or stale", () => {
+    const seasonal = {
+      ...climatologyMonth,
+      leadMonth: 2,
+      dataClass: "seasonal_forecast",
+      evaluationBasis: "monthly",
+      missingReason: null,
+      baselineVersion: null,
+      ensembleSpreadMm: null,
+      spreadUnavailableReason: "ensemble_spread_not_derived",
+      estimator: "ensemble_mean",
+      derivationVersion: "seasonal-outlook@1.0.0",
+    };
+
+    expect(
+      climateOutlookMonthSchema.safeParse({ ...seasonal, availability: "fresh" }).success,
+    ).toBe(true);
+    expect(
+      climateOutlookMonthSchema.safeParse({ ...seasonal, availability: "stale" }).success,
+    ).toBe(true);
+    expect(climateOutlookMonthSchema.safeParse({ ...seasonal, availability: null }).success).toBe(
+      false,
+    );
+    // And the reverse: a normal has no run, so it cannot claim freshness.
+    expect(
+      climateOutlookMonthSchema.safeParse({ ...climatologyMonth, availability: "fresh" }).success,
+    ).toBe(false);
   });
 
   it("refuses an estimator that does not follow from the data class", () => {
@@ -953,6 +984,7 @@ describe("monthly outlook estimator — Q-P5-7", () => {
       spreadUnavailableReason: "no_value",
       estimator: null,
       derivationVersion: null,
+      availability: null,
     };
     expect(climateOutlookMonthSchema.safeParse(valueless).success).toBe(true);
     expect(
@@ -966,17 +998,17 @@ describe("monthly outlook estimator — Q-P5-7", () => {
     ).toBe(false);
   });
 
-  /** Lead 1–7 have no monthly product in this build; 8–12 carry a climatology normal. */
+  /** Leads 1–6 are the seasonal band; 7–12 carry a climatology normal. */
   const entryFor = (leadMonth: number) => {
     const month = calendarMonthOf("2026-11-01", leadMonth);
-    if (leadMonth >= 8) return { ...climatologyMonth, leadMonth, month };
+    if (leadMonth >= 7) return { ...climatologyMonth, leadMonth, month };
     return {
       leadMonth,
       month,
       dataClass: null,
       evaluationBasis: "monthly",
       valueMm: null,
-      missingReason: "not_requested",
+      missingReason: "pending",
       baselineVersion: null,
       anomalyKind: null,
       ensembleSpreadMm: null,
@@ -984,6 +1016,7 @@ describe("monthly outlook estimator — Q-P5-7", () => {
       unit: "mm",
       estimator: null,
       derivationVersion: null,
+      availability: null,
     };
   };
 

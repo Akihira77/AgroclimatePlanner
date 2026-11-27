@@ -25,11 +25,14 @@ import { jakartaMonthOf } from "./calendar.js";
 /**
  * `GET /v1/climate/outlook` — Phase 5.7B.
  *
- * Reads the months Phase 5.7A materialised and **presents** them. It derives
+ * Reads the months the aggregator materialised and **presents** them. It derives
  * nothing: no value is computed, converted, interpolated, or filled from a
- * neighbouring month, and a month with no stored row is answered as absent with a
- * reason that is true of this layer (`pending`, or `not_requested` where the
- * contract knows no product exists).
+ * neighbouring month, and a month with no stored row is answered as absent with
+ * `pending` — every lead month 1–12 has an approved source, so no month has a
+ * structural "nothing was asked for" answer any more.
+ *
+ * A seasonal month also carries read-time `availability` (`fresh`/`stale`). That
+ * is computed from the row's forecast run and the current instant, never stored.
  *
  * The field → cell step is the same one `POST /v1/fields/:fieldId/resolve-cell`
  * performs, and deliberately so: `field_outlook_cells` has no writer (5.2 defers
@@ -85,7 +88,13 @@ export class ClimateService {
 
       if (stored === null) return null;
 
-      const assembled = assembleOutlookHorizon({ firstMonth, rows: stored.months });
+      const assembled = assembleOutlookHorizon({
+        firstMonth,
+        rows: stored.months,
+        // Freshness is evaluated here, at read time, against the same clock the
+        // default `firstMonth` uses. Nothing stored is rewritten.
+        now: new Date().toISOString(),
+      });
       if (!assembled.ok) {
         // A row that contradicts the contract is a stored-state defect, not a
         // client error: no input can make it serveable, and reporting it as

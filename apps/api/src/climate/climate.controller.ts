@@ -10,9 +10,11 @@ import { ClimateService } from "./climate.service.js";
 /**
  * Climate read routes (`api-conventions.md` §5).
  *
- * `GET /v1/climate/outlook` answers the twelve-month horizon Phase 5.7A
- * materialised: lead months 8–12 labelled `climatology` where a normal exists, and
- * lead months 1–7 with no value — no product materialises them in this build.
+ * `GET /v1/climate/outlook` answers the twelve-month horizon 5.7A–D materialised:
+ * lead months 1–6 `seasonal_forecast` when a complete SEAS5 run exists, lead months
+ * 7–12 `climatology` where a normal exists, and `pending` for any month with no
+ * stored row. A seasonal month also carries `availability` (`fresh | stale`),
+ * derived at read time from the run's initialisation.
  *
  * Same `AuthGuard` as the Farm and Field routes, so session handling, the CSRF
  * rule for mutations, and the `Origin` middleware apply without a second

@@ -1,24 +1,39 @@
 import { targetSelectorHashOf } from "@agroclimate/contracts";
-import { outlookAggregationJobPayloadSchema } from "@agroclimate/contracts";
-import { assembleClimatologyOutlook } from "@agroclimate/climate-core";
+import {
+  outlookAggregationJobPayloadSchema,
+  seasonalOutlookAggregationJobPayloadSchema,
+  type OutlookAggregationJobPayload,
+  type SeasonalOutlookAggregationJobPayload,
+} from "@agroclimate/contracts";
+import {
+  assembleClimatologyOutlook,
+  assembleSeasonalOutlook,
+  seasonalOutlookMonths,
+  type SeasonalMemberTotal,
+} from "@agroclimate/climate-core";
 import {
   configureTransactionTimeouts,
   findOutlookCellId,
   InvariantViolationError,
   LeaseLostError,
   loadClimatologyOutlookSource,
+  loadSeasonalForecastRun,
+  loadSeasonalMemberPopulation,
   lockForecastFootprint,
   lockJobForSettlement,
   OutlookBaselineNotFoundError,
   OutlookCellNotFoundError,
   persistClimatologyOutlook,
+  persistSeasonalOutlook,
   settlePairAsWorker,
+  type TenantTransaction,
 } from "@agroclimate/database";
 
-import type { HandlerResult, JobHandler } from "../runner.js";
+import type { ClaimedJob } from "../queue/types.js";
+import type { HandlerResult, JobHandler, LogFn } from "../runner.js";
 
 /**
- * `aggregate` — climatology outlook materialisation, Phase 5.7A.
+ * `aggregate` — outlook materialisation: climatology (5.7A) and seasonal (5.7D).
  *
  * No provider is called and no `IngestionRun` exists: this handler reads
  * `app.climatology_normals` and writes `app.monthly_outlooks`, all as
@@ -26,9 +41,10 @@ import type { HandlerResult, JobHandler } from "../runner.js";
  * queue, kind or migration is added.
  *
  * What is written is only what has real inputs behind it: the climatology months
- * (lead 8–12). Lead 1–7 are assembled by the pure layer as explicit no-value
- * entries and are **not** rows — a `not_requested` month has no `DataInputRef`
- * to name, and the contract refuses an empty `inputRefs`.
+ * (lead 7–12) and, from a complete 50-member population, the seasonal months
+ * (lead 1–6). A month with no stored row is assembled as `pending` by the read
+ * layer and is **not** a row — such a month has no `DataInputRef` to name, and the
+ * contract refuses an empty `inputRefs`.
  *
  * The whole read/compare/write/settle sequence is one transaction. A failure
  * rolls back to the previous active row, so a broken recomputation never removes
@@ -95,6 +111,248 @@ function terminal(code: string, message: string): HandlerResult {
   return { outcome: "terminal", error: { code, message, retryable: false } };
 }
 
+type AggregationPlan =
+  | { readonly kind: "climatology"; readonly payload: OutlookAggregationJobPayload }
+  | { readonly kind: "seasonal"; readonly payload: SeasonalOutlookAggregationJobPayload }
+  | { readonly kind: "invalid" };
+
+interface AggregationWriteCounts {
+  readonly inserted: number;
+  readonly superseded: number;
+  readonly unchanged: number;
+  readonly persistedMonths: number;
+}
+
+/** The named run is absent, or is not the provider/model/product the job names. */
+export class SeasonalRunRefusedError extends Error {
+  override readonly name = "SeasonalRunRefusedError";
+}
+
+/** The run's member population is not the complete conjunction §8.7C.3 requires. */
+export class SeasonalPopulationIncompleteError extends Error {
+  override readonly name = "SeasonalPopulationIncompleteError";
+}
+
+async function materialiseClimatologyOutlook(
+  tx: TenantTransaction,
+  job: ClaimedJob,
+  payload: OutlookAggregationJobPayload,
+  computedAt: Date,
+  log: LogFn,
+): Promise<AggregationWriteCounts> {
+  let inserted = 0;
+  let superseded = 0;
+  let unchanged = 0;
+  let persistedMonths = 0;
+
+  for (const entry of payload.targetSelector.cells) {
+    const outlookCellId = await findOutlookCellId(tx, {
+      provider: payload.provider,
+      model: payload.model,
+      cellKey: entry.cellKey,
+    });
+
+    const source = await loadClimatologyOutlookSource(tx, {
+      baselineVersion: payload.baselineVersion,
+      outlookCellId,
+    });
+
+    const assembled = assembleClimatologyOutlook({
+      firstMonth: payload.firstMonth,
+      cellKey: entry.cellKey,
+      baselineVersion: payload.baselineVersion,
+      baselineDataset: source.baselineDataset,
+      normals: source.normals,
+    });
+    if (!assembled.ok) {
+      throw new InvariantViolationError(
+        `outlook assembly refused ${entry.cellKey}: ${assembled.message}`,
+      );
+    }
+
+    const derivation = assembled.value.derivation;
+    if (derivation === null) {
+      log("outlook_no_baseline", {
+        jobId: job.id,
+        cellKey: entry.cellKey,
+        baselineVersion: payload.baselineVersion,
+      });
+      continue;
+    }
+
+    const written = await persistClimatologyOutlook(
+      tx,
+      {
+        provider: payload.provider,
+        model: payload.model,
+        cellKey: entry.cellKey,
+        variable: SUPPORTED_VARIABLE,
+        derivationVersion: derivation.derivationVersion,
+        inputRefs: derivation.inputRefs,
+        inputSnapshotHash: derivation.inputSnapshotHash,
+        computedAt,
+        months: derivation.months,
+      },
+      { footprintLockHeld: true },
+    );
+
+    inserted += written.inserted;
+    superseded += written.superseded;
+    unchanged += written.unchanged;
+    persistedMonths += derivation.months.length;
+
+    log("outlook_materialised", {
+      jobId: job.id,
+      cellKey: entry.cellKey,
+      baselineVersion: payload.baselineVersion,
+      firstMonth: payload.firstMonth,
+      months: derivation.months.length,
+      monthsInserted: written.inserted,
+      monthsSuperseded: written.superseded,
+      monthsUnchanged: written.unchanged,
+      inputSnapshotHash: derivation.inputSnapshotHash,
+    });
+  }
+
+  return { inserted, superseded, unchanged, persistedMonths };
+}
+
+/**
+ * `aggregate` — seasonal outlook materialisation, Phase 5.7D.
+ *
+ * The run is the payload's, never a "latest" lookup performed here: a resolution
+ * at execution time would materialise a different forecast than the one enqueued.
+ * Its initialisation month selects the six months, lead month 1 being the month
+ * after initialisation.
+ *
+ * Every cell is read whole before anything is written. A month with fewer than the
+ * 50 indices `0..49`, a null total, a mixed ingestion run, or a missing month of
+ * the window throws before the row is staged; the transaction then rolls back, so
+ * the previous active answer survives untouched.
+ */
+async function materialiseSeasonalOutlook(
+  tx: TenantTransaction,
+  job: ClaimedJob,
+  payload: SeasonalOutlookAggregationJobPayload,
+  computedAt: Date,
+  log: LogFn,
+): Promise<AggregationWriteCounts> {
+  const run = await loadSeasonalForecastRun(tx, payload.forecastRunId);
+  if (run === null) {
+    throw new SeasonalRunRefusedError(`forecast run ${payload.forecastRunId} does not exist`);
+  }
+  if (run.provider !== payload.provider || run.model !== payload.model) {
+    throw new SeasonalRunRefusedError(
+      `forecast run ${payload.forecastRunId} is ${run.provider}/${run.model}, not the ${payload.provider}/${payload.model} the job names`,
+    );
+  }
+  // `product = 'seasonal'` alone is not enough: EC46 shares it. The model literal
+  // is what separates SEAS5 from a product with no monthly rows.
+  if (run.product !== "seasonal") {
+    throw new SeasonalRunRefusedError(
+      `forecast run ${payload.forecastRunId} has product "${run.product}"; a seasonal outlook needs "seasonal"`,
+    );
+  }
+
+  const initializedAt = run.initializedAt.toISOString();
+  const months = seasonalOutlookMonths(initializedAt);
+  if (months === null) {
+    throw new InvariantViolationError(
+      `forecast run ${payload.forecastRunId} has an unusable initialised_at`,
+    );
+  }
+
+  let inserted = 0;
+  let superseded = 0;
+  let unchanged = 0;
+  let persistedMonths = 0;
+
+  for (const entry of payload.targetSelector.cells) {
+    const members: SeasonalMemberTotal[] = [];
+    const ingestionRunIds = new Set<string>();
+
+    for (const month of months) {
+      const population = await loadSeasonalMemberPopulation(tx, {
+        forecastRunId: payload.forecastRunId,
+        provider: payload.provider,
+        model: payload.model,
+        cellKey: entry.cellKey,
+        month,
+      });
+      if (!population.ok) {
+        throw new SeasonalPopulationIncompleteError(`${entry.cellKey}: ${population.message}`);
+      }
+      ingestionRunIds.add(population.population.ingestionRunId);
+      for (const member of population.population.members) {
+        members.push({ month, memberIndex: member.memberIndex, valueMm: member.valueMm });
+      }
+    }
+
+    if (ingestionRunIds.size !== 1) {
+      throw new SeasonalPopulationIncompleteError(
+        `${entry.cellKey} mixes ${ingestionRunIds.size} ingestion runs across the run window; one derivation is one conversion of one run`,
+      );
+    }
+    const ingestionRunId = [...ingestionRunIds][0] as string;
+
+    const assembled = assembleSeasonalOutlook({
+      initializedAt,
+      cellKey: entry.cellKey,
+      forecastRunId: payload.forecastRunId,
+      ingestionRunId,
+      members,
+    });
+    if (!assembled.ok) {
+      if (assembled.kind === "incomplete_population") {
+        throw new SeasonalPopulationIncompleteError(`${entry.cellKey}: ${assembled.message}`);
+      }
+      throw new InvariantViolationError(
+        `seasonal outlook assembly refused ${entry.cellKey}: ${assembled.message}`,
+      );
+    }
+
+    const derivation = assembled.value;
+    const written = await persistSeasonalOutlook(
+      tx,
+      {
+        provider: payload.provider,
+        model: payload.model,
+        cellKey: entry.cellKey,
+        variable: SUPPORTED_VARIABLE,
+        forecastRunId: payload.forecastRunId,
+        ingestionRunId,
+        derivationVersion: derivation.derivationVersion,
+        inputRefs: derivation.inputRefs,
+        inputSnapshotHash: derivation.inputSnapshotHash,
+        computedAt,
+        months: derivation.months,
+      },
+      { footprintLockHeld: true },
+    );
+
+    inserted += written.inserted;
+    superseded += written.superseded;
+    unchanged += written.unchanged;
+    persistedMonths += derivation.months.length;
+
+    log("seasonal_outlook_materialised", {
+      jobId: job.id,
+      cellKey: entry.cellKey,
+      forecastRunId: payload.forecastRunId,
+      initializedAt,
+      months: derivation.months.length,
+      monthsInserted: written.inserted,
+      monthsSuperseded: written.superseded,
+      monthsUnchanged: written.unchanged,
+      monthsSkipped: written.skipped,
+      recordSetHash: derivation.recordSetHash,
+      inputSnapshotHash: derivation.inputSnapshotHash,
+    });
+  }
+
+  return { inserted, superseded, unchanged, persistedMonths };
+}
+
 export function createOutlookAggregationHandler(
   options: OutlookAggregationHandlerOptions = {},
 ): JobHandler {
@@ -107,14 +365,23 @@ export function createOutlookAggregationHandler(
     opensIngestionRun: false,
 
     async handle(job, context): Promise<HandlerResult> {
-      const parsed = outlookAggregationJobPayloadSchema.safeParse(job.payload);
-      if (!parsed.success) {
+      // Two payload shapes share the `aggregate` kind: climatology (5.7A) names a
+      // baseline, seasonal (5.7D) names one explicit run. `forecastRunId` is the
+      // discriminator; `model` cannot be, because both shapes carry one.
+      const seasonalParsed = seasonalOutlookAggregationJobPayloadSchema.safeParse(job.payload);
+      const climatologyParsed = outlookAggregationJobPayloadSchema.safeParse(job.payload);
+      const plan: AggregationPlan = seasonalParsed.success
+        ? { kind: "seasonal", payload: seasonalParsed.data }
+        : climatologyParsed.success
+          ? { kind: "climatology", payload: climatologyParsed.data }
+          : { kind: "invalid" };
+      if (plan.kind === "invalid") {
         return terminal(
           "payload_invalid",
-          "the job payload does not satisfy outlookAggregationJobPayloadSchema",
+          "the job payload satisfies neither outlookAggregationJobPayloadSchema nor seasonalOutlookAggregationJobPayloadSchema",
         );
       }
-      const payload = parsed.data;
+      const payload = plan.payload;
 
       // The queue row is not an approval: the digest must match the selector it
       // claims to describe.
@@ -189,84 +456,21 @@ export function createOutlookAggregationHandler(
               })),
             );
 
-            let inserted = 0;
-            let superseded = 0;
-            let unchanged = 0;
-            let persistedMonths = 0;
+            const written =
+              plan.kind === "seasonal"
+                ? await materialiseSeasonalOutlook(tx, job, plan.payload, computedAt, context.log)
+                : await materialiseClimatologyOutlook(
+                    tx,
+                    job,
+                    plan.payload,
+                    computedAt,
+                    context.log,
+                  );
 
-            for (const entry of payload.targetSelector.cells) {
-              const outlookCellId = await findOutlookCellId(tx, {
-                provider: payload.provider,
-                model: payload.model,
-                cellKey: entry.cellKey,
-              });
-
-              const source = await loadClimatologyOutlookSource(tx, {
-                baselineVersion: payload.baselineVersion,
-                outlookCellId,
-              });
-
-              const assembled = assembleClimatologyOutlook({
-                firstMonth: payload.firstMonth,
-                cellKey: entry.cellKey,
-                baselineVersion: payload.baselineVersion,
-                baselineDataset: source.baselineDataset,
-                normals: source.normals,
-              });
-              if (!assembled.ok) {
-                throw new InvariantViolationError(
-                  `outlook assembly refused ${entry.cellKey}: ${assembled.message}`,
-                );
-              }
-
-              const derivation = assembled.value.derivation;
-              if (derivation === null) {
-                context.log("outlook_no_baseline", {
-                  jobId: job.id,
-                  cellKey: entry.cellKey,
-                  baselineVersion: payload.baselineVersion,
-                });
-                continue;
-              }
-
-              const written = await persistClimatologyOutlook(
-                tx,
-                {
-                  provider: payload.provider,
-                  model: payload.model,
-                  cellKey: entry.cellKey,
-                  variable: SUPPORTED_VARIABLE,
-                  derivationVersion: derivation.derivationVersion,
-                  inputRefs: derivation.inputRefs,
-                  inputSnapshotHash: derivation.inputSnapshotHash,
-                  computedAt,
-                  months: derivation.months,
-                },
-                { footprintLockHeld: true },
-              );
-
-              inserted += written.inserted;
-              superseded += written.superseded;
-              unchanged += written.unchanged;
-              persistedMonths += derivation.months.length;
-
-              context.log("outlook_materialised", {
-                jobId: job.id,
-                cellKey: entry.cellKey,
-                baselineVersion: payload.baselineVersion,
-                firstMonth: payload.firstMonth,
-                months: derivation.months.length,
-                monthsInserted: written.inserted,
-                monthsSuperseded: written.superseded,
-                monthsUnchanged: written.unchanged,
-                inputSnapshotHash: derivation.inputSnapshotHash,
-              });
-            }
-
-            const recordCount = inserted + unchanged;
+            const recordCount = written.inserted + written.unchanged;
             // Coverage is a count of months affirmed, not a percentage: no
             // forecast axis exists to be partially covered in this phase.
-            const coveragePercent = persistedMonths === 0 ? 0 : 100;
+            const coveragePercent = written.persistedMonths === 0 ? 0 : 100;
 
             await settlePairAsWorker(tx, {
               jobId: job.id,
@@ -274,7 +478,13 @@ export function createOutlookAggregationHandler(
               mode: { mode: "succeed", to: "succeeded", recordCount, coveragePercent },
             });
 
-            return { recordCount, coveragePercent, inserted, superseded, unchanged };
+            return {
+              recordCount,
+              coveragePercent,
+              inserted: written.inserted,
+              superseded: written.superseded,
+              unchanged: written.unchanged,
+            };
           },
           {
             timeout: OUTLOOK_AGGREGATION_TIMEOUTS.transactionTimeoutMs,
@@ -284,8 +494,10 @@ export function createOutlookAggregationHandler(
 
         context.log("outlook_aggregation_settled", {
           jobId: job.id,
-          firstMonth: payload.firstMonth,
-          baselineVersion: payload.baselineVersion,
+          payloadKind: plan.kind,
+          ...(plan.kind === "climatology"
+            ? { firstMonth: plan.payload.firstMonth, baselineVersion: plan.payload.baselineVersion }
+            : { forecastRunId: plan.payload.forecastRunId }),
           cells: payload.targetSelector.cells.length,
           monthsInserted: counts.inserted,
           monthsSuperseded: counts.superseded,
@@ -308,6 +520,14 @@ export function createOutlookAggregationHandler(
         }
         if (error instanceof OutlookBaselineNotFoundError) {
           return terminal("baseline_unknown", error.message);
+        }
+        if (error instanceof SeasonalRunRefusedError) {
+          return terminal("forecast_run_refused", error.message);
+        }
+        if (error instanceof SeasonalPopulationIncompleteError) {
+          // Terminal, not retryable: the same job would read the same rows. A new
+          // ingest arrives as a new IngestionRun and a new job.
+          return terminal("population_incomplete", error.message);
         }
         throw error;
       }

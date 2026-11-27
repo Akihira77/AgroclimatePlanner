@@ -17,5 +17,6 @@ export {
   hashFieldSnapshot,
   hashDerivationDescriptor,
   hashBaselineNormals,
+  hashSeasonalRecordSet,
 } from "./hash.js";
 export * from "./version.js";

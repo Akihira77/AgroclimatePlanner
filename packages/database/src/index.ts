@@ -143,18 +143,28 @@ export {
   findOutlookCellId,
   loadActiveOutlookMonths,
   loadClimatologyOutlookSource,
+  loadSeasonalForecastRun,
+  loadSeasonalMemberPopulation,
   OutlookBaselineNotFoundError,
   OutlookCellNotFoundError,
   persistClimatologyOutlook,
+  persistSeasonalOutlook,
 } from "./outlook.js";
 export type {
   ActiveOutlookMonthRow,
   ActiveOutlookMonths,
   ClimatologyOutlookMonthRow,
   ClimatologyOutlookSource,
+  LoadSeasonalPopulationInput,
   PersistClimatologyOutlookInput,
   PersistClimatologyOutlookOptions,
   PersistClimatologyOutlookResult,
+  PersistSeasonalOutlookInput,
+  PersistSeasonalOutlookResult,
+  SeasonalForecastRun,
+  SeasonalMemberPopulation,
+  SeasonalOutlookMonthRow,
+  SeasonalPopulationOutcome,
 } from "./outlook.js";
 
 export interface DatabaseOptions {

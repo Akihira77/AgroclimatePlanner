@@ -1,6 +1,7 @@
 import type {
   ClimateOutlookMonth,
   MonthlyOutlookEstimator,
+  OutlookAvailability,
   OutlookEvaluationBasis,
   WeatherDataClass,
   MissingReason,
@@ -12,7 +13,10 @@ import {
   LEAD_MONTHS,
 } from "@agroclimate/contracts";
 
-import { NO_FORECAST_SOURCE_REASON, SPREAD_REASON_NO_VALUE } from "./aggregate.js";
+import { PENDING_OUTLOOK_REASON, SPREAD_REASON_NO_VALUE } from "./aggregate.js";
+import { seasonalAvailability } from "./freshness.js";
+
+export { PENDING_OUTLOOK_REASON };
 
 /**
  * The served month for a month that has **no** `monthly_outlooks` row.
@@ -27,12 +31,10 @@ import { NO_FORECAST_SOURCE_REASON, SPREAD_REASON_NO_VALUE } from "./aggregate.j
  *   `ingestion_runs` row exists either, so nothing records the cause. A failed
  *   ingest must not be presented as pending *or* as a failure it cannot prove.
  *
- * Lead months 1–7 without a row are different, and the contract knows why: no
- * product materialises them in this phase (`MONTHLY_OUTLOOK_BANDS` permits only
- * `seasonal_forecast` there, and no seasonal writer exists), so `not_requested`
- * is a fact rather than a guess.
+ * `not_requested` is no longer emitted: every lead month 1–12 has an approved
+ * source class after 5.7D (seasonal 1–6, climatology 7–12), so the token would
+ * only restate a band rule that no longer excludes anything.
  */
-export const PENDING_OUTLOOK_REASON = "pending";
 
 /** One stored `app.monthly_outlooks` row, as the read path receives it. */
 export interface StoredOutlookMonth {
@@ -50,12 +52,20 @@ export interface StoredOutlookMonth {
   readonly ensembleSpreadMm: number | null;
   readonly spreadUnavailableReason: string | null;
   readonly derivationVersion: string;
+  /**
+   * `ForecastRun.initialized_at`, joined for a seasonal row. `null` for a
+   * climatology row and for a stored absence; a seasonal value without it is
+   * inconsistent stored state.
+   */
+  readonly initializedAt: string | null;
 }
 
 export interface OutlookHorizonReadInput {
   /** The calendar month lead month 1 describes, first-of-month. */
   readonly firstMonth: string;
   readonly rows: readonly StoredOutlookMonth[];
+  /** Read-time clock, UTC ISO instant. Freshness is never read from the row. */
+  readonly now: string;
 }
 
 export type OutlookReadFailureKind = "invalid_input" | "inconsistent_row";
@@ -127,7 +137,7 @@ export function assembleOutlookHorizon(input: OutlookHorizonReadInput): OutlookR
       continue;
     }
 
-    const mapped = storedMonth(leadMonth, row);
+    const mapped = storedMonth(leadMonth, row, input.now);
     if ("kind" in mapped) return mapped;
     months.push(mapped);
   }
@@ -136,8 +146,8 @@ export function assembleOutlookHorizon(input: OutlookHorizonReadInput): OutlookR
 }
 
 /**
- * Lead months 1–7 have no approved source in this phase; 8–12 have a source and
- * simply no materialised answer for this cell.
+ * Every lead month 1–12 now has an approved source, so a month without a row is
+ * pending rather than unrequested.
  */
 function noValueMonth(leadMonth: number, month: string): ClimateOutlookMonth {
   return {
@@ -146,7 +156,7 @@ function noValueMonth(leadMonth: number, month: string): ClimateOutlookMonth {
     dataClass: null,
     evaluationBasis: "monthly",
     valueMm: null,
-    missingReason: leadMonth <= 7 ? NO_FORECAST_SOURCE_REASON : PENDING_OUTLOOK_REASON,
+    missingReason: PENDING_OUTLOOK_REASON,
     baselineVersion: null,
     anomalyKind: null,
     ensembleSpreadMm: null,
@@ -154,12 +164,14 @@ function noValueMonth(leadMonth: number, month: string): ClimateOutlookMonth {
     unit: "mm",
     estimator: null,
     derivationVersion: null,
+    availability: null,
   };
 }
 
 function storedMonth(
   leadMonth: number,
   row: StoredOutlookMonth,
+  now: string,
 ): ClimateOutlookMonth | Extract<OutlookReadOutcome, { ok: false }> {
   // Value and class are present or absent together (`monthly_outlooks_value_state_check`,
   // `outlookMonthSchema`). A row with only one of them is contradictory stored state:
@@ -204,6 +216,7 @@ function storedMonth(
       unit: "mm" as const,
       estimator: null,
       derivationVersion: null,
+      availability: null,
     };
     const parsedAbsent = climateOutlookMonthSchema.safeParse(absent);
     if (!parsedAbsent.success) {
@@ -224,6 +237,26 @@ function storedMonth(
     );
   }
 
+  // Freshness is derived, never stored: the same row is `fresh` before its run's
+  // next scheduled release and `stale` after it, with the value unchanged.
+  let availability: OutlookAvailability | null = null;
+  if (dataClass === "seasonal_forecast") {
+    if (row.initializedAt === null) {
+      return fail(
+        "inconsistent_row",
+        `month "${row.month}" is a seasonal forecast with no forecast run to date it`,
+      );
+    }
+    try {
+      availability = seasonalAvailability(row.initializedAt, now);
+    } catch (error) {
+      return fail(
+        "inconsistent_row",
+        `month "${row.month}" has an unusable initialisation instant: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   const candidate = {
     leadMonth,
     month: row.month,
@@ -238,6 +271,7 @@ function storedMonth(
     unit: "mm" as const,
     estimator,
     derivationVersion: row.derivationVersion,
+    availability,
   };
 
   // The response contract is the last gate: value/class/reason coherence, the

@@ -8,6 +8,8 @@ import {
 } from "./outlook-read.js";
 
 const FIRST_MONTH = "2026-11-01";
+/** One fixed instant: freshness is compared against the run's release boundary. */
+const NOW = "2026-11-20T00:00:00.000Z";
 
 function climatologyRow(month: string, valueMm = 210.5): StoredOutlookMonth {
   return {
@@ -22,11 +24,12 @@ function climatologyRow(month: string, valueMm = 210.5): StoredOutlookMonth {
     ensembleSpreadMm: null,
     spreadUnavailableReason: "climatology_has_no_ensemble",
     derivationVersion: "climatology-outlook@1.0.0",
+    initializedAt: null,
   };
 }
 
-function assembled(months: readonly StoredOutlookMonth[], firstMonth = FIRST_MONTH) {
-  const outcome = assembleOutlookHorizon({ firstMonth, rows: months });
+function assembled(months: readonly StoredOutlookMonth[], firstMonth = FIRST_MONTH, now = NOW) {
+  const outcome = assembleOutlookHorizon({ firstMonth, rows: months, now });
   if (!outcome.ok) throw new Error(`${outcome.kind}: ${outcome.message}`);
   return outcome.value.months;
 }
@@ -45,14 +48,13 @@ describe("assembleOutlookHorizon — twelve months, no invention", () => {
     expect(months.some((month) => month.valueMm === 0)).toBe(false);
   });
 
-  it("labels lead months 1–7 not_requested and 8–12 pending", () => {
+  it("labels every month without a row pending", () => {
+    // Every lead month 1–12 has an approved source after 5.7D, so "nothing was
+    // requested" is no longer true of any of them.
     const months = assembled([]);
 
-    expect(months.slice(0, 7).map((month) => month.missingReason)).toEqual(
-      Array.from({ length: 7 }, () => "not_requested"),
-    );
-    expect(months.slice(7).map((month) => month.missingReason)).toEqual(
-      Array.from({ length: 5 }, () => PENDING_OUTLOOK_REASON),
+    expect(months.map((month) => month.missingReason)).toEqual(
+      Array.from({ length: 12 }, () => PENDING_OUTLOOK_REASON),
     );
   });
 
@@ -86,7 +88,7 @@ describe("assembleOutlookHorizon — twelve months, no invention", () => {
     });
   });
 
-  it("labels a stored seasonal row ensemble_mean without converting its value", () => {
+  it("labels a stored seasonal row ensemble_mean and dates its freshness", () => {
     const row: StoredOutlookMonth = {
       ...climatologyRow("2026-12-01", 297.6),
       dataClass: "seasonal_forecast",
@@ -95,6 +97,7 @@ describe("assembleOutlookHorizon — twelve months, no invention", () => {
       baselineVersion: null,
       spreadUnavailableReason: "no_value",
       derivationVersion: "seasonal-outlook@1.0.0",
+      initializedAt: "2026-11-01T00:00:00.000Z",
     };
 
     const december = assembled([row])[1];
@@ -106,7 +109,50 @@ describe("assembleOutlookHorizon — twelve months, no invention", () => {
       estimator: "ensemble_mean",
       baselineVersion: null,
       derivationVersion: "seasonal-outlook@1.0.0",
+      availability: "fresh",
     });
+  });
+
+  it("labels the same seasonal row stale past the run's next release, value unchanged", () => {
+    const row: StoredOutlookMonth = {
+      ...climatologyRow("2026-12-01", 297.6),
+      dataClass: "seasonal_forecast",
+      evaluationBasis: "monthly",
+      missingReason: null,
+      baselineVersion: null,
+      spreadUnavailableReason: "no_value",
+      derivationVersion: "seasonal-outlook@1.0.0",
+      initializedAt: "2026-11-01T00:00:00.000Z",
+    };
+
+    // Boundary is 2026-12-05T12:00Z: the 5th, 12Z, of the month after init.
+    const before = assembled([row], FIRST_MONTH, "2026-12-05T11:59:59.999Z")[1];
+    const after = assembled([row], FIRST_MONTH, "2026-12-05T12:00:00.000Z")[1];
+
+    expect(before).toMatchObject({ availability: "fresh", valueMm: 297.6 });
+    expect(after).toMatchObject({ availability: "stale", valueMm: 297.6 });
+  });
+
+  it("gives a climatology month no availability at all", () => {
+    expect(assembled([climatologyRow("2027-06-01")])[7]?.availability).toBeNull();
+  });
+
+  it("refuses a seasonal row with no run to date it", () => {
+    const row: StoredOutlookMonth = {
+      ...climatologyRow("2026-12-01", 297.6),
+      dataClass: "seasonal_forecast",
+      evaluationBasis: "monthly",
+      missingReason: null,
+      baselineVersion: null,
+      spreadUnavailableReason: "no_value",
+      derivationVersion: "seasonal-outlook@1.0.0",
+      initializedAt: null,
+    };
+
+    const outcome = assembleOutlookHorizon({ firstMonth: FIRST_MONTH, rows: [row], now: NOW });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.ok === false && /no forecast run to date it/.test(outcome.message)).toBe(true);
   });
 
   it("serves a stored absence as the absence it records", () => {
@@ -149,7 +195,7 @@ describe("assembleOutlookHorizon — twelve months, no invention", () => {
       spreadUnavailableReason: "no_value",
     };
 
-    const outcome = assembleOutlookHorizon({ firstMonth: FIRST_MONTH, rows: [row] });
+    const outcome = assembleOutlookHorizon({ firstMonth: FIRST_MONTH, rows: [row], now: NOW });
 
     expect(outcome.ok).toBe(false);
     expect(outcome.ok === false && outcome.kind).toBe("inconsistent_row");
@@ -169,7 +215,7 @@ describe("assembleOutlookHorizon — twelve months, no invention", () => {
       spreadUnavailableReason: "no_value",
     };
 
-    const outcome = assembleOutlookHorizon({ firstMonth: FIRST_MONTH, rows: [row] });
+    const outcome = assembleOutlookHorizon({ firstMonth: FIRST_MONTH, rows: [row], now: NOW });
 
     expect(outcome.ok).toBe(false);
     expect(outcome.ok === false && outcome.kind).toBe("inconsistent_row");
@@ -188,7 +234,7 @@ describe("assembleOutlookHorizon — twelve months, no invention", () => {
       spreadUnavailableReason: "no_value",
     };
 
-    const outcome = assembleOutlookHorizon({ firstMonth: FIRST_MONTH, rows: [row] });
+    const outcome = assembleOutlookHorizon({ firstMonth: FIRST_MONTH, rows: [row], now: NOW });
 
     expect(outcome.ok).toBe(false);
     expect(outcome.ok === false && outcome.kind).toBe("inconsistent_row");
@@ -205,7 +251,7 @@ describe("assembleOutlookHorizon — twelve months, no invention", () => {
       spreadUnavailableReason: "no_value",
     };
 
-    const outcome = assembleOutlookHorizon({ firstMonth: FIRST_MONTH, rows: [row] });
+    const outcome = assembleOutlookHorizon({ firstMonth: FIRST_MONTH, rows: [row], now: NOW });
 
     expect(outcome.ok).toBe(false);
     expect(outcome.ok === false && outcome.kind).toBe("inconsistent_row");
@@ -271,7 +317,7 @@ describe("assembleOutlookHorizon — twelve months, no invention", () => {
 
 describe("assembleOutlookHorizon — refusals", () => {
   it("refuses a firstMonth that is not the first of a calendar month", () => {
-    const outcome = assembleOutlookHorizon({ firstMonth: "2026-11-15", rows: [] });
+    const outcome = assembleOutlookHorizon({ firstMonth: "2026-11-15", rows: [], now: NOW });
 
     expect(outcome.ok).toBe(false);
     expect(outcome.ok === false && outcome.kind).toBe("invalid_input");
@@ -281,6 +327,7 @@ describe("assembleOutlookHorizon — refusals", () => {
     const outcome = assembleOutlookHorizon({
       firstMonth: FIRST_MONTH,
       rows: [climatologyRow("2026-11-01"), climatologyRow("2026-11-01", 200)],
+      now: NOW,
     });
 
     expect(outcome.ok).toBe(false);
@@ -291,6 +338,7 @@ describe("assembleOutlookHorizon — refusals", () => {
     const outcome = assembleOutlookHorizon({
       firstMonth: FIRST_MONTH,
       rows: [climatologyRow("2028-01-01")],
+      now: NOW,
     });
 
     expect(outcome.ok).toBe(false);
@@ -308,7 +356,7 @@ describe("assembleOutlookHorizon — refusals", () => {
       baselineVersion: null,
     };
 
-    const outcome = assembleOutlookHorizon({ firstMonth: FIRST_MONTH, rows: [row] });
+    const outcome = assembleOutlookHorizon({ firstMonth: FIRST_MONTH, rows: [row], now: NOW });
 
     expect(outcome.ok).toBe(false);
     expect(outcome.ok === false && /no approved monthly estimator/.test(outcome.message)).toBe(
@@ -322,7 +370,7 @@ describe("assembleOutlookHorizon — refusals", () => {
       missingReason: "pending",
     };
 
-    const outcome = assembleOutlookHorizon({ firstMonth: FIRST_MONTH, rows: [row] });
+    const outcome = assembleOutlookHorizon({ firstMonth: FIRST_MONTH, rows: [row], now: NOW });
 
     expect(outcome.ok).toBe(false);
     expect(outcome.ok === false && outcome.kind).toBe("inconsistent_row");
@@ -331,7 +379,7 @@ describe("assembleOutlookHorizon — refusals", () => {
   it("refuses a climatology month claiming the monthly basis", () => {
     const row: StoredOutlookMonth = { ...climatologyRow("2027-06-01"), evaluationBasis: "monthly" };
 
-    const outcome = assembleOutlookHorizon({ firstMonth: FIRST_MONTH, rows: [row] });
+    const outcome = assembleOutlookHorizon({ firstMonth: FIRST_MONTH, rows: [row], now: NOW });
 
     expect(outcome.ok).toBe(false);
     expect(outcome.ok === false && outcome.kind).toBe("inconsistent_row");
@@ -341,6 +389,7 @@ describe("assembleOutlookHorizon — refusals", () => {
     const outcome = assembleOutlookHorizon({
       firstMonth: FIRST_MONTH,
       rows: [climatologyRow("2027-06-01", -1)],
+      now: NOW,
     });
 
     expect(outcome.ok).toBe(false);

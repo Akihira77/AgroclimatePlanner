@@ -100,7 +100,7 @@ rather than the values re-listed. Re-listing is how the two drift.
 | 5.5 | every `D-nn` referenced anywhere is defined in `open-decisions.md` §4 | **25 defined, 0 dangling**; 12 are cited by another document, 13 are defined and cited only in the decision table (`03`, `04`, `08`–`11`, `15`–`17`, `19`–`22`). That is expected: a convention does not need a citation at every use site |
 | 5.6 | `README.md` §1 document list matches the files on disk | yes — 16 files (13 numbered + 2 supporting + the README) |
 | 5.7 | no document states a threshold value | confirmed — every agronomic number is a *column*, and the values live in `docs/research/agronomic-reference-matrix.md` |
-| 5.8 | no document presents a 12-month outlook as a daily forecast | confirmed — `temporal-and-weather-semantics.md` §3 makes months 8–12 climatology |
+| 5.8 | no document presents a 12-month outlook as a daily forecast | confirmed — `temporal-and-weather-semantics.md` §3 makes months 7–12 climatology |
 | 5.9 | every `OPEN-nn` carries one canonical severity, and no document states a different one | one mismatch existed: `OPEN-17` was phase-wide in `open-decisions.md` and subsystem-scoped in `spatial-model.md`. Reconciled to **P1 with explicit scope** — see §8 — and 0 mismatches remain |
 | 5.10 | no document claims the database enforces an application-level invariant | checked: the partition invariant, freshness, and `inputRefs` referential integrity are all stated as *not* database-enforced (`provenance-storage.md` §2, §4, §5) |
 | 5.11 | no document references a nonexistent file as a valid destination | one existed: `open-decisions.md` pointed at `ADR-004`, which does not exist. **Fixed** — it now says the ADR does not exist and is not written |

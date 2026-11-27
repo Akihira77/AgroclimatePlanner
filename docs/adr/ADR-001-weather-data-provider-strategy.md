@@ -41,6 +41,14 @@ Baseline: **1991–2020**, WMO normal period. Preferred dataset CHIRPS v3.0 mont
 
 What is **not** verified: how a third party obtains it. It is not in ECMWF's Open Data portal, and no free point API is documented. Until a licence enquiry and a GRIB proof-of-concept (fetch → parse → cell extraction → member count → variable audit) succeed, months 8–12 remain climatology. If they succeed, months 8–12 become a genuine — quarterly-refreshed, therefore up to ~3 months stale — labelled `annual_outlook` class, and the timeline gains a real 13-month reach. This is a Phase 4 research task, not a Phase 1 assumption.
 
+**Amendment 2026-11-24 — the band moved from 7/8 to 6/7.** This ADR's tables are provider
+capability, not the shipped band. Phase 5.7D resolved the lead-month anchor: lead month 1 is the
+calendar month **after** a run's initialisation month, so a seven-month SEAS5 window fills six
+leads. `MONTHLY_OUTLOOK_BANDS` is therefore `1–6` (`seasonal_forecast`) and `7–12`
+(`climatology`), and "months 8–12" below reads as months 7–12. Nothing in D1–D9 changes: the
+classes, the sources, the climatology baseline and the Set VII escape hatch are unaffected —
+only where the boundary sits on the twelve-month axis.
+
 **D3. Anomalies are computed twice and labelled — model-relative is the primary number.**
 
 Evidence forced a reversal of the original decision. Measured at Jakarta 2026-11-18, the model's implied seasonal climatology is systematically wetter than ERA5 (Nov 297.6 mm vs 220.5 mm, **+35 %**), so a "forecast minus observed baseline" anomaly is contaminated by a bias as large as the signal: November flips from **−50.0 mm** (model-relative) to **+27.1 mm** (ERA5 baseline) to **+52.0 mm** (NASA POWER baseline), and February flips too.
@@ -129,7 +137,9 @@ Positive:
 
 Negative / accepted costs:
 - Commercial use requires paying Open-Meteo or operating an AGPL stack; neither is free.
-- Months 8–12 will look less "actionable" than months 1–7. This is the truth, and the UI must make it legible rather than hide it.
+- Months 7–12 will look less "actionable" than months 1–6 (the band stated as 8–12 / 1–7 when
+  this ADR was accepted; see the 2026-11-24 amendment). This is the truth, and the UI must make
+  it legible rather than hide it.
 - SEAS5 refreshes monthly on the 5th, so the seasonal layer is up to 31 days stale by design; freshness per source is mandatory.
 - BMKG value to users is deferred until permission is granted.
 - CHIRPS is 0.05° (~5.5 km); "point" accuracy at a 0.3 ha plot is a statistical statement, not a measurement.

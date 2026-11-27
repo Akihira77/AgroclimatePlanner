@@ -229,7 +229,7 @@ function assertOneActivePerSlot(active) {
     const key = `${row.cellKey}|${row.month}`;
     perSlot.set(key, (perSlot.get(key) ?? 0) + 1);
   }
-  assert.equal(perSlot.size, 10, "every cell-month has a live answer");
+  assert.equal(perSlot.size, 12, "every cell-month has a live answer");
   assert.ok(
     [...perSlot.values()].every((count) => count === 1),
     "exactly one active row per cell-month",
