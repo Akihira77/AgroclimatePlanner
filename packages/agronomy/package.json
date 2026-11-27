@@ -18,7 +18,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "test": "vitest run --pool=forks --no-file-parallelism --maxWorkers=1"
   },
   "dependencies": {
     "@agroclimate/contracts": "workspace:*"
@@ -26,6 +27,7 @@
   "devDependencies": {
     "@types/node": "catalog:",
     "eslint": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

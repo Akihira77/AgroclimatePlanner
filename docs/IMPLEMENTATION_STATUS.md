@@ -1656,4 +1656,16 @@ Four specialists reviewed commits `738f001`, `62673af`, `6fd6be3`, `c954d7b` and
 | `localeCompare` in `stages.ts` and `partition.ts` contradicted the modules' own "no locale" promise | low | **Fixed.** Plain string comparison; ISO dates and uuids need nothing else |
 | Client list reads looped until `meta.total` with no bound | low (defence in depth) | **Fixed.** `MAX_PAGES = 50` and a thrown error rather than a silently truncated list |
 | **Open gap:** nothing checks that every dimension a profile hard-gates actually carries a hard constraint, so a mis-authored profile could read as satisfied | medium | **Not fixed, recorded.** It is a publish-time profile check, not an engine rule; `classifyVerdict` sees evaluations, not the rulebook |
-| **Open gap:** `packages/agronomy` still has no committed test file | high | **Not fixed.** Four modules of interval and verdict logic are covered only by throwaway assert scripts. The repository rule forbids test files without an explicit command; the ranked gaps are recorded in this session, not in the repo |
+| **Open gap:** `packages/agronomy` had no committed test file | high | **Fixed.** Four files, 36 cases, added under explicit instruction. Each was checked against the defect it exists to catch by mutating the source and confirming the test fails: `maxEnd` → previous-neighbour (contained-interval case), two-sided coverage → one-sided (shortfall case), missing-summary gate → `continue` (verdict case), `observed === null` → a sentinel (a missing observation becoming a pass). All four mutations were caught |
+
+### Tests for the pure engine — 2026-11-27
+
+`packages/agronomy/src/{constraint,stages,partition,verdict}.test.ts`, 36 cases. No framework was added to the package beyond `vitest`, which the other pure packages already use, and the run is capped the same way (`--pool=forks --no-file-parallelism --maxWorkers=1`).
+
+| Area | What the cases pin |
+|---|---|
+| `constraint.ts` | A missing observation is `insufficient_data` and never a substituted value; a count is a floor; grade C as a hard gate and grade D are refused with distinguishable `reason` values; a malformed threshold is not an evidence violation; `not_applicable` and `unknown` stay distinct |
+| `stages.ts` | Month and leap-year rollover, an impossible day refused rather than normalised, inclusive stage bounds, `null` in a gap, tie-breaking independent of input order, a critical window clipped to `durationDays - 1` on 2028, and a stage wholly past the cycle dropped |
+| `partition.ts` | Adjacency legal, a shared day an overlap, a contained non-adjacent interval still an overlap, a gap measured from the farthest covered day, coverage reconciled in both directions, coverage not computed over a partition already refused, an empty window distinguished from one whose every interval was refused |
+| `verdict.ts` | Unsuitable beats insufficient data, a gated dimension with no summary is a missing gate, a climatological critical stage caps at conditional, `not_applicable` never caps, soft failure and unobserved dimension both read as caveats, and the same input twice gives the same answer |
+| Not covered | Anything with a caller: no route, writer or persistence reads these modules yet (`OPEN-26`). Nothing here proves a refused partition would stop a write, only that it is refused |

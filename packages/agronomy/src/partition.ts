@@ -249,7 +249,7 @@ export function validatePartition(input: PartitionInput): readonly PartitionViol
       detail:
         dropped === 0
           ? "the window has no segments and no missing ranges"
-          : `the window has no usable interval: ${dropped} were refused before the walk`,
+          : `the window has no usable interval: ${dropped} refused before the walk`,
     });
   } else if (windowValid && maxEnd !== null) {
     const first = ordered[0] as Interval;

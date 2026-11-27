@@ -208,11 +208,23 @@ describe("upsertCell — identity persistence", () => {
     });
 
     // A inserts and then holds its transaction open, so its row is uncommitted.
+    // The signal is what makes this deterministic: starting B without knowing
+    // that A's INSERT already ran lets B win the race, in which case B commits
+    // immediately and A's wait is a few milliseconds — shorter than the poll
+    // interval, so no ungranted lock is ever observed.
+    let signalInserted;
+    const inserted = new Promise((resolve) => {
+      signalInserted = resolve;
+    });
     const holding = scopeA.withTenant(userId, async (tx) => {
       const id = await upsertCell(tx, cell);
+      signalInserted(id);
       await gate;
       return id;
     });
+
+    const uncommittedId = await inserted;
+    assert.equal(typeof uncommittedId, "string");
 
     const waiting = waitForLockWaiter();
     const blocked = scopeB.withTenant(userId, (tx) => upsertCell(tx, cell));
