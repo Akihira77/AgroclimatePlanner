@@ -1626,3 +1626,17 @@ vector changed.** The report is `docs/review/open-18-open-meteo-ifs025-evidence.
 | `not_applicable` | Never caps. It is the rulebook stating it does not judge the dimension, which is not the same as missing evidence |
 | Still absent | Any score, any persisted verdict, any window, any route. `hardGateDimensions` is an argument, not a table read: which dimensions a profile gates is catalogue data, and the catalogue has no seed (`OPEN-20`) |
 | Verification | `pnpm typecheck` 12/12, `pnpm lint` 8/8, `pnpm build` 8/8, `pnpm format:check`; existing suites unchanged and green. Exercised by a throwaway assert script (ten groups: each precedence step, a hard failure outranking an unknown, climatology capping a clean window, `not_applicable` not capping, and order independence) — **not committed**, per the repository's rule against test files without an explicit command |
+
+### Data-quality audit package — Phase 5.8, part 1 — 2026-11-27
+
+**`packages/climate-core/src/audit.ts`. Pure. Nothing queries, nothing rewrites.**
+
+| Item | State |
+|---|---|
+| `auditRunRefs` | **Added.** One finding per claimed run id that does not exist, naming the artifact and the id. An orphan is reported, never repaired: rewriting the reference would hide which artifact carried it |
+| `reconcileCoverage` | **Added.** Expected against stored, keyed `(cellKey, variable, validAt)`. Emits `missing_record`, `duplicate_record`, `unexpected_record` and reports `expected`/`present`/`unexpected` counts beside them |
+| Why `expected` is an argument | A daily cell owes one record per variable per day; a seasonal cell owes one per member per month. That is the provider contract the caller asked for, so deciding it here would be inventing a specification. Finding the missing day is arithmetic; deciding that the day was owed is not |
+| `auditClimate` | **Added.** Both checks, plus `reconciles`, derived from the findings beside it rather than stored, so the boolean cannot disagree with its own report |
+| Deliberately absent | Abnormal-value detection (no document states per-variable physical bounds, and inventing one flags real weather), alerting thresholds, a read route, a stored report, a scheduled sweep, a runbook. The 5.8 acceptance criterion — one week of scheduled runs reconciling with `ingestion_runs` — cannot be met until the provider gates open |
+| Tests | `packages/climate-core/src/audit.test.ts`, twelve cases: an existing reference finds nothing, an orphan names its artifact, the two run kinds report separately, one orphan in two artifacts reports twice, a clean reconciliation, a missing day, a duplicate counted once, an extra record, the composite key, the derived verdict in both directions, and that the input rows are unchanged afterwards. Suite: **107 passed** (was 95) |
+| Verification | `pnpm typecheck` 12/12, `pnpm lint` 8/8, `pnpm build` 8/8, `pnpm format:check` |

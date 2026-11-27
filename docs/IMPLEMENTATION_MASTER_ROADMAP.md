@@ -938,24 +938,26 @@ This is a hard blocker for persisting valid planting windows.
 
 ## 9.7 Data quality and operations — Phase 5.8
 
-**Status: `NOT_STARTED`**
+**Status: `PARTIAL`** — the audit package §8.8 scopes is implemented and tested; every
+sweep, route, alert and runbook is not, and the acceptance criterion (one week of
+scheduled runs) cannot be met until the provider gates open.
 
-- [ ] Implement provider data-quality checks.
-- [ ] Implement completeness monitoring.
-- [ ] Implement duplicate detection.
-- [ ] Implement missing-period detection.
-- [ ] Implement abnormal value detection.
+- [x] Implement provider data-quality checks — the two `climate-data-foundation.md` §8.8 names, `packages/climate-core/src/audit.ts`: dangling `forecastRunIds`/`ingestionRunIds` references, and coverage reconciliation of expected against stored records.
+- [ ] Implement completeness monitoring — the arithmetic ships; a scheduled caller does not. Nothing yet asks "what should have arrived", which is a provider-contract question, not a rule to invent.
+- [x] Implement duplicate detection — the reconciliation keys on `(cellKey, variable, validAt)`, so a repetition is a `duplicate_record` finding rather than a second pass over the same rows.
+- [x] Implement missing-period detection — `missing_record` per expected key, with `expected`/`present` counts reported beside it, because "98 of 100" and "0 of 100" are different incidents.
+- [ ] Implement abnormal value detection. **Deliberately absent**: no document states per-variable physical bounds, and inventing one would flag real weather as a defect.
 - [ ] Implement source freshness monitoring.
 - [ ] Implement forecast horizon monitoring.
 - [ ] Implement cell coverage monitoring.
 - [ ] Implement failed ingestion monitoring.
 - [ ] Implement retry exhaustion reporting.
 - [ ] Implement stale outlook detection.
-- [ ] Implement quality audit records.
+- [x] Implement quality audit records — `ClimateAuditReport`, derived and not stored: `reconciles` is computed from the findings it sits beside, so it cannot disagree with them.
 - [ ] Implement operational dashboards or read APIs.
 - [ ] Implement alerting thresholds.
 - [ ] Implement operational runbooks.
-- [ ] Add tests for quality classification.
+- [x] Add tests for quality classification — `packages/climate-core/src/audit.test.ts`, twelve cases over both checks, including the "reported, not repaired" property (the input rows are unchanged after an audit).
 
 ## Phase 5 acceptance criteria
 
@@ -1914,7 +1916,7 @@ Phase 5.8 and Phase 9 are deliberately last: PRD §15 ranks monitoring below the
 engine and the frontend. Data quality only becomes measurable once real ingestion
 runs exist, which the provider gates currently prevent.
 
-- [ ] Complete Phase 5.8 data quality and operations.
+- [ ] Complete Phase 5.8 data quality and operations. **Audit package done** (`packages/climate-core/src/audit.ts`, twelve tests); the sweeps, the read route, alerting and the runbook remain, and the acceptance criterion needs a week of scheduled runs.
 - [ ] Complete security hardening.
 - [ ] Complete provider licensing.
 - [ ] Complete forecast verification.

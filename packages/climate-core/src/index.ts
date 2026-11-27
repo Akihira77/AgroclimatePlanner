@@ -1,4 +1,16 @@
 export {
+  auditClimate,
+  auditRunRefs,
+  reconcileCoverage,
+  recordKey,
+  type ArtifactRunRefs,
+  type AuditFinding,
+  type AuditFindingCode,
+  type ClimateAuditReport,
+  type CoverageReconciliation,
+  type StoredRecordRef,
+} from "./audit.js";
+export {
   CLIMATOLOGY_FIRST_LEAD_MONTH,
   CLIMATOLOGY_LAST_LEAD_MONTH,
   CLIMATOLOGY_OUTLOOK_DERIVATION_VERSION,
