@@ -1541,7 +1541,7 @@ Memastikan sistem dapat dioperasikan secara stabil, aman, dapat diamati, dan dap
 
 - [ ] Database backup strategy.
 - [ ] Backup integrity verification.
-- [ ] Restore drill.
+- [x] Restore drill. Dijalankan 2026-11-27 terhadap basis data pengembangan: dump custom-format, `pg_restore --exit-on-error` ke basis data terpisah, lalu struktur, RLS, hak akses dan jumlah baris dibandingkan — identik. Bukti dan batasnya di `docs/operations/backup-restore.md`. Belum menjadi jadwal, belum menyentuh instance terkelola.
 - [ ] Redis recovery strategy — only if Redis is ever introduced; the shipped queue is PostgreSQL-only.
 - [x] Worker restart behavior. Lease basi direbut kembali lewat `reapExpired`; tidak ada state in-memory yang wajib.
 - [x] Dead-letter handling. Status `dead` adalah dead letter itu sendiri; aturan replay di `docs/operations/climate-ingestion.md`.
@@ -1568,7 +1568,7 @@ Memastikan sistem dapat dioperasikan secara stabil, aman, dapat diamati, dan dap
 - [ ] Worker deployment.
 - [ ] Deployment runbook.
 - [ ] Rollback runbook.
-- [ ] Backup/restore runbook.
+- [ ] Backup/restore runbook. **Dev-scoped draft exists** — `docs/operations/backup-restore.md`: verified dump/restore drill, comparison queries, and the limits it does not cross. A production version needs the hosting decision (managed instance, retention, PITR, off-site copy) and restore-as-`app_api` evidence, neither of which exists.
 
 ## 13.8 Documentation
 
@@ -1581,7 +1581,7 @@ Memastikan sistem dapat dioperasikan secara stabil, aman, dapat diamati, dan dap
 - [ ] Provider configuration guide.
 - [x] Source attribution guide. `docs/research/data-licensing-and-attribution.md`.
 - [ ] Crop profile administration guide.
-- [x] Operational runbook. `docs/operations/climate-ingestion.md`.
+- [x] Operational runbook. `docs/operations/climate-ingestion.md` untuk antrean dan ingestion; `docs/operations/backup-restore.md` untuk dump, restore dan perbandingan pasca-restore.
 - [ ] Security documentation.
 - [x] Forecast limitation documentation. `docs/research/forecast-horizon-capabilities.md`.
 - [ ] User guide.

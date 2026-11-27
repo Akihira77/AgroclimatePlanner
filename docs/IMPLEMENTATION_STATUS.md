@@ -1773,3 +1773,18 @@ Four specialists reviewed commits `738f001`, `62673af`, `6fd6be3`, `c954d7b` and
 | Served only, not stored | `provider_null` lives in `dailyMissingReasonSchema`, a union of the stored `MissingReason` enum with that one literal. No column stores it, so the stored enum and `monthly_outlooks_missing_reason_check` are untouched — which keeps §8.7C.7's rule intact: a seasonal member-month null has no recoverable cause and must not be reported as `provider_null` |
 | Contract | The day's provenance rule was rewritten, not loosened: `valueMm` or `provider_null` requires `dataClass`, `model`, `initializedAt` and `availability`; a bare gap must carry none of them. A first attempt served partial provenance and the schema refused it — correctly — because the old rule was all-or-nothing across five fields. The reviewer caught that before commit; the shape is now checked directly against the built schema (provider-null accepted, provider-null beside a value rejected, labelled gap rejected) |
 | Not verified | Browser rendering of the new label. No test file was added for the contract branch, because the repository forbids new test files without an explicit command; the existing daily test that asserted `pending` for a stored null was renamed and re-aimed, which is a correction to an assertion that had encoded the bug |
+
+### Backup and restore drill — Phase 9, §13.6 — 2026-11-27
+
+`docs/operations/backup-restore.md` (new). No source change; the finding is what a
+dump does and does not prove.
+
+| Item | State |
+|---|---|
+| The drill | Dumped the development database (`pg_dump -Fc`, 145 723 bytes), listed the archive, and restored it into a separate database with `--exit-on-error`, which exited 0. `pg_restore` without that flag reports failures as warnings and still exits 0, so the flag is the drill |
+| What matched | 26 `app` tables, 88 indexes, 472 constraints, 3 `app` functions, 5 triggers, 11 tables with RLS enabled **and** forced, 24 policies, 263 table grants, all 26 tables owned by `migration_owner`, and every row count — including `users` 41, `weather_records` 120, `climatology_normals` 48, `monthly_outlooks` 40, `forecast_runs` 9 and `jobs` 11 |
+| The count that lied | `pg_stat_user_tables.n_live_tup` is a planner estimate, not a count: it reported 12 rows in `app.fields` while the table held 0. The runbook's comparison uses `count(*)` and says why |
+| Roles are cluster-wide | The drill restored inside the same cluster, where `app_api`, `app_auth`, `app_system` and `migration_owner` already existed, so ownership resolved without help. Restoring into another cluster fails on ownership unless `pnpm db:bootstrap` runs first — recorded, not tested |
+| What it does not prove | No managed instance, no WAL archiving, no PITR, no retention, no off-site copy, no encryption at rest, no schedule. The restore ran as the superuser, so runtime behaviour under `app_api`'s RLS is not exercised; `pnpm db:verify` and `db:verify:probes` check that, against the configured database only. A healthy source database was dumped, which is weaker than restoring after corruption |
+| Roadmap | §13.6 restore drill ticked with its limits inline. The production backup strategy, integrity verification and disaster-recovery documentation stay open — each needs the hosting decision. §13.7's backup/restore runbook stays open with the dev-scoped draft named |
+| Hygiene | The dump contains every row, including password hashes and session tokens, so it was deleted after the drill and the runbook says to treat one as a secret |
