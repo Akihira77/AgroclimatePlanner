@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src",
-    "test": "pnpm build && node --test test/unit/*.test.mjs",
+    "test": "pnpm build && node --test --test-concurrency=1 test/unit/*.test.mjs",
     "test:integration": "pnpm build && node --test --test-concurrency=1 test/integration/*.test.mjs",
     "start": "node dist/main.js"
   },

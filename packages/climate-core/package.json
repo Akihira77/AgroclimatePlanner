@@ -19,7 +19,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src",
-    "test": "vitest run"
+    "test": "vitest run --pool=forks --no-file-parallelism --maxWorkers=1"
   },
   "dependencies": {
     "@agroclimate/contracts": "workspace:*"
