@@ -47,7 +47,7 @@ pnpm build       # turbo, topological
 pnpm typecheck
 pnpm lint
 pnpm test
-pnpm dev
+pnpm dev         # web + API together, watching
 
 pnpm db:up       # postgres 18 + postgis 3.6 on 127.0.0.1:5442
 pnpm db:bootstrap   # create the three roles; superuser, run once per cluster
@@ -56,6 +56,18 @@ pnpm db:status
 pnpm db:verify      # privilege boundary, against the real roles
 pnpm test:rls       # tenant isolation, as app_api through withTenant
 ```
+
+`pnpm dev` builds once, then runs three watchers: the API's compiler, the API
+process (`node --watch dist/main.js`), and Vite. The API listens on `PORT` and the
+web app on `127.0.0.1:5173`; Vite proxies `/v1` to the API, so the browser talks to
+one origin and no CORS response is involved. The web app refuses to start if 5173
+is taken rather than moving to another port, which the API's origin allowlist would
+reject on the first state-changing request.
+
+Both processes read the repository-root local environment file: the API through
+`loadLocalEnv`, which never overrides a variable that is already set, and Vite
+through `loadEnv`, which uses it only to know the API's port. In production there
+is no such file and the environment supplies every variable.
 
 `packages/contracts` must build before any app can import it; `turbo` handles the
 ordering through `dependsOn: ["^build"]`.

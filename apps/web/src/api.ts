@@ -20,12 +20,16 @@ import type {
  * value.
  *
  * The session cookie is `HttpOnly`; this client never sees it. Every request
- * therefore sets `credentials: "include"`, and the API answers with CORS
- * credentials for the origins in `CORS_ORIGINS` — in development, the Vite origin.
+ * therefore sets `credentials: "include"`. In development the Vite proxy answers
+ * `/v1` on the app's own origin, so the cookie is same-site and no CORS response is
+ * needed; a deployment serving the two apart sets `VITE_API_BASE_URL` and admits
+ * the origin through `CORS_ORIGINS`.
  */
 
 const configured = import.meta.env["VITE_API_BASE_URL"];
-export const API_BASE = (configured ?? "http://localhost:3000/v1").replace(/\/$/, "");
+export const API_BASE = (
+  configured ?? (import.meta.env.DEV ? "/v1" : "http://localhost:3000/v1")
+).replace(/\/$/, "");
 
 export interface ApiFailure {
   readonly code: string;

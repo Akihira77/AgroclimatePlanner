@@ -10,6 +10,9 @@
  * would print its password too.
  */
 
+import { readFileSync } from "node:fs";
+import { parseEnv } from "node:util";
+
 export type NodeEnvironment = "development" | "test" | "production";
 
 export interface RuntimeConfig {
@@ -110,6 +113,25 @@ const CIDR = /^[0-9a-fA-F.:]+\/\d{1,3}$/;
 
 export function readEnvironment(): EnvironmentInput {
   return process.env;
+}
+
+/**
+ * Load a local environment file into `process.env`, without overriding anything
+ * already set.
+ *
+ * `turbo` runs each package from its own directory, so a repository-root file is
+ * not in scope for a bare `node dist/main.js`; without this, `pnpm dev` would need
+ * the credential exported by hand. A real variable wins, so a deployment that sets
+ * one is never silently overridden by a stray file. Production should not have one
+ * at all.
+ *
+ * Nothing here prints a key or a value: the file is parsed, not echoed.
+ */
+export function loadLocalEnv(path: string): void {
+  const parsed = parseEnv(readFileSync(path, "utf8"));
+  for (const [key, value] of Object.entries(parsed)) {
+    if (value !== undefined && process.env[key] === undefined) process.env[key] = value;
+  }
 }
 
 export function parseRuntimeConfig(env: EnvironmentInput): RuntimeConfig {

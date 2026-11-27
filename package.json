@@ -11,7 +11,7 @@
     "typecheck": "turbo run typecheck",
     "lint": "turbo run lint",
     "test": "turbo run test --concurrency=1",
-    "dev": "turbo run dev",
+    "dev": "turbo run build && turbo run dev dev:serve",
     "db:up": "docker compose up -d --wait db",
     "db:down": "docker compose down",
     "db:reset": "docker compose down -v && docker compose up -d --wait db && pnpm db:bootstrap && pnpm db:migrate",
