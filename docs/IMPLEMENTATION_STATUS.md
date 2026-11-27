@@ -1934,3 +1934,17 @@ and `docs/operations/migration-rollback.md`.
 | What is stated as a limit rather than a feature | No map, tiles or projection — the sketch is a degrees-per-kilometre frame, not a basemap. No interpolation: a month or day without a row is a gap with a reason, never zero. A stale value is labelled `basi` and reading it as current is the error the class exists to prevent |
 | What is not in the interface | §8 lists six absences (suitability, map, alerts/exports, account lifecycle, catalogue admin, shared links) and names the decision that gates each, so the gap reads as a decision rather than missing UI |
 | Freshness | Every claim is from the source files as they stand; the guide names files rather than copying their text, and `docs/guides/api-reference.md` §9 already gives the command that regenerates the route list this guide does not duplicate |
+
+### The open register, reconciled against the roadmap — §5.4 — 2026-11-28
+
+`docs/IMPLEMENTATION_MASTER_ROADMAP.md` §14, `docs/data-model/open-decisions.md`,
+and the two §5.4 ticks.
+
+| Item | State |
+|---|---|
+| How it was measured | Not by reading: the 29 ids in `open-decisions.md` were extracted and compared with the set named in §14. Both sides are 29, after the fix below |
+| Finding 1 | `OPEN-28` — signed tenant context, `P1`, `conditional` — was absent from §14 while 26 other ids were present. It is the only decision in the register that is *about whether a leaked credential defeats the tenant boundary*, so its absence made the table read as if that question were closed. Added as a row |
+| Finding 2 | `OPEN-26` carried **MITIGATED** in the disposition column, though that table states its vocabulary is four values; `mitigated` is a value of the separate `Blocking` axis. The 19-DEFERRED count silently absorbed it. The cell now reads `DEFERRED` (mitigated), and the paragraph above the counts says the parenthesis is the other axis |
+| What the reconciliation confirms | `OPEN-01` and `OPEN-13` are RESOLVED and correctly absent from a blocker table; the other 27 are live and named, singly or in the two grouped rows |
+| Decisions and their homes | Eight ADRs; four `Accepted` (`ADR-004`–`ADR-007`), four `Proposed` (`ADR-001`–`ADR-003` and `ADR-008`, which is waiting on `OPEN-18`). The first three describe architecture that is already implemented — flipping an ADR's status is the owner's decision, so it is recorded here rather than changed |
+| What is not guarded | Nothing compares the two documents automatically. The comparison was a one-off, and adding a check would need a parser for two hand-written Markdown tables — recorded as a known gap rather than pretended away |

@@ -280,8 +280,8 @@ Menetapkan kontrak produk, domain, data flow, dan arsitektur sistem sebelum impl
 
 ## 5.4 Remaining documentation governance
 
-- [ ] Pastikan seluruh keputusan yang sudah disetujui tercatat di ADR atau owner-decision document.
-- [ ] Reconcile seluruh open decisions terhadap roadmap.
+- [x] Pastikan seluruh keputusan yang sudah disetujui tercatat di ADR atau owner-decision document. Delapan ADR ada; empat Accepted (`ADR-004` s.d. `ADR-007`), dan dua belas baris `OPEN` yang menuntut jawaban owner ada di `docs/OWNER_DECISIONS.md` (delapan di §1, empat di §2). Yang diverifikasi 2026-11-28: setiap keputusan yang dipakai kode punya rumah — sesi (`ADR-005`), transport dan CSRF (`ADR-006`), registry spasial (`ADR-007`), batas autentikasi (`ADR-004`) — dan setiap `OPEN` yang belum selesai punya satu baris disposisi di `docs/data-model/open-decisions.md`. Yang **tidak** bisa diklaim: empat ADR masih berstatus `Proposed` (`ADR-001`, `ADR-002`, `ADR-003`, dan `ADR-008` yang memang menunggu keputusan owner) meski arsitektur pada tiga yang pertama sudah dijalankan; mengubah status ADR adalah keputusan owner, bukan perapian dokumen, jadi statusnya dibiarkan dan ketidakcocokan itu dicatat di sini alih-alih diperbaiki diam-diam.
+- [x] Reconcile seluruh open decisions terhadap roadmap. Diukur, bukan dibaca: 29 id di `open-decisions.md`, 29 disebut di §14. Dua temuan nyata. (1) `OPEN-28` (signed tenant context) tidak ada di tabel §14 padahal hidup dan bersifat keamanan — satu-satunya baris yang hilang, dan yang paling tidak boleh hilang; sudah ditambahkan. (2) `OPEN-26` memakai **MITIGATED** di kolom disposisi, padahal tabel itu menyatakan kosakatanya tetap empat nilai; `MITIGATED` adalah nilai sumbu `Blocking`, dan hitungan 19 DEFERRED diam-diam memasukkannya. Selnya kini `DEFERRED` (mitigated) dan paragraf di atas hitungan menjelaskan tanda kurung itu. Sisa: `OPEN-01` dan `OPEN-13` berstatus RESOLVED sehingga tidak menjadi baris blocker.
 - [ ] Pastikan PRD menjadi product master document.
 - [ ] Pastikan setiap roadmap requirement memiliki hubungan dengan PRD.
 - [ ] Pastikan tidak ada kontrak lama yang bertentangan dengan keputusan baru.
@@ -1616,13 +1616,18 @@ Daftar berikut harus menjadi referensi utama ketika menentukan urutan implementa
 | `OPEN-02` | BMKG written permission | BMKG production adapter |
 | `OPEN-09` | Planting status vocabulary | Planting status default/index and corresponding workflow |
 | `OPEN-16` | Weather-record growth and retention policy | Long-running ingestion volume |
+| `OPEN-28` | Signed tenant context, required only if a leaked DSN is in scope | RLS is the only tenant boundary until then; `docs/security/review.md` §3 states what that does and does not bound |
 | `OPEN-20` | v1 catalog seed scope (which graded thresholds ship) | Crop catalog seeding and Phase 6 profiles |
 | `OPEN-12` | Verification/scoring table shape | Phase 9 forecast verification |
 | `OPEN-06`/`OPEN-07`/`OPEN-08`/`OPEN-10`/`OPEN-14`/`OPEN-23`/`OPEN-24` | Catalog and vocabulary details | Phase 6 constraint authoring |
 | `OPEN-22`/`OPEN-25`/`OPEN-29`/`OPEN-19`/`OPEN-15` | Maintenance and snapshot details | Phase 6/9 hardening |
 | Agronomic citation gaps | Threshold evidence | Production-grade crop profiles |
 
-The table above is the cross-phase subset only. The authoritative list, with resolution state and revisit conditions for all 29 items, is `docs/data-model/open-decisions.md`.
+The table above is the cross-phase subset only. The authoritative list, with resolution state and revisit
+conditions for all 29 items, is `docs/data-model/open-decisions.md`. Reconciled 2026-11-28: 27 of the 29 are
+live and appear above, singly or in the two grouped rows; `OPEN-01` and `OPEN-13` are resolved and absent
+because a resolved decision is not a blocker. `OPEN-28` was the gap — a live conditional decision, and the
+security one, missing from a table that otherwise read as if nothing about tenant context were open.
 
 ## 14.1 Parallelizable work
 

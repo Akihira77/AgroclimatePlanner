@@ -576,7 +576,7 @@ and "deferred" were doing too much work:
 | `OPEN-17` | **BLOCKED_EXTERNAL_INPUT** | product decision, then the snapshot path | a `POINT` row is storable; only its snapshot is impossible |
 | `OPEN-18` | **BLOCKED_EXTERNAL_INPUT** | 5.0/5.2: pinned hash, provider/model registry, then provider grid validation — now also an owner decision on cell-selection semantics (nearest-centre row vs lower-edge resolver), analysed in `docs/adr/ADR-008-grid-cell-selection-semantics.md` (`Proposed`, not accepted) | the generic resolver contract is approved (2026-11-21); `cell_key` is `text` and no constraint depends on its content; the field-mapping boundary is resolved (5.2 defers `field_outlook_cells`); `ecmwf_ifs025` geometry measured 2026-11-24 |
 | `OPEN-21` | **BLOCKED_EXTERNAL_INPUT** | agronomic decision, then snapshot construction | the columns stay unconstrained `text` |
-| `OPEN-26` | **MITIGATED** | the window engine that produces segments calls `validatePartition` before any write | the table, plus a `jsonb_typeof` array check, is all the schema can honestly do; the validator exists and no writer can bypass it yet, because none exists |
+| `OPEN-26` | **DEFERRED** (conditional) | the window engine that produces segments calls `validatePartition` before any write | the table, plus a `jsonb_typeof` array check, is all the schema can honestly do; the validator exists and no writer can bypass it yet, because none exists |
 | `OPEN-27` | **BLOCKED_EXTERNAL_INPUT** | worker phase, with a security review of the narrowest read shape | grants ship the default: nothing to `app_system` |
 | `OPEN-11` | **DEFERRED** | AI slice; the contract is authored with the briefing engine | `ai_briefings` is creatable exactly as specified |
 | `OPEN-04` | **BLOCKED_EXTERNAL_INPUT** | product/legal decision on account deletion | `users` is already implemented and unchanged |
@@ -599,6 +599,11 @@ and "deferred" were doing too much work:
 | `OPEN-24` | **DEFERRED** | catalog constraint authoring | one composite FK plus one unique key, added later |
 | `OPEN-25` | **DEFERRED** | writer discipline | a looping supersession chain is a bug, not a state |
 | `OPEN-29` | **DEFERRED** | snapshot builder | the column stores what the contract says it stores |
+
+The parenthetical after `DEFERRED` on `OPEN-26` and `OPEN-28` is the `Blocking`
+value the matrix in §1.1 assigns (`conditional` for both), not a fifth disposition;
+putting it in the disposition column is how the earlier count drifted. The counts
+below follow the disposition alone.
 
 **Counts (recomputed from the table, 2026-11-21):** 2 RESOLVED (`OPEN-01`,
 `OPEN-13`), 19 DEFERRED, 8 BLOCKED_EXTERNAL_INPUT, 0 NOT_APPLICABLE. The earlier
