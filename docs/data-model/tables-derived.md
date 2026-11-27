@@ -139,6 +139,7 @@ Constraints:
 | `planting_windows_run_owner_fkey` | `FOREIGN KEY (suitability_run_id, user_id) REFERENCES app.suitability_runs (id, user_id)` | a window hung on another tenant's run |
 | `planting_windows_field_owner_fkey` | `FOREIGN KEY (field_id, user_id) REFERENCES app.fields (id, user_id)` | a window for another tenant's field |
 | `planting_windows_crop_fkey` / `_cultivar_fkey` / `_profile_fkey` | plain FKs to the catalog | an unexplained recommendation |
+| `planting_windows_superseded_by_fkey` | `FOREIGN KEY (superseded_by_id) REFERENCES app.planting_windows (id)` | a supersession pointer to a row that does not exist — added by `20261128130000_planting_windows_supersession_fkey`, the one FK this table was missing |
 | `planting_windows_span_check` | `window_end >= window_start` | an empty or inverted window |
 | `planting_windows_suitability_check` | `suitability IN ('suitable','conditional','unsuitable','insufficient_data')` | a verdict vocabulary the UI cannot render |
 | `planting_windows_no_score_without_data_check` | `suitability <> 'insufficient_data' OR score IS NULL` | a numeric score on unknown inputs — invariant 1 of `domain-model.md` §5 |

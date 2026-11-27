@@ -24,7 +24,7 @@ absent because it looks like protection.
 
 `packages/database/scripts/verify-migrations.mjs` does the comparison, and
 `pnpm --filter @agroclimate/database db:verify` runs it before the privilege
-checks. Every state below was provoked against a database, not imagined — the
+checks and before the Prisma-schema comparison. Every state below was provoked against a database, not imagined — the
 last four on a clone, because they need a ledger with history:
 
 | Provocation | Output | Exit |

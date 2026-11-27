@@ -75,7 +75,7 @@ model User {
 model Session {
   id                String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
   userId            String    @map("user_id") @db.Uuid
-  tokenHash         String    @unique(map: "sessions_token_hash_key")
+  tokenHash         String    @unique(map: "sessions_token_hash_key") @map("token_hash")
   expiresAt         DateTime  @map("expires_at") @db.Timestamptz(6)
   absoluteExpiresAt DateTime  @map("absolute_expires_at") @db.Timestamptz(6)
   revokedAt         DateTime? @map("revoked_at") @db.Timestamptz(6)
@@ -85,7 +85,7 @@ model Session {
   // never rotated. `NULL` is "not issued yet", not "no token required".
   csrfToken         String?   @map("csrf_token") @db.Text
 
-  user User @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user User @relation(fields: [userId], references: [id], map: "sessions_user_id_fkey", onDelete: NoAction, onUpdate: NoAction)
 
   // `D-3`: revoke-all-by-user and the GC scan. No other index is approved.
   @@index([userId], map: "sessions_user_id_idx")
@@ -104,7 +104,7 @@ model Farm {
   updatedAt DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
 
-  user   User    @relation(fields: [userId], references: [id])
+  user   User    @relation(fields: [userId], references: [id], map: "farms_user_id_fkey", onDelete: NoAction, onUpdate: NoAction)
   fields Field[]
 
   // The target of fields' composite foreign key, mirrored here so the schema
@@ -134,7 +134,7 @@ model Field {
   deletedAt              DateTime? @map("deleted_at") @db.Timestamptz(6)
 
   // Ownership travels with the reference: (farm_id, user_id) -> farms(id, user_id).
-  farm Farm @relation(fields: [farmId, userId], references: [id, userId])
+  farm Farm @relation(fields: [farmId, userId], references: [id, userId], map: "fields_farm_owner_fkey", onDelete: NoAction, onUpdate: NoAction)
 
   outlookCells    FieldOutlookCell[]
   observations    FieldObservation[]
@@ -146,6 +146,9 @@ model Field {
   @@unique([id, userId], map: "fields_id_user_id_key")
   @@index([userId], map: "fields_user_id_idx")
   @@index([farmId], map: "fields_farm_id_idx")
+  // GiST, created in SQL as `USING gist (geom)`. The type and the name are stated
+  // so `migrate diff` does not read the index as missing.
+  @@index([geom], type: Gist, map: "fields_geom_gist_idx")
   @@schema("app")
   @@map("fields")
 }
@@ -213,7 +216,7 @@ model Cultivar {
   createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt              DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  crop            Crop                 @relation(fields: [cropId], references: [id])
+  crop            Crop                 @relation(fields: [cropId], references: [id], map: "cultivars_crop_fkey", onDelete: NoAction, onUpdate: NoAction)
   profileVersions CropProfileVersion[]
   plantings       Planting[]
   plantingWindows PlantingWindow[]
@@ -236,8 +239,8 @@ model CropProfileVersion {
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt    DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  cultivar     Cultivar  @relation(fields: [cultivarId], references: [id])
-  supersedes   CropProfileVersion?  @relation("CropProfileVersionSupersedes", fields: [supersedesId], references: [id])
+  cultivar     Cultivar  @relation(fields: [cultivarId], references: [id], map: "crop_profile_versions_cultivar_fkey", onDelete: NoAction, onUpdate: NoAction)
+  supersedes   CropProfileVersion?  @relation("CropProfileVersionSupersedes", fields: [supersedesId], references: [id], map: "crop_profile_versions_supersedes_fkey", onDelete: NoAction, onUpdate: NoAction)
   supersededBy CropProfileVersion[] @relation("CropProfileVersionSupersedes")
   growthStages GrowthStage[]
   constraints  Constraint[]
@@ -266,7 +269,7 @@ model GrowthStage {
   requirementProfile String?  @map("requirement_profile")
   createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  profileVersion CropProfileVersion @relation(fields: [profileVersionId], references: [id])
+  profileVersion CropProfileVersion @relation(fields: [profileVersionId], references: [id], map: "growth_stages_profile_fkey", onDelete: NoAction, onUpdate: NoAction)
   constraints    Constraint[]
 
   @@unique([profileVersionId, name], map: "growth_stages_profile_name_key")
@@ -294,8 +297,8 @@ model Constraint {
   severity         String
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  profileVersion CropProfileVersion @relation(fields: [profileVersionId], references: [id])
-  growthStage    GrowthStage?       @relation(fields: [growthStageId], references: [id])
+  profileVersion CropProfileVersion @relation(fields: [profileVersionId], references: [id], map: "constraints_profile_fkey", onDelete: NoAction, onUpdate: NoAction)
+  growthStage    GrowthStage?       @relation(fields: [growthStageId], references: [id], map: "constraints_stage_fkey", onDelete: NoAction, onUpdate: NoAction)
 
   @@index([profileVersionId, dimension], map: "constraints_profile_idx")
   @@schema("app")
@@ -315,7 +318,7 @@ model SourceRef {
   grade            String
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  profileVersion CropProfileVersion @relation(fields: [profileVersionId], references: [id])
+  profileVersion CropProfileVersion @relation(fields: [profileVersionId], references: [id], map: "source_refs_profile_fkey", onDelete: NoAction, onUpdate: NoAction)
 
   @@index([profileVersionId], map: "source_refs_profile_idx")
   @@schema("app")
@@ -392,7 +395,7 @@ model IngestionRun {
   rawPayloadRef       String?   @map("raw_payload_ref")
   createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  forecastRun    ForecastRun     @relation(fields: [forecastRunId], references: [id])
+  forecastRun    ForecastRun     @relation(fields: [forecastRunId], references: [id], map: "ingestion_runs_run_fkey", onDelete: NoAction, onUpdate: NoAction)
   weatherRecords WeatherRecord[]
   jobs           Job[]
   monthlyOutlooks MonthlyOutlook[]
@@ -426,10 +429,14 @@ model Job {
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  ingestionRun IngestionRun? @relation(fields: [ingestionRunId], references: [id], onDelete: Restrict, map: "jobs_ingestion_run_fkey")
+  ingestionRun IngestionRun? @relation(fields: [ingestionRunId], references: [id], map: "jobs_ingestion_run_fkey", onDelete: Restrict, onUpdate: NoAction)
 
   @@unique([kind, idempotencyKey], map: "jobs_identity_key")
   @@index([ingestionRunId], map: "jobs_ingestion_run_idx")
+  // `jobs_created_idx` in the migration: (kind, status, created_at). The three
+  // claim/lease indexes below it are SQL-only, but this one is expressible, and a
+  // `migrate diff` reads an unmentioned index as one to drop.
+  @@index([kind, status, createdAt], map: "jobs_created_idx")
   // jobs_active_ingestion_idx (unique partial on ingestion_run_id WHERE
   // status = 'running') and the three claim/lease indexes have no Prisma
   // equivalent; created in SQL only.
@@ -481,12 +488,12 @@ model WeatherRecord {
   supersededAt               DateTime? @map("superseded_at") @db.Timestamptz(6)
   createdAt                  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  forecastRun    ForecastRun    @relation(fields: [forecastRunId], references: [id])
-  ingestionRun   IngestionRun   @relation(fields: [ingestionRunId], references: [id])
-  outlookCell    OutlookCell    @relation(fields: [outlookCellId], references: [id])
-  supersedes     WeatherRecord? @relation("WeatherRecordSupersedes", fields: [supersedesId], references: [id])
+  forecastRun    ForecastRun    @relation(fields: [forecastRunId], references: [id], map: "weather_records_run_fkey", onDelete: NoAction, onUpdate: NoAction)
+  ingestionRun   IngestionRun   @relation(fields: [ingestionRunId], references: [id], map: "weather_records_ingestion_fkey", onDelete: NoAction, onUpdate: NoAction)
+  outlookCell    OutlookCell    @relation(fields: [outlookCellId], references: [id], map: "weather_records_cell_fkey", onDelete: NoAction, onUpdate: NoAction)
+  supersedes     WeatherRecord? @relation("WeatherRecordSupersedes", fields: [supersedesId], references: [id], map: "weather_records_supersedes_fkey", onDelete: NoAction, onUpdate: NoAction)
   supersedingRecords WeatherRecord[] @relation("WeatherRecordSupersedes")
-  supersededBy   WeatherRecord? @relation("WeatherRecordSupersededBy", fields: [supersededById], references: [id])
+  supersededBy   WeatherRecord? @relation("WeatherRecordSupersededBy", fields: [supersededById], references: [id], map: "weather_records_superseded_by_fkey", onDelete: NoAction, onUpdate: NoAction)
   supersededRecords WeatherRecord[] @relation("WeatherRecordSupersededBy")
 
   @@index([ingestionRunId], map: "weather_records_ingestion_idx")
@@ -532,10 +539,10 @@ model MonthlyOutlook {
   supersededById            String?  @map("superseded_by_id") @db.Uuid
   createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  outlookCell  OutlookCell      @relation(fields: [outlookCellId], references: [id])
-  forecastRun  ForecastRun?     @relation(fields: [forecastRunId], references: [id])
-  ingestionRun IngestionRun?    @relation(fields: [ingestionRunId], references: [id])
-  supersededBy MonthlyOutlook?  @relation("MonthlyOutlookSupersedes", fields: [supersededById], references: [id])
+  outlookCell  OutlookCell      @relation(fields: [outlookCellId], references: [id], map: "monthly_outlooks_cell_fkey", onDelete: NoAction, onUpdate: NoAction)
+  forecastRun  ForecastRun?     @relation(fields: [forecastRunId], references: [id], map: "monthly_outlooks_forecast_run_fkey", onDelete: NoAction, onUpdate: NoAction)
+  ingestionRun IngestionRun?    @relation(fields: [ingestionRunId], references: [id], map: "monthly_outlooks_ingestion_run_fkey", onDelete: NoAction, onUpdate: NoAction)
+  supersededBy MonthlyOutlook?  @relation("MonthlyOutlookSupersedes", fields: [supersededById], references: [id], map: "monthly_outlooks_superseded_fkey", onDelete: NoAction, onUpdate: NoAction)
   supersedes   MonthlyOutlook[] @relation("MonthlyOutlookSupersedes")
 
   @@index([outlookCellId, month], map: "monthly_outlooks_cell_month_idx")
@@ -562,7 +569,7 @@ model ClimatologyNormal {
   computedAt      DateTime @default(now()) @map("computed_at") @db.Timestamptz(6)
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  outlookCell OutlookCell @relation(fields: [outlookCellId], references: [id])
+  outlookCell OutlookCell @relation(fields: [outlookCellId], references: [id], map: "climatology_normals_cell_fkey", onDelete: NoAction, onUpdate: NoAction)
 
   // Two normals for one month leave an anomaly with no answer.
   @@unique([baselineVersion, outlookCellId, month], map: "climatology_normals_key")
@@ -615,8 +622,8 @@ model FieldOutlookCell {
   resolvedAt        DateTime  @default(now()) @map("resolved_at") @db.Timestamptz(6)
   supersededAt      DateTime? @map("superseded_at") @db.Timestamptz(6)
 
-  field       Field       @relation(fields: [fieldId, userId], references: [id, userId])
-  outlookCell OutlookCell @relation(fields: [outlookCellId], references: [id])
+  field       Field       @relation(fields: [fieldId, userId], references: [id, userId], map: "field_outlook_cells_field_owner_fkey", onDelete: NoAction, onUpdate: NoAction)
+  outlookCell OutlookCell @relation(fields: [outlookCellId], references: [id], map: "field_outlook_cells_cell_fkey", onDelete: NoAction, onUpdate: NoAction)
 
   @@index([outlookCellId], map: "field_outlook_cells_cell_idx")
   @@index([fieldId], map: "field_outlook_cells_field_idx")
@@ -643,7 +650,7 @@ model FieldObservation {
   createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt  DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  field Field @relation(fields: [fieldId, userId], references: [id, userId])
+  field Field @relation(fields: [fieldId, userId], references: [id, userId], map: "field_observations_field_owner_fkey", onDelete: NoAction, onUpdate: NoAction)
 
   @@index([fieldId, observedAt(sort: Desc)], map: "field_observations_field_time_idx")
   @@schema("app")
@@ -667,8 +674,8 @@ model Planting {
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  field    Field    @relation(fields: [fieldId, userId], references: [id, userId])
-  cultivar Cultivar @relation(fields: [cultivarId], references: [id])
+  field    Field    @relation(fields: [fieldId, userId], references: [id, userId], map: "plantings_field_owner_fkey", onDelete: NoAction, onUpdate: NoAction)
+  cultivar Cultivar @relation(fields: [cultivarId], references: [id], map: "plantings_cultivar_fkey", onDelete: NoAction, onUpdate: NoAction)
   harvests Harvest[]
 
   // Composite-FK target for harvests.
@@ -690,7 +697,7 @@ model Harvest {
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  planting Planting @relation(fields: [plantingId, userId], references: [id, userId])
+  planting Planting @relation(fields: [plantingId, userId], references: [id, userId], map: "harvests_planting_owner_fkey", onDelete: NoAction, onUpdate: NoAction)
 
   // Many rows per planting: cabai is picked repeatedly, so no UNIQUE.
   @@index([plantingId, harvestedAt(sort: Desc)], map: "harvests_planting_idx")
@@ -726,11 +733,11 @@ model SuitabilityRun {
   supersededById        String?  @map("superseded_by_id") @db.Uuid
   createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  field          Field               @relation(fields: [fieldId, userId], references: [id, userId])
-  profileVersion CropProfileVersion  @relation(fields: [profileVersionId], references: [id])
-  supersedes     SuitabilityRun?     @relation("SuitabilityRunSupersedes", fields: [supersedesId], references: [id])
+  field          Field               @relation(fields: [fieldId, userId], references: [id, userId], map: "suitability_runs_field_owner_fkey", onDelete: NoAction, onUpdate: NoAction)
+  profileVersion CropProfileVersion  @relation(fields: [profileVersionId], references: [id], map: "suitability_runs_profile_fkey", onDelete: NoAction, onUpdate: NoAction)
+  supersedes     SuitabilityRun?     @relation("SuitabilityRunSupersedes", fields: [supersedesId], references: [id], map: "suitability_runs_supersedes_fkey", onDelete: NoAction, onUpdate: NoAction)
   supersedingRuns SuitabilityRun[]   @relation("SuitabilityRunSupersedes")
-  supersededBy   SuitabilityRun?     @relation("SuitabilityRunSupersededBy", fields: [supersededById], references: [id])
+  supersededBy   SuitabilityRun?     @relation("SuitabilityRunSupersededBy", fields: [supersededById], references: [id], map: "suitability_runs_superseded_by_fkey", onDelete: NoAction, onUpdate: NoAction)
   supersededRuns SuitabilityRun[]    @relation("SuitabilityRunSupersededBy")
   plantingWindows PlantingWindow[]
   aiBriefings    AiBriefing[]
@@ -783,12 +790,12 @@ model PlantingWindow {
   supersededById         String?  @map("superseded_by_id") @db.Uuid
   createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  suitabilityRun SuitabilityRun      @relation(fields: [suitabilityRunId, userId], references: [id, userId])
-  field          Field               @relation(fields: [fieldId, userId], references: [id, userId])
-  crop           Crop                @relation(fields: [cropId], references: [id])
-  cultivar       Cultivar            @relation(fields: [cultivarId], references: [id])
-  profileVersion CropProfileVersion  @relation(fields: [profileVersionId], references: [id])
-  supersededBy   PlantingWindow?     @relation("PlantingWindowSupersedes", fields: [supersededById], references: [id])
+  suitabilityRun SuitabilityRun      @relation(fields: [suitabilityRunId, userId], references: [id, userId], map: "planting_windows_run_owner_fkey", onDelete: NoAction, onUpdate: NoAction)
+  field          Field               @relation(fields: [fieldId, userId], references: [id, userId], map: "planting_windows_field_owner_fkey", onDelete: NoAction, onUpdate: NoAction)
+  crop           Crop                @relation(fields: [cropId], references: [id], map: "planting_windows_crop_fkey", onDelete: NoAction, onUpdate: NoAction)
+  cultivar       Cultivar            @relation(fields: [cultivarId], references: [id], map: "planting_windows_cultivar_fkey", onDelete: NoAction, onUpdate: NoAction)
+  profileVersion CropProfileVersion  @relation(fields: [profileVersionId], references: [id], map: "planting_windows_profile_fkey", onDelete: NoAction, onUpdate: NoAction)
+  supersededBy   PlantingWindow?     @relation("PlantingWindowSupersedes", fields: [supersededById], references: [id], map: "planting_windows_superseded_by_fkey", onDelete: NoAction, onUpdate: NoAction)
   supersedes     PlantingWindow[]    @relation("PlantingWindowSupersedes")
 
   @@index([suitabilityRunId], map: "planting_windows_run_idx")
@@ -825,9 +832,9 @@ model AiBriefing {
   supersededById         String?  @map("superseded_by_id") @db.Uuid
   createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  field          Field          @relation(fields: [fieldId, userId], references: [id, userId])
-  suitabilityRun SuitabilityRun @relation(fields: [suitabilityRunId, userId], references: [id, userId])
-  supersededBy   AiBriefing?    @relation("AiBriefingSupersedes", fields: [supersededById], references: [id])
+  field          Field          @relation(fields: [fieldId, userId], references: [id, userId], map: "ai_briefings_field_owner_fkey", onDelete: NoAction, onUpdate: NoAction)
+  suitabilityRun SuitabilityRun @relation(fields: [suitabilityRunId, userId], references: [id, userId], map: "ai_briefings_run_owner_fkey", onDelete: NoAction, onUpdate: NoAction)
+  supersededBy   AiBriefing?    @relation("AiBriefingSupersedes", fields: [supersededById], references: [id], map: "ai_briefings_superseded_fkey", onDelete: NoAction, onUpdate: NoAction)
   supersedes     AiBriefing[]   @relation("AiBriefingSupersedes")
 
   @@index([fieldId, computedAt(sort: Desc)], map: "ai_briefings_field_idx")

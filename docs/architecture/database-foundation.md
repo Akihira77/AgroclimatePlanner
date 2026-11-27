@@ -187,8 +187,18 @@ PostGIS internals or report permanent drift. Roles, `GRANT`s, and RLS policies
 
 Consequences, stated so nobody assumes otherwise:
 
-- `schema.prisma` and the migrations directory are kept consistent **by hand**.
-- `db:status` reports applied versus pending. Nothing diffs them.
+- `schema.prisma` and the migrations directory are kept consistent **by hand**,
+  and `scripts/verify-prisma-schema.mjs` is what notices when they are not. It
+  runs as the third step of `db:verify` and asks Prisma for the SQL that would
+  make the database match the schema; anything beyond the single statement Prisma
+  cannot express — `fields.area_ha` is a generated column, and Prisma has no
+  syntax for one — fails the run. The three drifts it found on 2026-11-28 (a
+  `token_hash` column with no `@map`, two indexes present in SQL only, and a
+  self-referencing foreign key that was documented and never created) are recorded
+  in `docs/IMPLEMENTATION_STATUS.md`.
+- `db:status` reports applied versus pending; the schema comparison is a separate
+  step, and it compares the *applied database* to `schema.prisma`, not the
+  migrations to it.
 - `migrate deploy` does **not** verify checksums. Measured: after overwriting the
   checksum of an applied migration, both `migrate status` and `migrate deploy`
   reported success. Editing an applied migration is therefore silently accepted —
