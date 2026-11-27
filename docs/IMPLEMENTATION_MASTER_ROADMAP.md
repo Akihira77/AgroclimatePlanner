@@ -921,29 +921,33 @@ Until then, no probability, percentile, or spread claims should appear in the pr
 
 ## 9.6 EvidenceSegment partition validator
 
-**Status: `BLOCKED` by `OPEN-26`**
+**Status: `PARTIAL`** — the validator exists and is tested
+(`packages/agronomy/src/partition.ts`, nine cases); nothing calls it yet, so
+"reject before persistence" is enforced by the absence of a write path, not by this
+function being wired into one.
 
-- [ ] Implement six-check EvidenceSegment partition validator.
-- [ ] Validate exact coverage of the planting window.
-- [ ] Validate no overlap.
-- [ ] Validate no uncovered range.
-- [ ] Validate segment ordering.
-- [ ] Validate source and data-class compatibility.
-- [ ] Validate temporal resolution consistency.
-- [ ] Reject invalid partition before persistence.
-- [ ] Add property-based or exhaustive boundary tests.
-- [ ] Add real database write-path integration tests.
+- [x] Implement six-check EvidenceSegment partition validator.
+- [x] Validate exact coverage of the planting window — two-sided: unmapped days inside a segment are refused, and so is coverage that exceeds the window.
+- [x] Validate no overlap — measured against the farthest covered day, not the previous interval.
+- [x] Validate no uncovered range — same running edge, so the reported gap names only uncovered days.
+- [x] Validate segment ordering — **not applicable as a check**: ordering is not a property the input can get wrong, because the validator sorts intervals itself rather than trusting their order.
+- [ ] Validate source and data-class compatibility — the enums are contract-enforced; a class-versus-basis compatibility rule is stated nowhere, so none is invented.
+- [ ] Validate temporal resolution consistency — same reason.
+- [ ] Reject invalid partition before persistence — the caller contract is "refuse to write when non-empty", and there is no caller. A boolean shortcut was deliberately not provided, because it invites a warning instead of a refusal.
+- [ ] Add property-based or exhaustive boundary tests — nine cases cover adjacency, containment, gap edges, span and coverage; they are not exhaustive.
+- [ ] Add real database write-path integration tests — needs the write path that `OPEN-20` and `OPEN-27` still gate.
 
 This is a hard blocker for persisting valid planting windows.
 
 ## 9.7 Data quality and operations — Phase 5.8
 
-**Status: `PARTIAL`** — the audit package §8.8 scopes is implemented and tested; every
-sweep, route, alert and runbook is not, and the acceptance criterion (one week of
-scheduled runs) cannot be met until the provider gates open.
+**Status: `PARTIAL`** — the audit package is implemented and tested, the runbook
+exists, and the scheduled sweep is deferred for a stated reason. The acceptance
+criterion (one week of scheduled runs) cannot be met until the provider gates open;
+there is no scheduler to produce them.
 
 - [x] Implement provider data-quality checks — the two `climate-data-foundation.md` §8.8 names, `packages/climate-core/src/audit.ts`: dangling `forecastRunIds`/`ingestionRunIds` references, and coverage reconciliation of expected against stored records.
-- [ ] Implement completeness monitoring — the arithmetic ships; a scheduled caller does not. Nothing yet asks "what should have arrived", which is a provider-contract question, not a rule to invent.
+- [ ] Implement completeness monitoring — the arithmetic ships; a scheduled caller does not. Nothing yet asks "what should have arrived", which is a provider-contract question, not a rule to invent. `docs/operations/climate-ingestion.md` §4 states the queries an operator runs by hand instead, and §5 says plainly that `partial` is a success.
 - [x] Implement duplicate detection — the reconciliation keys on `(cellKey, variable, validAt)`, so a repetition is a `duplicate_record` finding rather than a second pass over the same rows.
 - [x] Implement missing-period detection — `missing_record` per expected key, with `expected`/`present` counts reported beside it, because "98 of 100" and "0 of 100" are different incidents.
 - [ ] Implement abnormal value detection. **Deliberately absent**: no document states per-variable physical bounds, and inventing one would flag real weather as a defect.
@@ -957,7 +961,7 @@ scheduled runs) cannot be met until the provider gates open.
 - [ ] Implement operational dashboards or read APIs.
 - [ ] Implement alerting thresholds.
 - [ ] Implement operational runbooks.
-- [x] Add tests for quality classification — `packages/climate-core/src/audit.test.ts`, twelve cases over both checks, including the "reported, not repaired" property (the input rows are unchanged after an audit).
+- [x] Add tests for quality classification — `packages/climate-core/src/audit.test.ts`, fourteen cases over both checks, including the "reported, not repaired" property (the input rows are unchanged after an audit).
 
 ## Phase 5 acceptance criteria
 
@@ -1134,14 +1138,15 @@ if introduced, must not be interpreted as the probability of crop success.
 
 ## 10.7 EvidenceSegment validation and persistence — 6.6
 
-**Dependency: `OPEN-26`**
+**Dependency: `OPEN-26` resolved for the code half; persistence waits on `OPEN-20`
+and `OPEN-27`.**
 
-- [ ] Implement the approved six-check validator.
-- [ ] Validate segments against the complete planting-window interval.
-- [ ] Validate segment source identity.
-- [ ] Validate missing ranges.
-- [ ] Validate temporal class transitions.
-- [ ] Validate exact partition coverage.
+- [x] Implement the approved six-check validator.
+- [x] Validate segments against the complete planting-window interval.
+- [ ] Validate segment source identity — the contract's discriminated `kind` and non-empty id arrays are schema-checked; no cross-identity rule is stated.
+- [x] Validate missing ranges — a zero-coverage segment is refused, and a missing range without a reason is reported.
+- [ ] Validate temporal class transitions — no rule states which class may follow which; inventing one would decide provenance semantics.
+- [x] Validate exact partition coverage.
 - [ ] Implement database write integration.
 - [ ] Add rollback tests.
 - [ ] Add invalid-partition rejection tests.
@@ -1913,11 +1918,21 @@ The verdict classifier exists and is tested; nothing constructs its input yet.
 
 ## Priority 7 — Data quality, monitoring and production readiness
 
+**The sweep is deliberately not written.** Half of it would be dead code: immediate
+foreign keys on the run-id columns make a dangling reference unstorable, and
+`weather_records_live_key` (`NULLS NOT DISTINCT`, partial on live rows) makes a live
+duplicate unstorable, so a sweep over those would report nothing on a correct
+database or a dropped index on a broken one. The other half — missing and unexpected
+records — is expected-versus-stored arithmetic, and the expectation is the missing
+input: no table says how many records a run owed, because that is the provider
+contract for each product. The runbook records the hand queries that answer what can
+be answered today.
+
 Phase 5.8 and Phase 9 are deliberately last: PRD §15 ranks monitoring below the
 engine and the frontend. Data quality only becomes measurable once real ingestion
 runs exist, which the provider gates currently prevent.
 
-- [ ] Complete Phase 5.8 data quality and operations. **Audit package done** (`packages/climate-core/src/audit.ts`, twelve tests); the sweeps, the read route, alerting and the runbook remain, and the acceptance criterion needs a week of scheduled runs.
+- [ ] Complete Phase 5.8 data quality and operations. **Audit package and runbook done** (`packages/climate-core/src/audit.ts`, fourteen tests; `docs/operations/climate-ingestion.md`). The scheduled sweep, the read route and alerting remain, and the acceptance criterion needs a week of scheduled runs that nothing currently schedules.
 - [ ] Complete security hardening.
 - [ ] Complete provider licensing.
 - [ ] Complete forecast verification.

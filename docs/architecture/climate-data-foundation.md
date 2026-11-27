@@ -10,7 +10,7 @@ documented; 5.7D (seasonal materialisation, SEAS5) implemented in the working tr
 2026-11-24 — the anchor is resolved as "lead 1 is the month after the initialisation
 month", the band is restated as lead months 1–6 `seasonal_forecast` and 7–12
 `climatology`, run identity is two nullable FK columns, and freshness is served as a
-read-time `availability` label (§8.7C); 5.8 is partial — the audit package exists and is tested, the sweep, route, alerts and runbook do not.**
+read-time `availability` label (§8.7C); 5.8 is partial — the audit package exists and is tested and the runbook exists, while the sweep, read route and alerts do not.**
 5.2.1–5.2.8 are complete as of `8a6f2ec` (2026-11-22): generic grid resolution, a
 synthetic registry instance, the tenant-scoped field centroid read, cell identity
 persistence, and `POST /v1/fields/:fieldId/resolve-cell`. 5.3 is complete as of the
@@ -2109,13 +2109,25 @@ What that supports:
 |---|---|
 | Objective | the numbers can be trusted and the pipeline can be run |
 | Prerequisites | 5.4, 5.5, 5.6, 5.7 |
-| Scope | `packages/climate-core/audit.ts` (dangling refs, coverage reconciliation), `apps/worker/src/maintenance/*`, `docs/operations/climate-ingestion.md` (runbook, new) |
+| Scope | `packages/climate-core/audit.ts` (dangling refs, coverage reconciliation), `docs/operations/climate-ingestion.md` (runbook, new); `apps/worker/src/maintenance/*` deferred — see the note under the table |
 | Contracts | none new |
 | Database impact | possibly one migration for a dead-letter/attempt history, per `Q-P5-2` |
 | Tests | coverage mismatch is detected and reported; an orphan `forecastRunIds` entry is reported without rewriting; the maintenance sweep touches no tenant table |
 | Acceptance | one week of scheduled runs produces a report whose counts reconcile with `ingestion_runs`; zero tenant-row writes from `app_system` |
 | Dependencies | 5.4–5.7 |
 | Risks | building monitoring before there is data to monitor; this is why it is last |
+
+**Why there is no sweep.** Half the audit package is already enforced by the
+database: run ids are immediate foreign keys, so a dangling reference is
+unstorable, and live deterministic duplicates are refused by
+`weather_records_live_key` (`NULLS NOT DISTINCT`, partial on `superseded_at IS NULL`).
+A sweep over those two would report nothing on a sound database, or a dropped
+constraint on a broken one. The other half — `missing_record`, `unexpected_record`,
+and the two expectation defects — is expected-versus-stored arithmetic, and no table
+holds the expectation: it is the provider contract for each product. Inventing a
+horizon table would make the system assert coverage it cannot prove. The runbook
+records the queries that answer what can be answered, and the acceptance criterion
+stays open because nothing schedules a run.
 
 ### 8.9 What "first usable capability" means here
 
