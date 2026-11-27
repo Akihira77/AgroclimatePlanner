@@ -38,9 +38,13 @@ export function FarmsPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
 
-  if (state.loading) return <Loading />;
-  if (state.error !== null) return <ErrorNotice error={state.error} />;
-  if (state.data === null) return null;
+  // Only the *first* load replaces the page. A failed refresh keeps the list that is
+  // already on screen and says so, because the write that triggered it may have
+  // landed: replacing the page with an error reads as "your save failed".
+  if (state.data === null) {
+    if (state.loading) return <Loading />;
+    return state.error === null ? null : <ErrorNotice error={state.error} />;
+  }
 
   const { farms, fields } = state.data;
   const selected = farms.find((farm) => farm.id === selectedFarmId) ?? farms[0];
@@ -175,6 +179,12 @@ export function FarmsPage() {
 
   return (
     <div className="stack">
+      {state.error === null ? null : (
+        <ErrorNotice
+          error={state.error}
+          note="daftar gagal dimuat ulang; perubahan terakhir mungkin sudah tersimpan"
+        />
+      )}
       {error !== null ? <ErrorNotice error={error} /> : null}
 
       <section className="section">
@@ -647,24 +657,49 @@ function positionOf(point: SketchPoint, frame: Frame): [number, number] {
   ];
 }
 
+type RingResult =
+  | { readonly geometry: PolygonGeometry; readonly reason?: undefined }
+  | { readonly geometry?: undefined; readonly reason: string };
+
 /**
- * A closed ring, or null when there are fewer than three distinct positions.
+ * A closed ring, or the reason it cannot be one.
  *
- * Every repeated position is dropped, not just a consecutive one: a corner visited
- * twice makes the ring self-touching, which `ST_IsValid` reads as a zero-area or
- * invalid polygon. Dropping the second visit leaves the shape a user meant, and a
- * ring that still cannot reach three distinct corners is refused.
+ * Two different repeats, two different answers. The *same* corner twice in a row is
+ * one corner drawn twice — dragging two vertices onto each other — and dropping the
+ * repeat changes nothing a user would recognise. A corner visited again **later**
+ * makes the ring touch itself, and `ST_IsValid` reads that as a zero-area or
+ * invalid polygon. Silently dropping it would send a shape the user did not draw, so
+ * that case is refused instead.
  */
-function ringOf(positions: readonly (readonly [number, number])[]): PolygonGeometry | null {
+function ringOf(positions: readonly (readonly [number, number])[]): RingResult {
   const ring: [number, number][] = [];
   for (const [lon, lat] of positions) {
-    if (ring.some(([seenLon, seenLat]) => seenLon === lon && seenLat === lat)) continue;
+    const last = ring[ring.length - 1];
+    if (last !== undefined && last[0] === lon && last[1] === lat) continue;
     ring.push([lon, lat]);
   }
 
+  // A typed ring may already be closed; that repeat is the closure, not a repeat.
   const first = ring[0];
-  if (ring.length < 3 || first === undefined) return null;
-  return { type: "Polygon", coordinates: [[...ring, [first[0], first[1]]]] };
+  if (first !== undefined) {
+    while (ring.length > 1) {
+      const last = ring[ring.length - 1];
+      if (last === undefined || last[0] !== first[0] || last[1] !== first[1]) break;
+      ring.pop();
+    }
+  }
+
+  for (const [index, [lon, lat]] of ring.entries()) {
+    if (ring.findIndex(([seenLon, seenLat]) => seenLon === lon && seenLat === lat) !== index) {
+      return { reason: `Titik ${lon}, ${lat} muncul lebih dari sekali; tiap titik hanya sekali.` };
+    }
+  }
+
+  const start = ring[0];
+  if (ring.length < 3 || start === undefined) {
+    return { reason: "Poligon butuh minimal 3 titik berbeda." };
+  }
+  return { geometry: { type: "Polygon", coordinates: [[...ring, [start[0], start[1]]]] } };
 }
 
 type Parsed = { readonly positions: [number, number][] } | { readonly error: string };
@@ -715,10 +750,10 @@ function geometryFor(
   if (text.trim() !== "") {
     const parsed = parsePositions(text);
     if ("error" in parsed) return { geometry: null, reason: parsed.error };
-    const geometry = ringOf(parsed.positions);
-    return geometry === null
-      ? { geometry: null, reason: "Poligon butuh minimal 3 titik berbeda." }
-      : { geometry, reason: "" };
+    const ring = ringOf(parsed.positions);
+    return ring.reason === undefined
+      ? { geometry: ring.geometry, reason: "" }
+      : { geometry: null, reason: ring.reason };
   }
 
   if (frame === null) {
@@ -737,8 +772,8 @@ function geometryFor(
     };
   }
 
-  const geometry = ringOf(vertices.map((vertex) => positionOf(vertex, frame)));
-  return geometry === null
-    ? { geometry: null, reason: "Titik berimpit; butuh minimal 3 titik berbeda." }
-    : { geometry, reason: "" };
+  const ring = ringOf(vertices.map((vertex) => positionOf(vertex, frame)));
+  return ring.reason === undefined
+    ? { geometry: ring.geometry, reason: "" }
+    : { geometry: null, reason: ring.reason };
 }

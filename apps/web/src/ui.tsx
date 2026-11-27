@@ -54,10 +54,18 @@ export function Empty({ children }: { readonly children: ReactNode }) {
 }
 
 /** Every fetch in the app reports through here, so a new screen cannot invent wording. */
-export function ErrorNotice({ error }: { readonly error: unknown }) {
+export function ErrorNotice({
+  error,
+  note,
+}: {
+  readonly error: unknown;
+  /** What this failure does *not* mean, when the default reading would be wrong. */
+  readonly note?: string;
+}) {
   return (
     <Notice tone="error">
       <span>{describeError(error)}</span>
+      {note ? <span className="faint"> · {note}</span> : null}
       {error instanceof ApiError && error.requestId !== undefined ? (
         <span className="faint"> · {error.requestId}</span>
       ) : null}
