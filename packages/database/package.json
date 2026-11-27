@@ -22,7 +22,7 @@
     "test": "pnpm build && node --test --test-concurrency=1 test/unit/*.test.mjs",
     "db:generate": "prisma generate",
     "db:bootstrap": "node scripts/bootstrap.mjs",
-    "db:verify": "node scripts/verify-privileges.mjs",
+    "db:verify": "node scripts/verify-migrations.mjs && node scripts/verify-privileges.mjs",
     "db:verify:probes": "node scripts/verify-probe-isolation.mjs",
     "db:migrate": "prisma migrate deploy",
     "db:status": "prisma migrate status",

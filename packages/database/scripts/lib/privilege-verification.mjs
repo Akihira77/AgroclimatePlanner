@@ -1687,6 +1687,13 @@ export async function runPrivilegeVerification({
       "app_api cannot write the migration ledger",
       "delete from app._prisma_migrations",
     );
+    // Read as well as write: the ledger names every migration and its digest, so
+    // it is a map of the schema to anyone who can select from it.
+    await denied(
+      api,
+      "app_api cannot read the migration ledger",
+      "select count(*) from app._prisma_migrations",
+    );
     await denied(
       api,
       "app_api cannot execute an ungranted function",
@@ -1748,6 +1755,11 @@ export async function runPrivilegeVerification({
     );
     await denied(
       system,
+      "app_system cannot read the migration ledger",
+      "select count(*) from app._prisma_migrations",
+    );
+    await denied(
+      system,
       "app_system cannot execute an ungranted function",
       `select ${child(probes.fn)}()`,
     );
@@ -1777,6 +1789,11 @@ export async function runPrivilegeVerification({
       auth,
       "app_auth cannot write the migration ledger",
       "delete from app._prisma_migrations",
+    );
+    await denied(
+      auth,
+      "app_auth cannot read the migration ledger",
+      "select count(*) from app._prisma_migrations",
     );
     await denied(
       auth,

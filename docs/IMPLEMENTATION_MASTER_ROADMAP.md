@@ -1549,7 +1549,7 @@ Memastikan sistem dapat dioperasikan secara stabil, aman, dapat diamati, dan dap
 - [x] Graceful shutdown. `enableShutdownHooks` di API; runner men-drain job berjalan.
 - [x] Job cancellation handling. Hanya `queued` dengan `ingestion_run_id IS NULL` → `cancelled` (terminal, `finished_at` diisi, `last_error` tidak disentuh). Job `running` ditolak karena handler bisa sedang menulis dan antrean tidak punya kanal ke proses lain; job `queued` yang masih memegang `IngestionRun` dari attempt pertama juga ditolak karena run itu akan tertinggal `running` tanpa error dan tanpa `finished_at`. Anggaran attempt dan reaper lease yang membatasi keduanya. Antarmuka operator: `pnpm --filter @agroclimate/worker cancel:job <jobId>`, exit 0 hanya untuk cancel yang berhasil; event log membedakan `job_not_found`, `job_already_cancelled`, `job_holds_ingestion_run`, `job_not_cancellable`, `cancel_error`. Lihat `docs/architecture/background-processing.md` §11.
 - [ ] Deployment rollback.
-- [ ] Migration rollback strategy.
+- [x] Migration rollback strategy. Tidak ada down migration dan tidak akan ada — `migrate deploy` hanya membaca maju. `packages/database/scripts/verify-migrations.mjs` (dijalankan lebih dulu oleh `pnpm db:verify`, dengan perbandingan di `scripts/lib/migration-integrity.mjs` dan dua belas kasus tanpa basis data (10 mutan tertangkap) di `test/unit/migration-integrity.test.mjs`) membandingkan SHA-256 tiap `migration.sql` dengan `_prisma_migrations.checksum`, karena Prisma menyimpan checksum itu tetapi tidak pernah membandingkannya (dibuktikan 2026-11-27: file diubah, `migrate deploy` dan `migrate status` tetap melaporkan bersih). Enam keadaan gagal, termasuk basis data tanpa ledger dan migration yang ditandai rolled back tanpa pernah diterapkan ulang; perbandingan dikelompokkan per nama migration, karena `migrate resolve --rolled-back` meninggalkan baris lama dan `deploy` menambah baris baru — versi per-baris akan menggagalkan setiap basis data yang pernah diperbaiki (diukur pada klon, 2026-11-28). Exit 0 hanya berarti file cocok dengan catatan — bukan berarti skema sudah ter-deploy, dan bukan deteksi drift. Kebijakannya di `docs/operations/migration-rollback.md`: jangan pernah mengedit migration yang sudah diterapkan; balikkan dengan migration baru; restore dump hanya untuk kerusakan. Batas: belum ada rehearsal reverse migration, belum ada instance produksi, dan pemakaian di CI mengandaikan runner tepercaya karena memegang `MIGRATION_DATABASE_URL`.
 - [ ] Disaster recovery documentation.
 
 ## 13.7 Production deployment
@@ -1581,7 +1581,7 @@ Memastikan sistem dapat dioperasikan secara stabil, aman, dapat diamati, dan dap
 - [ ] Provider configuration guide.
 - [x] Source attribution guide. `docs/research/data-licensing-and-attribution.md`.
 - [ ] Crop profile administration guide.
-- [x] Operational runbook. `docs/operations/climate-ingestion.md` untuk antrean dan ingestion; `docs/operations/backup-restore.md` untuk dump, restore dan perbandingan pasca-restore.
+- [x] Operational runbook. `docs/operations/climate-ingestion.md` untuk antrean dan ingestion; `docs/operations/backup-restore.md` untuk dump, restore dan perbandingan pasca-restore; `docs/operations/migration-rollback.md` untuk integritas migration dan urutan expand/contract.
 - [ ] Security documentation.
 - [x] Forecast limitation documentation. `docs/research/forecast-horizon-capabilities.md`.
 - [ ] User guide.
