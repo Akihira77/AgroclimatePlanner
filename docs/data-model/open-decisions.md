@@ -74,7 +74,7 @@ part of it.
 | `OPEN-17` | P1 | field snapshot | after Phase 3 | **hard**, for point-shaped fields only | what `areaHa` means for a `POINT`-shaped field | field snapshot creation for point-shaped fields, and every artifact derived from one | the DDL (a `POINT` row is still storable); `POLYGON`/`MULTIPOLYGON` fields end to end |
 | `OPEN-21` | P1 | field snapshot | after Phase 3 | **hard** | the `irrigationAvailable` boolean mapping and three field vocabularies | field → snapshot construction | the DDL — the columns stay unconstrained `text`; every non-snapshot path |
 | `OPEN-18` | P1 | cell resolution | after Phase 3 | **conditional** — generic resolver, literal hash fixtures, the `(provider, model)` registry, the `SpatialResolution` result contract, and a synthetic-only registry instance implemented 2026-11-22 (5.2.1–5.2.4); per-`(provider, model)` grid configuration pending graded evidence; `ecmwf_ifs025` measured 2026-11-24 — geometry **grade B**, product-identifier mapping still **grade C**, so the grade A + B that `climate-data-foundation.md` §5.2.6 requires for a `validated` entry is not met — and still unconfigurable, because the resolver cannot express nearest-centre cell selection (`docs/review/open-18-open-meteo-ifs025-evidence.md`); the candidate decisions are recorded as `docs/adr/ADR-008-grid-cell-selection-semantics.md`, status **Proposed** and not accepted | the per-provider/model grid origin, spacing, orientation, longitude convention, and revision | cell identity, and field → cell resolution, for a model whose grid configuration is unvalidated | the DDL (`cell_key` is `text` for exactly this reason), the catalog, every query that reads an already-keyed cell, and the now-implemented generic resolver, registry and result contract |
-| `OPEN-26` | P1 | window write | after Phase 3 | **hard** | the six-check `EvidenceSegment` partition validator | persisting a `planting_windows` row | the table, its index, every read path, `suitability_runs`, `ai_briefings` |
+| `OPEN-26` | P1 | window write | after Phase 3 | **conditional** — the six-check validator was written 2026-11-27 (`packages/agronomy/src/partition.ts`) and every violation it can see is reported; what remains is a writer that calls it, which needs `OPEN-27` and a generated window | the six-check `EvidenceSegment` partition validator | persisting a `planting_windows` row (**no writer exists**, so nothing can persist one) | the table, its index, every read path, `suitability_runs`, `ai_briefings` |
 | `OPEN-27` | P1 | worker | after Phase 3 | **hard** | how the worker learns which fields a cell serves | `recompute.windows` — the job that delivers a new forecast to a dashboard | the DDL **and** the grants, which ship the documented default: no `app_system` grant on a tenant-owned table |
 | `OPEN-11` | P1 | AI slice | after Phase 3 | **hard** | the `ClimateBriefing` body shape | writing or validating an `ai_briefings` row | the `ai_briefings` DDL; the table is createable exactly as specified, it simply cannot yet hold a valid document |
 | `OPEN-04` | P1 | identity lifecycle | after Phase 3 | **hard** | the account-deletion policy | the deletion path and whether `users` gains a partial unique email index | the `users` DDL as implemented; registration; every read |
@@ -194,10 +194,18 @@ the validator does not exist. `jsonb_typeof(evidence_segments) = 'array'` is the
 only check the schema performs, and it says nothing about interval algebra.
 
 **Blocks:** the `planting_windows` write path. A window with a broken partition
-is currently storable, and once the write path exists it must be impossible for
-an invalid partition to be persisted as a valid recommendation.
-**Would be settled by:** writing the validator, which belongs with the engine that
-produces segments, not with the schema. Not implemented in this phase.
+would be storable, and once the write path exists it must be impossible for an
+invalid partition to be persisted as a valid recommendation.
+**Settled by:** writing the validator, which belongs with the engine that produces
+segments, not with the schema — **done 2026-11-27**. `validatePartition` returns
+one `PartitionViolation` per failed check rather than a boolean, so a refused write
+names every defect at once; it refuses impossible calendar dates instead of
+normalising them, treats a zero-coverage segment as a missing range, and requires
+the union to touch both window extremes. Two limits are stated in the code rather
+than papered over: the contract's coverage formula, read literally, contradicts its
+own rule that a segment may report partial coverage, so only the reachable half is
+checked; and no writer calls the function yet, so the invariant is enforced by the
+absence of a write path, not by this code.
 
 ## 2. Detail — the other ten P1 items
 
@@ -562,7 +570,7 @@ and "deferred" were doing too much work:
 | `OPEN-17` | **BLOCKED_EXTERNAL_INPUT** | product decision, then the snapshot path | a `POINT` row is storable; only its snapshot is impossible |
 | `OPEN-18` | **BLOCKED_EXTERNAL_INPUT** | 5.0/5.2: pinned hash, provider/model registry, then provider grid validation — now also an owner decision on cell-selection semantics (nearest-centre row vs lower-edge resolver), analysed in `docs/adr/ADR-008-grid-cell-selection-semantics.md` (`Proposed`, not accepted) | the generic resolver contract is approved (2026-11-21); `cell_key` is `text` and no constraint depends on its content; the field-mapping boundary is resolved (5.2 defers `field_outlook_cells`); `ecmwf_ifs025` geometry measured 2026-11-24 |
 | `OPEN-21` | **BLOCKED_EXTERNAL_INPUT** | agronomic decision, then snapshot construction | the columns stay unconstrained `text` |
-| `OPEN-26` | **DEFERRED** | the window engine that produces segments | the table, plus a `jsonb_typeof` array check, is all the schema can honestly do |
+| `OPEN-26` | **MITIGATED** | the window engine that produces segments calls `validatePartition` before any write | the table, plus a `jsonb_typeof` array check, is all the schema can honestly do; the validator exists and no writer can bypass it yet, because none exists |
 | `OPEN-27` | **BLOCKED_EXTERNAL_INPUT** | worker phase, with a security review of the narrowest read shape | grants ship the default: nothing to `app_system` |
 | `OPEN-11` | **DEFERRED** | AI slice; the contract is authored with the briefing engine | `ai_briefings` is creatable exactly as specified |
 | `OPEN-04` | **BLOCKED_EXTERNAL_INPUT** | product/legal decision on account deletion | `users` is already implemented and unchanged |

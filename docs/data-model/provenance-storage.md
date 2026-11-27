@@ -140,9 +140,11 @@ interface EvidenceSegment {
 
 **The partition invariant is not enforced by the database.** No overlap, no gap,
 full span, internal contiguity, reason presence, coverage reconciliation — six
-checks over interval algebra in a JSONB array. `provenance-contract.md` §4 states
-the validator does not exist yet, and this model does not pretend a `CHECK` can
-do it. Specified as a Phase 3 write-path blocker (`OPEN-26`), not a schema change.
+checks over interval algebra in a JSONB array. This model does not pretend a
+`CHECK` can do it. The validator itself now exists in code (`validatePartition`,
+`packages/agronomy/src/partition.ts`, 2026-11-27); what remains is a writer that
+calls it, which is why `OPEN-26` is recorded as *validator written, write path
+still gated* rather than resolved outright.
 
 `missing_ranges` is the complement and is a **set** (`orderBy: [startDate,
 endDate]`, `dedupe: false`), not a sequence: nothing about a gap's position in the

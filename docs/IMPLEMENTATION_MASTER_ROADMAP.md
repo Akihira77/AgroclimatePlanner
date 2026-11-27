@@ -1894,7 +1894,7 @@ are enough to begin; waiting for Phase 6–8 delays the only demonstration of va
 - [x] Implement pure suitability dimensions on synthetic fixtures. `packages/agronomy/src/constraint.ts`: one constraint against one observation, deterministic, no clock. `null` is `insufficient_data`, never a pass; grade C may not gate, grade D may not vote.
 - [x] Implement growth-stage alignment. `packages/agronomy/src/stages.ts`: UTC calendar arithmetic, inclusive stage bounds, a gap is `null` rather than the previous stage, and critical windows are clipped to the cycle at either duration extreme.
 - [ ] Implement planting-window generation. **Blocked by `OPEN-26`**: a window cannot be stored until the `evidenceSegments ∪ missingRanges` partition is validated, and generating one before the validator exists would produce an artifact the write path must refuse.
-- [ ] Resolve `OPEN-26` and implement the EvidenceSegment validator.
+- [x] Resolve `OPEN-26` and implement the EvidenceSegment validator. `packages/agronomy/src/partition.ts`: one violation per failed check, not a boolean; impossible dates refused rather than normalised; a zero-coverage segment treated as a missing range; the union required to touch both window extremes. Two limits named in the code — the contract's coverage formula contradicts its own partial-coverage rule, and no writer calls the function yet.
 - [ ] Implement tenant-scoped recomputation (`OPEN-27`).
 - [ ] Validate crop scenarios. **Blocked by `OPEN-20`** for real profiles; the four-crop scenario matrix needs reviewed thresholds that do not exist yet.
 

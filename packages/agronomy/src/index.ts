@@ -13,3 +13,5 @@ export type {
 } from "./constraint.js";
 export { addDays, criticalStageWindows, daysBetween, stageAtOffset } from "./stages.js";
 export type { CriticalStageWindow } from "./stages.js";
+export { validatePartition } from "./partition.js";
+export type { PartitionInput, PartitionViolation, PartitionViolationCode } from "./partition.js";
