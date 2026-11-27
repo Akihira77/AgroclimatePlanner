@@ -35,3 +35,9 @@ minimumReleaseAgeExclude:
 allowBuilds:
   "@prisma/engines": true
   prisma: true
+
+# A security pin, not a version choice. Prisma's config package depends on
+# effect 3.20.0, which falls inside GHSA-7589-6fvf-x4pw (ReDoS in
+# Schema.TemplateLiteral). The advisory's fixed release is 3.22.1.
+overrides:
+  effect: 3.22.1
