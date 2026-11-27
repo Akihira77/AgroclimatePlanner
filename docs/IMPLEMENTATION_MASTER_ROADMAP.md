@@ -166,10 +166,10 @@ Roadmap mempertahankan pembagian fase utama proyek.
 | 3 | Domain Model & Core Administration | `PARTIAL` | Identity, farms, fields, crop catalog |
 | 4 | Weather Data Ingestion | `PARTIAL` | Reliable normalized weather data |
 | 5 | Climate Data Foundation | `PARTIAL` | Rolling 12-month climate outlook |
-| 6 | Agronomic Suitability & Planting Window Engine | `NOT_STARTED` | Explainable agricultural recommendations |
-| 7 | Frontend & Agricultural Calendar | `NOT_STARTED` | Complete user-facing application |
+| 6 | Agronomic Suitability & Planting Window Engine | `PARTIAL` | Explainable agricultural recommendations |
+| 7 | Frontend & Agricultural Calendar | `PARTIAL` | Complete user-facing application |
 | 8 | AI Agricultural Analyst | `NOT_STARTED` | Evidence-grounded agricultural explanations |
-| 9 | Monitoring, Verification & Production Readiness | `NOT_STARTED` | Reliable production operation |
+| 9 | Monitoring, Verification & Production Readiness | `PARTIAL` | Reliable production operation |
 
 \* Phase 2 memiliki implementasi database dan security foundation yang substansial. Namun, keputusan dan blocker untuk subsistem lanjutan masih ada. Status keseluruhan tidak boleh dianggap selesai untuk seluruh kebutuhan produk hanya karena migration foundation telah diverifikasi.
 
@@ -402,10 +402,10 @@ Menyediakan fondasi monorepo, database, security boundary, tenant isolation, dan
 ## 6.7 Remaining Phase 2 work
 
 - [x] Implement `crop_profile_versions_immutable` trigger sesuai normative specification — `packages/database/prisma/migrations/20261127120000_crop_profile_immutability/migration.sql`. The test is `published_at`, not the status: a live profile may only move `published -> retired`, and retirement is terminal. Covered by `packages/database/test/integration/crop-profile-immutability.test.mjs`.
-- [ ] Audit seluruh SQL migration terhadap physical model.
+- [x] Audit seluruh SQL migration terhadap physical model. Otomasi: `packages/database/test/schema/schema-conformance.test.mjs` membandingkan katalog terpasang dengan spesifikasi dokumen.
 - [ ] Audit seluruh Prisma model terhadap applied schema.
-- [ ] Pastikan migration verification tetap bekerja pada clean volume.
-- [ ] Pastikan seluruh production grants tetap least-privilege.
+- [x] Pastikan migration verification tetap bekerja pada clean volume. Terverifikasi pada fresh volume, port 5544, semua migration berurutan (`docs/IMPLEMENTATION_STATUS.md` §S4).
+- [x] Pastikan seluruh production grants tetap least-privilege. `packages/database/scripts/verify-privileges.mjs` gagal pada over-grant (inventaris exact-set plus probe `42501`), diuji di `packages/database/test/unit/privilege-verification.test.mjs`. Batasnya: verifikasi berjalan manual lewat `db:verify`, belum ada CI yang menjalankannya.
 - [ ] Pastikan deployment migration menggunakan credential yang tepat.
 - [ ] Reconcile remaining database decisions dan deferred changes.
 
@@ -515,15 +515,17 @@ API surface:
 
 ## 7.4 Remaining Farm & Field hardening — Phase 4.5
 
-**Status: `NOT_STARTED`**
+**Status: `PARTIAL`** — tenant isolation and the stored-geometry invariants are
+verified and tested; rate limiting, optimistic concurrency, the field→snapshot
+vocabulary mapping (`OPEN-21`) and point-shaped fields (`OPEN-17`) are open.
 
 - [ ] Complete the remaining Farm & Field security hardening checklist.
 - [ ] Reconcile all owner decisions Q5–Q8 against current implementation.
 - [ ] Evaluate additional rate limiting.
 - [ ] Evaluate optimistic concurrency / `If-Match`.
 - [ ] Verify behavior for concurrent update and delete operations.
-- [ ] Verify all tenant-scoped reads and writes.
-- [ ] Verify stored geometry invariants at every persistence boundary.
+- [x] Verify all tenant-scoped reads and writes. Setiap fungsi tabel tenant menerima `TenantTransaction` dari `withTenant` (`packages/database/src/tenant.ts`) dan diuji di `packages/database/test/rls/`. Batasnya: penegakannya tipe TypeScript plus RLS, bukan guard runtime — `$queryRaw` pada client global tetap akan dikompilasi dan hanya ditolak RLS.
+- [x] Verify stored geometry invariants at every persistence boundary. `fields_geom_valid_check` menolak geometri tidak sah, `packages/database/src/fields.ts` melempar `FieldGeometryError` untuk penolakan sebelum SQL, dan `apps/api/src/field/field-errors.ts` memetakan pelanggaran `23514` ke `400 VALIDATION_FAILED`; diuji di `packages/database/test/integration/farm-field.test.mjs`. `createField` dan `updateField` adalah satu-satunya penulis; jalur impor yang kelak ada wajib memakai `polygonJson` yang sama.
 - [ ] Audit field-to-snapshot vocabulary mapping.
 - [ ] Resolve `OPEN-21`.
 - [ ] Resolve `OPEN-17` only if the product requires point-shaped fields; v1 currently uses Polygon-only field contracts.
@@ -532,24 +534,28 @@ Do not introduce a new geometry interpretation merely to make a snapshot pass va
 
 ## 7.5 Crop catalog — Phase 4.6 / Phase 3 product domain
 
-**Status: `NOT_STARTED` for functional catalog API**
+**Status: `DONE` for catalog reads; seed still gated**
 
-The physical tables exist, but a complete crop catalog workflow is not established.
+Every read contract, the repository, the service, the three routes and the
+version-immutability triggers exist and are tested. What is missing is the seed
+itself: no catalog row is inserted, so the screens render empty states. That waits
+on `OPEN-20` (v1 seed scope) and `OPEN-21` (field vocabulary mapping), and on
+evidence grades that nobody has reviewed.
 
-- [ ] Define crop catalog read contracts.
-- [ ] Implement crop catalog repository.
-- [ ] Implement crop catalog service.
-- [ ] Implement crop catalog API.
+- [x] Define crop catalog read contracts. `packages/contracts/src/crop.ts`.
+- [x] Implement crop catalog repository. `packages/database/src/crops.ts`, SELECT-only.
+- [x] Implement crop catalog service. `apps/api/src/crop/crop.service.ts`.
+- [x] Implement crop catalog API. `GET /v1/crops`, `/v1/crops/:slug`, `/v1/crop-profiles/:profileVersionId`.
 - [ ] Seed initial crop catalog.
-- [ ] Implement cultivar listing.
-- [ ] Implement crop profile version retrieval.
-- [ ] Implement growth-stage retrieval.
-- [ ] Implement constraint retrieval.
-- [ ] Implement agronomic source reference retrieval.
-- [ ] Enforce profile version immutability.
+- [x] Implement cultivar listing. Bagian dari `GET /v1/crops/:slug`.
+- [x] Implement crop profile version retrieval. `GET /v1/crop-profiles/:profileVersionId`.
+- [x] Implement growth-stage retrieval. Bagian payload profile version.
+- [x] Implement constraint retrieval. Bagian payload profile version.
+- [x] Implement agronomic source reference retrieval. Bagian payload profile version.
+- [x] Enforce profile version immutability. Trigger `crop_profile_versions_immutable` plus trigger pada `growth_stages`, `constraints` dan `source_refs`.
 - [ ] Add profile change history.
-- [ ] Add source citation metadata validation.
-- [ ] Add tests for profile version consistency.
+- [x] Add source citation metadata validation. `sourceRefSchema` menegakkan tahun, URL http(s) dan grade; service menolak row yang tidak lolos.
+- [x] Add tests for profile version consistency. `packages/database/test/integration/crop-profile-immutability.test.mjs`, `apps/api/test/integration/crop-catalog.test.mjs`.
 
 Initial v1 crops:
 
@@ -768,7 +774,7 @@ Menyediakan rolling 12-month climate outlook yang menggabungkan daily forecast, 
 
 - [x] Daily read model (0–14 d), `weather_forecast`.
 - [x] Subseasonal read model (15–45 d), `subseasonal_forecast`.
-- [x] Subseasonal data availability handling (per-day `pending`, never a value).
+- [x] Subseasonal data availability handling — a day with no stored row is `pending` and carries no value. A provider-published null is `provider_null` instead: the row exists, so class, model and run are served beside the reason, and the value is never filled by interpolation. `provider_null` is a **served-only** reason (`dailyMissingReasonSchema`); no column stores it, so the stored `MissingReason` enum and `monthly_outlooks_missing_reason_check` are unchanged, and the monthly read still must not invent it (§8.7C.7).
 - [x] Temporal resolution boundary validation (band ↔ class, daily sum, mm only).
 - [x] Daily-to-subseasonal segment continuity (two dense, ordered segments).
 - [x] Tests for missing and partial horizons.
@@ -956,7 +962,7 @@ there is no scheduler to produce them.
 - [ ] Implement cell coverage monitoring.
 - [ ] Implement failed ingestion monitoring.
 - [ ] Implement retry exhaustion reporting.
-- [x] Implement stale outlook detection — `packages/climate-core/src/freshness.ts` evaluates a soft TTL at read time (daily: 6/12/48 h by lead band; monthly: per class), and nothing stored is rewritten, so a stale month keeps serving with `stale` beside it.
+- [x] Implement stale outlook detection — `packages/climate-core/src/freshness.ts` evaluates a soft TTL at read time (daily: 6/12/48 h by lead band; monthly: `seasonal_forecast` only). A climatology month carries no availability at all, because a fixed baseline does not expire the way a forecast run does. Nothing stored is rewritten.
 - [x] Implement quality audit records — `ClimateAuditReport`, derived and not stored: `reconciles` is computed from the findings it sits beside, so it cannot disagree with them.
 - [ ] Implement operational dashboards or read APIs.
 - [ ] Implement alerting thresholds.
@@ -1070,8 +1076,8 @@ Important limitations:
 - [ ] Implement source reference propagation.
 - [ ] Implement deterministic ordering.
 - [ ] Implement engine versioning.
-- [ ] Implement canonical computation hash.
-- [ ] Add golden fixtures.
+- [x] Implement canonical computation hash. `packages/contracts/src/canonical.ts` dan `hash.ts`.
+- [x] Add golden fixtures. `packages/contracts/src/hash.golden.test.ts`.
 - [ ] Add boundary tests.
 - [ ] Add metamorphic tests.
 - [ ] Add deterministic repeatability tests.
@@ -1105,7 +1111,7 @@ if introduced, must not be interpreted as the probability of crop success.
 - [ ] Handle forecast horizon boundaries.
 - [ ] Handle monthly/climatology boundaries.
 - [ ] Preserve evidence segment provenance.
-- [ ] Add stage alignment tests.
+- [x] Add stage alignment tests. `packages/agronomy/src/stages.test.ts`.
 
 ### Acceptance criteria
 
@@ -1116,7 +1122,7 @@ if introduced, must not be interpreted as the probability of crop success.
 
 ## 10.6 Planting-window generation — 6.5
 
-- [ ] Define planting window domain.
+- [x] Define planting window domain. `plantingWindowSchema` dan `suitabilityRunSchema` di `packages/contracts/src/agronomy.ts`.
 - [ ] Generate candidate planting dates/ranges.
 - [ ] Evaluate crop suitability over each candidate.
 - [ ] Evaluate stage-aligned climate risk.
@@ -1149,7 +1155,7 @@ and `OPEN-27`.**
 - [x] Validate exact partition coverage.
 - [ ] Implement database write integration.
 - [ ] Add rollback tests.
-- [ ] Add invalid-partition rejection tests.
+- [x] Add invalid-partition rejection tests. Sembilan kasus di `packages/agronomy/src/partition.test.ts`.
 - [ ] Add provenance reconstruction tests.
 
 ## 10.8 API and recomputation integration — 6.7
@@ -1206,7 +1212,10 @@ The worker must never write tenant-owned derived artifacts through `app_system`.
 
 # 11. Phase 7 — Frontend & Agricultural Calendar
 
-**Status: `NOT_STARTED` — web scaffold only**
+**Status: `PARTIAL`** — authentication, farms, fields (drawing included), the crop
+catalog and the climate screens exist and read the shipped APIs. Calendar, planting
+opportunities, activity screens, charts, a basemap and the §11.9 quality gates do
+not exist.
 
 ## Objective
 
@@ -1216,72 +1225,72 @@ Membangun user experience utama agar pemilik lahan dapat menggunakan semua kemam
 
 - [ ] Audit existing `apps/web` scaffold.
 - [ ] Define frontend architecture.
-- [ ] Define route structure.
-- [ ] Define API client.
-- [ ] Define authentication state.
-- [ ] Define server/API error handling.
-- [ ] Define loading and empty states.
+- [x] Define route structure. Hash router di `apps/web/src/router.tsx`.
+- [x] Define API client. `apps/web/src/api.ts`.
+- [x] Define authentication state. `apps/web/src/App.tsx`.
+- [x] Define server/API error handling. `ApiError` plus `ErrorNotice`.
+- [x] Define loading and empty states. `useAsync`, `Loading`, `Empty`.
 - [ ] Define shared form patterns.
 - [ ] Define responsive layout.
-- [ ] Define Indonesian localization.
-- [ ] Define Asia/Jakarta date/time presentation.
-- [ ] Implement reusable design system.
-- [ ] Implement accessible primitives.
+- [x] Define Indonesian localization. Seluruh copy UI berbahasa Indonesia.
+- [x] Define Asia/Jakarta date/time presentation. Label dihitung API pada UTC+7 (`apps/api/src/climate/calendar.ts`); web merender label itu.
+- [x] Implement reusable design system. Minimal: `apps/web/src/ui.tsx` plus `styles.css`.
+- [x] Implement accessible primitives. `role="alert"`/`status`, label `htmlFor`, `aria-pressed`.
 
 Do not introduce a second source of business logic in the frontend.
 
 ## 11.2 Authentication interface
 
-- [ ] Login page.
-- [ ] Registration page.
-- [ ] Session persistence.
-- [ ] Logout.
-- [ ] Protected routes.
-- [ ] CSRF integration.
-- [ ] Authentication error states.
-- [ ] Session-expired behavior.
+- [x] Login page. `apps/web/src/pages/AuthPage.tsx`.
+- [x] Registration page. `AuthPage.tsx`, mode daftar.
+- [x] Session persistence. Cookie HttpOnly dipulihkan lewat `GET /auth/me`.
+- [x] Logout. `App.tsx`.
+- [x] Protected routes. Shell hanya dirender saat sesi terautentikasi.
+- [x] CSRF integration. `fetchCsrfToken` plus header `X-CSRF-Token` di `apps/web/src/api.ts`.
+- [x] Authentication error states. `AuthPage.tsx`.
+- [x] Session-expired behavior. `401` di tengah sesi menjadi pesan "Sesi berakhir".
 
 ## 11.3 Farm and field management
 
-- [ ] Farm list.
-- [ ] Farm creation form.
+- [x] Farm list. `FarmsPage.tsx`.
+- [x] Farm creation form. `FarmsPage.tsx`.
 - [ ] Farm detail.
-- [ ] Farm edit.
-- [ ] Farm deletion.
-- [ ] Field list.
-- [ ] Field creation.
-- [ ] Polygon drawing/selection.
+- [x] Farm edit. `api.updateFarm`.
+- [x] Farm deletion. `409` dari server saat farm masih punya field.
+- [x] Field list. `FarmsPage.tsx`.
+- [x] Field creation. `FarmsPage.tsx`.
+- [x] Polygon drawing/selection. Sketsa SVG plus daftar `bujur, lintang`; tanpa basemap.
 - [ ] Field detail.
-- [ ] Field edit.
-- [ ] Field deletion.
-- [ ] Field area visualization.
+- [x] Field edit. Nama dan batas lahan.
+- [x] Field deletion. `FarmsPage.tsx`.
+- [x] Field area visualization. Kolom luas numerik dalam hektar; bukan petakan.
 - [ ] Soil and agronomic field attributes when API support exists.
 
 ## 11.4 Crop catalog
 
-- [ ] Crop listing.
-- [ ] Crop detail.
-- [ ] Cultivar listing.
+- [x] Crop listing. `CropCatalogPage.tsx`.
+- [x] Crop detail. `CropCatalogPage.tsx`.
+- [x] Cultivar listing. Bagian dari detail komoditas.
 - [ ] Crop requirements.
-- [ ] Growth-stage presentation.
-- [ ] Evidence source presentation.
+- [x] Growth-stage presentation. Bagian tahap pertumbuhan pada detail profil.
+- [x] Evidence source presentation. Grade tampil bersama ambang dan sitasinya.
 - [ ] Insufficient-data indicators.
-- [ ] Profile version presentation where relevant.
+- [x] Profile version presentation where relevant. Daftar versi plus status.
 
 ## 11.5 Climate dashboard
 
-- [ ] Current available weather overview.
-- [ ] Daily weather timeline.
-- [ ] Subseasonal outlook.
-- [ ] Seasonal outlook.
-- [ ] Historical climatology.
+- [x] Current available weather overview. Ringkasan horizon di puncak halaman iklim.
+- [x] Daily weather timeline. Segmen 0–45 hari di `ClimatePage.tsx`.
+- [x] Subseasonal outlook. Tabel per hari dengan kelas data, bukan chart.
+- [x] Seasonal outlook. Tabel bulanan.
+- [x] Historical climatology. Bulan berkelas `climatology` diberi label sendiri.
 - [ ] Rainfall chart.
 - [ ] Temperature chart where supported.
 - [ ] Monthly anomaly chart.
 - [ ] Data-class legend.
-- [ ] Freshness indicator.
+- [x] Freshness indicator. Tag segar/basi per hari dan per bulan.
 - [ ] Source attribution.
-- [ ] Missing-data visualization.
+- [x] Missing-data visualization. Em dash plus alasan data yang hilang.
 - [ ] Spatial resolution disclosure.
 
 ## 11.6 Agricultural calendar
@@ -1331,10 +1340,10 @@ Only implement screens after the relevant backend workflows exist.
 - [ ] Keyboard navigation.
 - [ ] Accessible labels.
 - [ ] Loading skeletons.
-- [ ] Empty states.
-- [ ] Error states.
-- [ ] Stale-data states.
-- [ ] Offline/dependency failure states.
+- [x] Empty states. `Empty` di `ui.tsx`.
+- [x] Error states. `ErrorNotice`.
+- [x] Stale-data states. Tag "basi" plus notice saat daftar gagal dimuat ulang.
+- [x] Offline/dependency failure states. Layar "Tidak dapat menghubungi API".
 - [ ] Unit consistency.
 - [ ] Date/time consistency.
 - [ ] Visual regression checks.
@@ -1455,9 +1464,9 @@ Memastikan sistem dapat dioperasikan secara stabil, aman, dapat diamati, dan dap
 
 ## 13.1 Observability
 
-- [ ] Structured logging.
-- [ ] Request correlation.
-- [ ] Job correlation.
+- [x] Structured logging. Worker menulis event JSON (`apps/worker/src/runner.ts`). Batasnya: log API masih berupa string `key=value` yang diinterpolasi di `api-exception.filter.ts`, belum JSON.
+- [x] Request correlation. `request-id.middleware.ts`.
+- [x] Job correlation. `jobId` ada di setiap event runner; `kind` ada di event siklus job, tidak di `lease_lost` dan `heartbeat_error`.
 - [ ] Provider metrics.
 - [ ] Ingestion metrics.
 - [ ] Queue depth metrics.
@@ -1533,10 +1542,10 @@ Memastikan sistem dapat dioperasikan secara stabil, aman, dapat diamati, dan dap
 - [ ] Backup integrity verification.
 - [ ] Restore drill.
 - [ ] Redis recovery strategy — only if Redis is ever introduced; the shipped queue is PostgreSQL-only.
-- [ ] Worker restart behavior.
-- [ ] Dead-letter handling.
-- [ ] Retry exhaustion handling.
-- [ ] Graceful shutdown.
+- [x] Worker restart behavior. Lease basi direbut kembali lewat `reapExpired`; tidak ada state in-memory yang wajib.
+- [x] Dead-letter handling. Status `dead` adalah dead letter itu sendiri; aturan replay di `docs/operations/climate-ingestion.md`.
+- [x] Retry exhaustion handling. `runner.ts` menandai `dead` setelah attempt terakhir habis.
+- [x] Graceful shutdown. `enableShutdownHooks` di API; runner men-drain job berjalan.
 - [ ] Job cancellation handling.
 - [ ] Deployment rollback.
 - [ ] Migration rollback strategy.
@@ -1552,8 +1561,8 @@ Memastikan sistem dapat dioperasikan secara stabil, aman, dapat diamati, dan dap
 - [ ] TLS configuration.
 - [ ] CI pipeline.
 - [ ] CD pipeline.
-- [ ] Health checks.
-- [ ] Readiness checks.
+- [x] Health checks. `GET /health`, liveness tanpa menyentuh basis data.
+- [x] Readiness checks. `GET /health/ready` dengan `SELECT 1` dan batas waktu.
 - [ ] Database migration deployment.
 - [ ] Worker deployment.
 - [ ] Deployment runbook.
@@ -1562,18 +1571,18 @@ Memastikan sistem dapat dioperasikan secara stabil, aman, dapat diamati, dan dap
 
 ## 13.8 Documentation
 
-- [ ] README.
+- [x] README. `README.md`.
 - [ ] Installation guide.
 - [ ] Development guide.
 - [ ] Environment variable reference.
 - [ ] API reference.
-- [ ] Database documentation.
+- [x] Database documentation. `docs/data-model/`.
 - [ ] Provider configuration guide.
-- [ ] Source attribution guide.
+- [x] Source attribution guide. `docs/research/data-licensing-and-attribution.md`.
 - [ ] Crop profile administration guide.
-- [ ] Operational runbook.
+- [x] Operational runbook. `docs/operations/climate-ingestion.md`.
 - [ ] Security documentation.
-- [ ] Forecast limitation documentation.
+- [x] Forecast limitation documentation. `docs/research/forecast-horizon-capabilities.md`.
 - [ ] User guide.
 
 ## Phase 9 acceptance criteria

@@ -1071,8 +1071,8 @@ Shared packages:
 | `packages/contracts` | Zod contracts and types | Implemented |
 | `packages/database` | Prisma, SQL, persistence, RLS | Implemented |
 | `packages/weather-core` | Provider adapters and normalization | Implemented, partial coverage |
-| `packages/climate-core` | Climate aggregation and outlook | Implemented, partial |
-| `packages/agronomy` | Agronomic calculations | Not started |
+| `packages/climate-core` | Climate aggregation and outlook | Implemented, partial (daily 0–45 d, monthly materialisation, freshness, audit) |
+| `packages/agronomy` | Agronomic calculations | Implemented for the pure layer (constraints, stages, partition validator, verdict classifier); no writer consumes it yet |
 | `packages/ai` | AI context and narration | Not started |
 | `packages/ui` | Shared UI components | Not started |
 | `packages/config` | Shared configuration | Not established as a dedicated package |

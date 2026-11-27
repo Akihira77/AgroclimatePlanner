@@ -205,13 +205,19 @@ past day 14 — that is the horizon, not a fetch failure.
 `value` is never interpolated, never filled forward, and never defaulted to 0. A
 zero is a measurement (a dry day); absence is not.
 
-The exact cause of a null member-month is **not recoverable from the row**. Raw
+The exact cause of a null **member-month** is **not recoverable from the row**. Raw
 member payloads are not retained (`OPEN-05` stays closed), and `weather_records`
-stores only the null. A read layer must therefore not infer `provider_null`,
+stores only the null. A monthly read layer must therefore not infer `provider_null`,
 `member_incomplete` or `axis_incomplete` from the stored null: those names describe
 a normalization-time observation that is gone. Phase 5.7 must derive its reason
 from evidence it still has (the run/ingestion status, coverage) or report the
 generic fallback below; it must never fabricate a specific cause.
+
+A **daily** row is the one place this does not apply. There is no aggregation
+between the provider's answer and the row: a null is the answer. `daily-read.ts`
+therefore serves a stored null as `missingReason: "provider_null"`, with the row's
+class, model and run beside it, and keeps `pending` for a day with no row at all.
+That reason is served only — it is not added to the stored enum or to any `CHECK`.
 
 ### In `monthly_outlooks`
 

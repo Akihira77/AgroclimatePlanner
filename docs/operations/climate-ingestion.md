@@ -136,7 +136,11 @@ LIMIT 50;
 ```
 
 A null `value` is a provider-published null preserved on purpose; it is not a
-missing row and must not be counted as coverage.
+missing row and must not be counted as coverage. The served contract now says which
+one happened: a day with no stored row is `missingReason: "pending"`, a stored row
+whose value is null is `missingReason: "provider_null"`. The two must not be summed
+or treated as one gap. `provider_null` is served only: the column still stores a
+bare null, so a query cannot tell the two apart without the row itself.
 
 ### Missing-period detection
 

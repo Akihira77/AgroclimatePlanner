@@ -1727,3 +1727,31 @@ Four specialists reviewed commits `738f001`, `62673af`, `6fd6be3`, `c954d7b` and
 | Why only FarmsPage | `grep 'reload()'` finds four callers, all there. The other pages take `data + error` together only on a **key change**, where the held data belongs to the previous key and the full-page error is correct. `useAsync`'s comment now says exactly that instead of a blanket rule |
 | Runbook query | The duplicate-candidate query grouped by `cell_key, variable, valid_at, ensemble_member` and left out `forecast_run_id`, which the unique index includes. Two runs with the same cell and instant are two valid rows, so the query reported them as duplicates. It now matches `weather_records_live_key` exactly, and still catches a dropped index |
 | Not verified | Browser interaction (no web test runner). typecheck, lint, build and format pass; the tip is that no test covers `ringOf`'s new refusal — the repository forbids test files without an explicit command |
+
+### Roadmap reconciliation — 80 stale checkboxes — 2026-11-27
+
+`docs/IMPLEMENTATION_MASTER_ROADMAP.md`, `docs/PRD.md`. Documentation only.
+
+| Item | State |
+|---|---|
+| What was wrong | 558 unchecked boxes, and a large share described work that already shipped: the crop catalog API (§7.5 said `NOT_STARTED`), 39 of the 44 frontend items (§11 said "web scaffold only" while §18 said Priority 4 was done), the canonical hash and its golden vectors, the health and readiness endpoints, dead-letter handling, the privilege verifier, and the schema-conformance audit |
+| What was done | 80 items ticked, each with the file or command that satisfies it. Four status headers corrected: phase table rows 6, 7 and 9 are `PARTIAL`, §7.4 is `PARTIAL` (tenant isolation and geometry invariants verified, concurrency and vocabulary still open), §7.5 reads `DONE for catalog reads; seed still gated`, §11 is `PARTIAL` with the missing screens named |
+| What was deliberately left unchecked | §20 (final product completion) is an acceptance checklist, so its ticks are an owner decision, not a repository fact. Items with no implementation stay open even where the surrounding section is now mostly green: crop catalog seed (`OPEN-20`, `OPEN-21`), profile change history, charts, calendar, planting opportunities, activity screens, provider monitoring and verification, and every licensing item |
+| The PRD's own status table | `packages/agronomy` said "Not started"; it now names what exists and the fact that no writer consumes it. `packages/climate-core` now names its scope instead of "partial" alone |
+| Method | A read-only pass classified every unchecked line against the repository, then each claim was spot-checked before the line changed. Nothing was ticked from naming alone |
+| Review corrections | Three sentences were weakened and none unticked. API logging is not JSON — only the worker's is — and `kind` is absent from `lease_lost` and `heartbeat_error`. `db:verify` is a manual run, so least-privilege is verified but not enforced by CI. Tenant isolation rests on `TenantTransaction` typing plus RLS, not on a runtime guard against a raw query on the global client. `createField` and `updateField` are the only geometry writers, and a future importer must reuse `polygonJson` |
+| Remaining count | 478 unchecked. Most are gated by `OPEN-03`/`OPEN-05`/`OPEN-11`/`OPEN-18`/`OPEN-20`/`OPEN-21`/`OPEN-27`, or are acceptance criteria that need an owner decision |
+
+### A provider null is an answer, not a gap — 2026-11-27
+
+`packages/contracts/src/climate.ts`, `packages/climate-core/src/daily-read.ts`,
+`packages/climate-core/src/daily-read.test.ts`, `apps/web/src/ui.tsx`.
+
+| Item | State |
+|---|---|
+| What was wrong | The daily read served two different absences as one. A day with no stored row and a day whose stored `value` is null both became `missingReason: "pending"`. `pending` says "may still arrive"; for a provider-published null that is false, and the row beside it already names the class, model and run that answered. The runbook told operators to treat the two separately, and the served contract gave them no way to |
+| The split | No row → `pending`, carrying nothing. Stored row with a null value → `provider_null`, carrying `dataClass`, `model` and `initializedAt` from the row, because those are known and are what distinguishes it from a gap |
+| Freshness | `availability` is computed from the row's run, so a null published by a stale run reads `stale`. Freshness is a property of the run, not of the value it did or did not publish |
+| Served only, not stored | `provider_null` lives in `dailyMissingReasonSchema`, a union of the stored `MissingReason` enum with that one literal. No column stores it, so the stored enum and `monthly_outlooks_missing_reason_check` are untouched — which keeps §8.7C.7's rule intact: a seasonal member-month null has no recoverable cause and must not be reported as `provider_null` |
+| Contract | The day's provenance rule was rewritten, not loosened: `valueMm` or `provider_null` requires `dataClass`, `model`, `initializedAt` and `availability`; a bare gap must carry none of them. A first attempt served partial provenance and the schema refused it — correctly — because the old rule was all-or-nothing across five fields. The reviewer caught that before commit; the shape is now checked directly against the built schema (provider-null accepted, provider-null beside a value rejected, labelled gap rejected) |
+| Not verified | Browser rendering of the new label. No test file was added for the contract branch, because the repository forbids new test files without an explicit command; the existing daily test that asserted `pending` for a stored null was renamed and re-aimed, which is a correction to an assertion that had encoded the bug |
