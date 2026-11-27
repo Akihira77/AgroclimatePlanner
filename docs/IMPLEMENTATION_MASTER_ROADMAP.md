@@ -956,11 +956,11 @@ there is no scheduler to produce them.
 - [ ] Implement cell coverage monitoring.
 - [ ] Implement failed ingestion monitoring.
 - [ ] Implement retry exhaustion reporting.
-- [ ] Implement stale outlook detection.
+- [x] Implement stale outlook detection — `packages/climate-core/src/freshness.ts` evaluates a soft TTL at read time (daily: 6/12/48 h by lead band; monthly: per class), and nothing stored is rewritten, so a stale month keeps serving with `stale` beside it.
 - [x] Implement quality audit records — `ClimateAuditReport`, derived and not stored: `reconciles` is computed from the findings it sits beside, so it cannot disagree with them.
 - [ ] Implement operational dashboards or read APIs.
 - [ ] Implement alerting thresholds.
-- [ ] Implement operational runbooks.
+- [x] Implement operational runbooks — `docs/operations/climate-ingestion.md`: processes, the queue queries, replay rules, coverage queries, the weekly check, and which signals are error codes rather than log events. It states its own limit: nothing schedules a run yet.
 - [x] Add tests for quality classification — `packages/climate-core/src/audit.test.ts`, fourteen cases over both checks, including the "reported, not repaired" property (the input rows are unchanged after an audit).
 
 ## Phase 5 acceptance criteria
@@ -1890,8 +1890,8 @@ seeding is the last unblocked prerequisite; the provider gates do not touch it.
 - [x] Implement crop catalog UI (crops, cultivars, version history, stages, thresholds, citations with their grades).
 - [x] Build the climate outlook view on the shipped monthly contract, and the 0–45 day view beside it.
 - [x] Prepare dashboard layout (session shell, navigation, counts, next actions).
-- [x] Edit and delete for farms and fields. Rename reuses the create form (PATCH accepts a name and region, so the geometry fields hide while editing a field); delete is per row, and a farm with live fields is refused by the server's own `409` rather than by a client guess.
-- [x] Polygon geometry entry — the form draws the ring in a plain SVG frame instead of building a square. No map tiles and no projection: the frame is small (≤ 50 km), so degrees-per-kilometre is honest, and topology stays `ST_IsValid`'s job. A typed `bujur, lintang` list is the keyboard and precision alternative, and either source must produce at least three distinct points before the form can submit. Still open: tiles and a real basemap, and a geometry edit path after creation.
+- [x] Edit and delete for farms and fields. Editing reuses the create form: a farm sends its name and region, a field sends its name and, when the ring text changed, its geometry — `PATCH /v1/fields/:id` accepts both and recomputes the area. Delete is per row, and a farm with live fields is refused by the server's own `409` rather than by a client guess.
+- [x] Polygon geometry entry — the form draws the ring in a plain SVG frame instead of building a square. No map tiles and no projection: the frame is small (≤ 50 km), so degrees-per-kilometre is honest, and topology stays `ST_IsValid`'s job. A typed `bujur, lintang` list is the keyboard and precision alternative, and either source must produce at least three distinct points before the form can submit. Editing a created field loads its stored ring into that same textarea, and a blank box keeps the ring it has, so the write happens only when the text differs. Still open: tiles and a real basemap.
 
 **Why:** the product has no usable interface. The stable Farm/Field/Climate APIs
 are enough to begin; waiting for Phase 6–8 delays the only demonstration of value.

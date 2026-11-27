@@ -1684,7 +1684,7 @@ Four specialists reviewed commits `738f001`, `62673af`, `6fd6be3`, `c954d7b` and
 | Fixed copy | "PATCH menerima nama saja" was false — PATCH accepts geometry. The form now says geometry is fixed at creation, and geometry editing is recorded as the remaining work |
 | Not verified | Real pointer and touch behaviour in a browser: there is no web test runner, and adding one is forbidden. typecheck, lint, build and format pass |
 | Review corrections | A cleared `type="number"` field is `""`, and `Number("")` is `0`, so a missing latitude silently anchored the drawing on the equator while the code claimed to refuse it. Blank inputs are now refused before conversion, and the typed parser refuses a leading or trailing separator for the same reason. `ringOf` dropped only **consecutive** duplicates, so a corner visited twice closed a zero-area ring that the message said it refused; every repeated position is now dropped, and a ring that cannot reach three distinct corners is refused with that reason. Clicking and pasting are capped (200 vertices, 4 000 characters): a pasted ring of thousands froze this tab before any request left it |
-| Known limit, not fixed | A failed list reload after a **successful** create replaces the page with that error while the field does exist, so the natural reaction is to submit again. The pattern predates this change and affects every page using `useAsync`; fixing it is a loader-level decision, not a field-form one |
+| Known limit, not fixed | A failed list reload after a **successful** write replaces the page with that error while the write did land, so the natural reaction is to submit again. This holds for create and for the later edit path. The pattern predates both and affects every page using `useAsync`; fixing it is a loader-level decision, not a field-form one |
 
 ### Climate ingestion runbook and the deferred sweep — Phase 5.8, part 2 — 2026-11-27
 
@@ -1699,3 +1699,17 @@ Four specialists reviewed commits `738f001`, `62673af`, `6fd6be3`, `c954d7b` and
 | Honesty fixes to existing text | "Two limits" about `coverage_mismatch` is gone (the two-sided check ships); `5.8 not started` is gone; Priority 5 no longer claims `OPEN-26` blocks window generation |
 | Signals table | Distinguishes a `last_error.code` from a log event, because `lease_lost` and `ingestion_terminal` never reach `last_error` — the reaper settles those rows |
 | Review corrections | Four false sentences were removed after a factual audit. The runbook claimed the runner claims a kind it has no handler for and marks it `job_unhandled`; the claim filter is built from registered handlers, so such a job waits in `queued` forever and `job_unhandled` is unreachable. `handler_error` was grouped with the events that leave a job unsettled, but the worker settles it itself. The "no sweep" argument said *every* audit invariant is a constraint, when only the dangling-reference and duplicate half is; the entry above now says half. §9.6 and §10.7 still carried `BLOCKED by OPEN-26` and are now `PARTIAL` with each check's real state. The audit test count was wrong (fourteen, not twelve) |
+
+### Editing a field's boundary — 2026-11-27
+
+`apps/web/src/pages/FarmsPage.tsx`. The last item Priority 4 called open, now that
+`PATCH /v1/fields/:id` was found to accept `geometry` (it always had).
+
+| Item | State |
+|---|---|
+| What the form does | "Ubah" loads the stored ring into the same textarea the keyboard path already used, one `bujur, lintang` per line. The sketch stays a creation tool: it is anchored on centre and span, and re-deriving a frame from an existing ring would be a second coordinate path |
+| Blank means keep | An empty box PATCHes the name alone. No "leave unchanged" checkbox, and no accidental geometry write from a field the user only renamed |
+| When geometry is sent | Only when the parsed ring differs **by value** from the stored one, so a formatting-only edit (`106.8,-6.2` versus `106.8, -6.2`) does not bump `updated_at` or recompute an unchanged area |
+| Round trip | `String` on a double is the shortest representation that parses back to the same value, so the prefilled text round-trips exactly; `ringText` drops the closing repeat that `ringOf` re-appends |
+| Review corrections | `maxLength` was the wrong tool: a prefilled ring over the limit displayed, then truncated on the first keystroke, silently dropping corners behind a normal-looking success. The cap is now checked in `geometryFor` with the length in the message, and `MAX_POLYGON_TEXT` is 12 000 characters — 200 corners at full double precision. Deleting the field being edited cleared the edit session but left its ring in the textarea, so a create would have reused a deleted parcel; that is cleared too. Both silent `return`s in `saveField` became one guard that sets the error, because a no-op is indistinguishable from a hung form. "Ubah" is disabled while a save is in flight, so an in-flight save cannot wipe the edit the user just opened |
+| Not verified | Browser interaction (no web test runner, and adding one is forbidden). typecheck, lint, build and format pass |

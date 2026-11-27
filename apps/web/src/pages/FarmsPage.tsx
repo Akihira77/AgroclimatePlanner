@@ -111,16 +111,35 @@ export function FarmsPage() {
   const saveField = async (event: React.FormEvent) => {
     event.preventDefault();
     if (selected === undefined) return;
-    // Unreachable while the button is disabled for the same condition; kept because
-    // the cost of a stale click posting an empty ring is not worth the guard's line.
-    if (editingFieldId === null && geometry === null) return;
+    // The button is disabled for the same condition, but the guard reports rather
+    // than returning: a silent no-op is indistinguishable from a hung form.
+    if (geometry === null && (editingFieldId === null || polygonText.trim() !== "")) {
+      setError(new Error(reason === "" ? "Bentuk lahan belum valid." : reason));
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       if (editingFieldId === null && geometry !== null) {
         await api.createField(selected.id, fieldName.trim(), geometry);
       } else if (editingFieldId !== null) {
-        await api.updateField(editingFieldId, { name: fieldName.trim() });
+        const stored = fields.find((field) => field.id === editingFieldId);
+        // Compare values, not text: a formatting-only edit (`106.8,-6.2` versus
+        // `106.8, -6.2`) is not a geometry change and should not bump `updated_at`.
+        const unchanged =
+          stored === undefined ||
+          polygonText.trim() === "" ||
+          (geometry !== null && JSON.stringify(geometry) === JSON.stringify(stored.geometry));
+        // An untouched textarea would re-send the same ring and bump `updated_at` for
+        // nothing, so geometry travels only when the text actually differs.
+        if (unchanged) {
+          await api.updateField(editingFieldId, { name: fieldName.trim() });
+        } else if (geometry !== null) {
+          await api.updateField(editingFieldId, {
+            name: fieldName.trim(),
+            geometry,
+          });
+        }
       }
       setFieldName("");
       setEditingFieldId(null);
@@ -142,6 +161,9 @@ export function FarmsPage() {
       if (editingFieldId === fieldId) {
         setEditingFieldId(null);
         setFieldName("");
+        // The form's textarea was prefilled from this field, so clearing the edit
+        // session without clearing the text would leave its ring in a create form.
+        setPolygonText("");
       }
       state.reload();
     } catch (failure) {
@@ -289,9 +311,11 @@ export function FarmsPage() {
                         <button
                           type="button"
                           className="btn btn-quiet"
+                          disabled={busy}
                           onClick={() => {
                             setEditingFieldId(field.id);
                             setFieldName(field.name);
+                            setPolygonText(ringText(field.geometry));
                           }}
                         >
                           Ubah
@@ -316,7 +340,7 @@ export function FarmsPage() {
         {selected !== undefined ? (
           <form className="panel" onSubmit={saveField}>
             <div className="panel-head">
-              <h3>{editingFieldId === null ? "Lahan baru" : "Ubah nama lahan"}</h3>
+              <h3>{editingFieldId === null ? "Lahan baru" : "Ubah lahan"}</h3>
             </div>
             <div className="panel-body form-grid">
               <div className="field">
@@ -445,7 +469,6 @@ export function FarmsPage() {
                         <textarea
                           id="field-polygon"
                           rows={4}
-                          maxLength={MAX_POLYGON_TEXT}
                           value={polygonText}
                           onChange={(event) => setPolygonText(event.target.value)}
                         />
@@ -457,14 +480,38 @@ export function FarmsPage() {
                     </details>
                   </div>
                 </>
-              ) : null}
+              ) : (
+                <div className="sketch-block">
+                  <div className="field">
+                    <label htmlFor="field-polygon">Poligon (bujur, lintang)</label>
+                    <textarea
+                      id="field-polygon"
+                      rows={5}
+                      value={polygonText}
+                      onChange={(event) => setPolygonText(event.target.value)}
+                    />
+                    <span className="hint">
+                      Satu titik per baris, bujur lalu lintang. Kosongkan untuk mempertahankan
+                      bentuk sekarang; ring ditutup otomatis.
+                    </span>
+                  </div>
+                  {/* A blank box means "keep the current ring", so the sketch's own
+                      "no points yet" reason would be a lie here. */}
+                  {polygonText.trim() === "" || reason === "" ? null : (
+                    <p className="faint">{reason}</p>
+                  )}
+                </div>
+              )}
               <div className="form-actions">
                 <button
                   className="btn btn-primary"
                   type="submit"
-                  disabled={busy || (editingFieldId === null && geometry === null)}
+                  disabled={
+                    busy ||
+                    (geometry === null && (editingFieldId === null || polygonText.trim() !== ""))
+                  }
                 >
-                  {editingFieldId === null ? "Tambah lahan" : "Simpan nama"}
+                  {editingFieldId === null ? "Tambah lahan" : "Simpan"}
                 </button>
                 {editingFieldId === null ? null : (
                   <button
@@ -473,6 +520,7 @@ export function FarmsPage() {
                     onClick={() => {
                       setEditingFieldId(null);
                       setFieldName("");
+                      setPolygonText("");
                     }}
                   >
                     Batal
@@ -484,7 +532,7 @@ export function FarmsPage() {
               <p className="faint">
                 {editingFieldId === null
                   ? "Titik disimpan sebagai bujur dan lintang saat formulir dikirim; ring ditutup otomatis. Bentuk nyata mengikuti apa yang diterima PostGIS."
-                  : "Geometri ditetapkan saat lahan dibuat, jadi di sini hanya nama yang bisa diubah."}
+                  : "Nama dan batas lahan bisa diubah. Luas adalah kolom turunan, jadi basis data menghitungnya ulang hanya bila bentuknya berubah."}
               </p>
             </div>
           </form>
@@ -492,6 +540,17 @@ export function FarmsPage() {
       </section>
     </div>
   );
+}
+
+/**
+ * The stored ring as the textarea's own dialect, one point per line and without the
+ * closing repeat: what a user typed (or drew) round-trips through `String`, which is
+ * exact for a double, so re-sending an untouched field changes no coordinate.
+ */
+function ringText(geometry: PolygonGeometry): string {
+  const ring = geometry.coordinates[0] ?? [];
+  const corners = ring.length > 1 ? ring.slice(0, -1) : ring;
+  return corners.map(([lon, lat]) => `${String(lon)}, ${String(lat)}`).join("\n");
 }
 
 function countLabel(fields: readonly { farmId: string }[], farmId: string): string {
@@ -520,7 +579,8 @@ const KM_PER_DEGREE = 111.32;
  * of thousands would freeze this tab long before the server saw it.
  */
 const MAX_VERTICES = 200;
-const MAX_POLYGON_TEXT = 4000;
+/** 200 corners at full double precision, plus room to type. Refused, not truncated. */
+const MAX_POLYGON_TEXT = 12000;
 
 /** The plot is inset so a vertex at 0 or 1 is still a full circle on screen. */
 const PLOT_MIN = 6;
@@ -643,6 +703,15 @@ function geometryFor(
   frame: Frame | null,
   text: string,
 ): { readonly geometry: PolygonGeometry | null; readonly reason: string } {
+  if (text.length > MAX_POLYGON_TEXT) {
+    // `maxLength` was here first, and it is the wrong tool: it lets a prefilled
+    // value through and then truncates the moment a key is pressed, silently
+    // dropping trailing corners from a ring that already exists.
+    return {
+      geometry: null,
+      reason: `Poligon terlalu panjang: ${text.length} karakter, maksimum ${MAX_POLYGON_TEXT}.`,
+    };
+  }
   if (text.trim() !== "") {
     const parsed = parsePositions(text);
     if ("error" in parsed) return { geometry: null, reason: parsed.error };
