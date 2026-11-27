@@ -28,6 +28,10 @@ Nothing in this list is a design preference. Each one is a question where a
 plausible answer exists and choosing it silently would put an unapproved decision
 into a normative schema.
 
+**What the owner has to sign, and what only engineering may touch**, is split out in
+`docs/OWNER_DECISIONS.md`. That document carries no decision of its own: it is a
+request queue over this register, and a settlement lands here in §4.
+
 ## 1. The P1 register
 
 ### 1.1 Matrix (authoritative) — every P1 item, with what it stops
