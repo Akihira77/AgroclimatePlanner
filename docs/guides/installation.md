@@ -17,7 +17,7 @@ procedure yet — no hosting decision, no production Dockerfiles, no TLS. See
 | Node.js | `>= 24.14.0` | `engines` in the root `package.json`; the API and worker run ESM TypeScript output |
 | pnpm | `12.18.0` | pinned by `packageManager`; Corepack installs it |
 | Docker with Compose v2 | any current release | the development database runs as a container |
-| Free ports | `5442`, `3000`, `5173` | database, API, web dev server |
+| Free ports | `5442`, `3000`, `5173` | database, API, web dev server; `PORT` and `WEB_PORT` move the last two, and a moved web port must also be added to `CORS_ORIGINS` |
 
 ```bash
 corepack enable      # makes `pnpm` resolve the pinned version
@@ -145,12 +145,20 @@ pnpm dev
 Builds once, then runs every `dev` script in the workspace: the `contracts` and
 `weather-core` compilers, the API compiler, the API process
 (`node --watch dist/main.js`), and Vite. The API listens on `PORT` (default `3000`)
-and the web app on `127.0.0.1:5173`. Vite proxies `/v1` to the API, so the browser
-talks to one origin and the session cookie is same-site.
+and the web app on `127.0.0.1:5173` (`WEB_PORT`). Vite proxies `/v1` to the API, so
+the browser talks to one origin and the session cookie is same-site.
 
-The web dev server uses `strictPort`: an occupied 5173 is a startup failure rather
-than a move to 5174, because the API's origin allowlist would refuse the new port
-on the first state-changing request.
+The web dev server uses `strictPort`: an occupied port is a startup failure rather
+than a move to the next one, because the API's origin allowlist would refuse the new
+port on the first state-changing request. Moving the dev server is therefore two
+variables that must agree:
+
+```bash
+PORT=3010 WEB_PORT=5174 CORS_ORIGINS=http://localhost:5174 \
+  node apps/api/dist/main.js            # terminal 1
+PORT=3010 WEB_PORT=5174 \
+  pnpm --filter @agroclimate/web dev    # terminal 2
+```
 
 Verify the API:
 
@@ -207,7 +215,7 @@ without asking. Use it when you mean it.
 | `role "app_api" does not exist` | the database volume exists but was never bootstrapped, or was recreated | `pnpm db:bootstrap` |
 | Prisma `P3009` — failed migrations in the target database | a migration failed and `deploy` will not proceed | read `docs/operations/migration-rollback.md`; resolve the row deliberately, never edit the file |
 | `ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL` with no compiler error shown | pnpm's wrapper hides the inner exit | run the package script directly, e.g. `cd apps/api && npx tsc -p tsconfig.json --noEmit` |
-| Port 5173 in use | `strictPort` by design | stop the other process; the API allowlist would reject 5174 |
+| Port 5173 in use | `strictPort` by design | set `WEB_PORT` to a free port **and** add that origin to `CORS_ORIGINS`; a moved port alone fails on the first `POST` |
 | Worker exits with `config_error` | `APP_SYSTEM_DATABASE_URL` is unset | export it (see §6) |
 
 ---

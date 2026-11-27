@@ -466,7 +466,7 @@ contract above; it fixes how a request becomes a response.
   that was closed.
 - **CORS.** Explicit allowlist from `CORS_ORIGINS` (comma-separated). Credentials are
   not enabled — no cookie is issued by this phase. In production the variable is
-  required; in development it defaults to `http://localhost:5173`. An invalid entry
+  required; in development it defaults to `http://localhost:5173`, and a dev server moved with `WEB_PORT` must be added to `CORS_ORIGINS` or its state-changing requests are refused. An invalid entry
   fails startup rather than widening the policy.
 - **Trust proxy.** `TRUST_PROXY` is explicit and off by default. Accepted values:
   `false` (default), `loopback`, `linklocal`, `uniquelocal`, or a comma-separated list

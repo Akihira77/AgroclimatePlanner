@@ -79,10 +79,11 @@ failure messages is `docs/guides/installation.md`.
 `pnpm dev` builds once, then runs every `dev` script in the workspace: the
 `contracts` and `weather-core` compilers, the API compiler, the API process
 (`node --watch dist/main.js`), and Vite. The API listens on `PORT` and the
-web app on `127.0.0.1:5173`; Vite proxies `/v1` to the API, so the browser talks to
-one origin and no CORS response is involved. The web app refuses to start if 5173
-is taken rather than moving to another port, which the API's origin allowlist would
-reject on the first state-changing request.
+web app on `127.0.0.1:5173` (`WEB_PORT` moves it); Vite proxies `/v1` to the API, so
+the browser talks to one origin and no CORS response is involved. The web app
+refuses to start if its port is taken rather than moving to the next one, which the
+API's origin allowlist would reject on the first state-changing request — moving it
+means setting `WEB_PORT` **and** listing that origin in `CORS_ORIGINS`.
 
 Both processes read the repository-root local environment file: the API through
 `loadLocalEnv`, which never overrides a variable that is already set, and Vite

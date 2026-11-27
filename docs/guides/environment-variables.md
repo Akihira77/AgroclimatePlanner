@@ -110,9 +110,11 @@ it. See `docs/operations/climate-ingestion.md` §1.
 |---|---|---|
 | `NODE_ENV` | `development` | `development`, `test`, `production`; anything else stops the boot |
 | `PORT` | `3000` | integer 1–65535 |
-| `CORS_ORIGINS` | `http://localhost:5173` | comma-separated bare origins, `http(s)` only; `*`, paths and trailing slashes are refused; **required in production** |
+| `CORS_ORIGINS` | `http://localhost:5173` | comma-separated bare origins, `http(s)` only; `*`, paths and trailing slashes are refused; **required in production**. In development this must name the web dev server's origin, which `WEB_PORT` can move |
 | `TRUST_PROXY` | `false` | `false`, or a comma-separated list of `loopback`, `linklocal`, `uniquelocal` and CIDRs; `true` is refused |
 | `TRUST_REQUEST_ID_HEADER` | `false` | `true` or `false` |
+
+The web dev server reads two more variables from the same file, in §4 below.
 
 `TRUST_PROXY=true` is refused because Express would then trust an
 `X-Forwarded-For` header written by any caller, letting a client choose the address
@@ -163,6 +165,7 @@ commercial ingestion may run at all; changing a string does not change that.
 | Variable | Default | Effect |
 |---|---|---|
 | `VITE_API_BASE_URL` | `/v1` in dev, `http://localhost:3000/v1` in a production build | absolute API base when the app and API are served from different origins |
+| `WEB_PORT` | `5173` | the dev server's port, and the origin the API must allow. Read by `apps/web/vite.config.ts`, which also reads `PORT` to know where to proxy `/v1` |
 
 Vite inlines `VITE_*` values into the bundle at build time: they are public. Never
 put a secret in one.

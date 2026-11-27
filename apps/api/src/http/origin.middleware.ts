@@ -40,10 +40,30 @@ export interface OriginValidationOptions {
   readonly trustedOrigins: readonly string[];
 }
 
+/**
+ * Refusals are logged once per distinct origin, up to a cap. The line is the only
+ * thing that says *which* origin was refused — the response body cannot, because it
+ * would hand the allowlist to whoever asked. But the caller chooses the origin, so an
+ * uncapped line is a log flood a scanner can drive: one line per origin, twenty
+ * origins, then silence for the rest of the process's life.
+ */
+const MAX_LOGGED_ORIGINS = 20;
+
+/** Terminal escapes and control bytes from a header have no business in a log line. */
+function printable(value: string): string {
+  return [...value.slice(0, 200)]
+    .map((char) => {
+      const code = char.codePointAt(0) ?? 0;
+      return code < 0x20 || code === 0x7f ? "?" : char;
+    })
+    .join("");
+}
+
 export function originValidation(
   options: OriginValidationOptions,
 ): (request: Request, response: Response, next: NextFunction) => void {
   const trusted = new Set(options.trustedOrigins);
+  const logged = new Set<string>();
 
   return (request, response, next) => {
     if (!STATE_CHANGING_METHODS.has(request.method)) return next();
@@ -52,6 +72,21 @@ export function originValidation(
     if (origin !== undefined && trusted.has(origin)) return next();
 
     const api: ApiRequest = request;
-    response.status(403).json(errorResponseBody("FORBIDDEN", requestIdOf(api.requestId)));
+    const requestId = requestIdOf(api.requestId);
+
+    // A dev server moved with `WEB_PORT` leaves the API refusing a port it was never
+    // told about, and "Tidak diizinkan." points nowhere. This line and the response
+    // share a requestId, so an operator can join them.
+    const key = origin ?? "(absent)";
+    if (!logged.has(key) && logged.size < MAX_LOGGED_ORIGINS) {
+      logged.add(key);
+      console.warn(
+        `[api] refused ${request.method} ${printable(request.path)} from Origin ` +
+          `${printable(key)} (requestId ${requestId}); ` +
+          `CORS_ORIGINS lists ${options.trustedOrigins.join(", ") || "(nothing)"}`,
+      );
+    }
+
+    response.status(403).json(errorResponseBody("FORBIDDEN", requestId));
   };
 }
