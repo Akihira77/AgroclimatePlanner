@@ -2,7 +2,8 @@
 
 Status: **implemented.** Phase 2.3 produced this specification, Phase 2.4 audited
 and classified every remaining decision, and Phase 3 created the nineteen tables
-it describes. The `app` schema now holds **24 domain tables**; the SQL in
+it describes. The `app` schema now holds **25 tables** (24 domain plus
+`sessions`); the SQL in
 `packages/database/prisma/migrations/` is authoritative and this directory
 documents it, not the other way round.
 
@@ -24,7 +25,7 @@ Read in this order. Every later document assumes the earlier ones.
 | 5 | `tables-climate.md` | `outlook_cells`, `forecast_runs`, `ingestion_runs`, `weather_records`, `monthly_outlooks`, `climatology_normals` |
 | 6 | `tables-derived.md` | `suitability_runs`, `planting_windows`, `ai_briefings` |
 | 7 | `relationships.md` | every foreign key, cardinality, and composite ownership key |
-| 8 | `ownership-and-rls.md` | the ownership/RLS/grant matrix for all 22 tables, and the `app.users` lookup problem |
+| 8 | `ownership-and-rls.md` | the ownership/RLS/grant matrix for all 25 tables, and the `app.users` lookup problem |
 | 9 | `spatial-model.md` | geometry types, SRID, area, validity, indexing, snapshot invalidation |
 | 10 | `provenance-storage.md` | how the contract types are stored, hashed, and kept reproducible |
 | 11 | `temporal-and-weather-semantics.md` | what every date and timestamp column means, and how missing data is represented |

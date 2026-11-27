@@ -134,7 +134,7 @@ describe("table inventory", () => {
 });
 
 describe("row-level security flags", () => {
-  test("the ten tenant tables and one identity table are ENABLE + FORCE; the thirteen reference tables are neither", async () => {
+  test("the ten tenant tables and one identity table are ENABLE + FORCE; the fourteen reference tables are neither", async () => {
     const { rows } = await owner.query(
       `select c.relname as table, c.relrowsecurity as rls, c.relforcerowsecurity as force
          from pg_class c

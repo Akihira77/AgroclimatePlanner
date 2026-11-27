@@ -1,7 +1,8 @@
 # Domain Model (conceptual)
 
 Status: Phase 1. The physical schema these invariants bind is now implemented —
-`docs/data-model/` was specified in Phase 2.3 and built in Phase 3 (22 tables).
+`docs/data-model/` was specified in Phase 2.3 and built in Phase 3 (22 tables),
+plus three added since (`sessions`, `jobs`, `climatology_baselines`), for 25 in all.
 Exception, recorded rather than implied: `users`, `farms`, and `fields` were
 materialised early in Phase 2.2.3 because row isolation cannot be demonstrated
 without real tenant-owned tables, and their physical columns come from §2 below and

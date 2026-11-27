@@ -17,9 +17,11 @@ boundary of this phase.
 
 ## 1. Specified tables
 
-22 tables from Phase 3, all implemented, plus two added afterwards: `sessions`, in
-`20261118050000_sessions` (S5), and `climatology_baselines`, in
-`20261123010000_climatology_baselines` (Phase 5.5 corrective), for 24 tables in total.
+22 tables from Phase 3, all implemented, plus three added afterwards: `sessions`, in
+`20261118050000_sessions` (S5), `jobs`, in `20261122000000_jobs` (Phase 5.3), and
+`climatology_baselines`, in `20261123010000_climatology_baselines` (Phase 5.5
+corrective), for 25 tables in total. The count is asserted against the catalogue by
+`packages/database/test/schema/schema-conformance.test.mjs`.
 Three of the 22 arrived with
 Phase 2.2.3 (`users`, `farms`, `fields`); the other nineteen with Phase 3, in migration
 `20261118030000_domain_tables`. The `State` column records when each arrived, not whether
@@ -51,10 +53,11 @@ it exists.
 | 22 | `app.planting_windows` | `PlantingWindow` | `tenant-derived` | `user_id` | yes | Phase 3 | `tables-derived.md` §2 |
 | 23 | `app.ai_briefings` | `AiBriefing` | `tenant-derived` | `user_id` | yes | Phase 3 | `tables-derived.md` §3 |
 | 24 | `app.sessions` | `Session` | `identity` | `user_id` → `users` | yes | S5, 2026-11-20 | `ADR-005`, `phase-3.2.3` §7 |
+| 25 | `app.jobs` | queue row | `global` | — | no | Phase 5.3, 2026-11-22 | `tables-climate.md` §7 |
 
 Tenant-owned (RLS): 10 tables — rows 1–7 and 21–23.
-Global/reference (no RLS, no `user_id`): 12 tables — rows 8–19.
-Identity (RLS forced, not tenant-scoped): 1 table — row 23. `sessions` carries no
+Global/reference (no RLS, no `user_id`): 14 tables — rows 8–20 and 25.
+Identity (RLS forced, not tenant-scoped): 1 table — row 24. `sessions` carries no
 `app.user_id` predicate on purpose: it is read during authentication, before a tenant
 context exists (`ADR-005`).
 

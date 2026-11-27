@@ -1,6 +1,6 @@
 # Physical Model — Shared Conventions
 
-These rules apply to all 22 tables. The per-table documents state columns and
+These rules apply to all 25 tables. The per-table documents state columns and
 constraints; this document states the grammar they are written in. A table that
 deviates without a recorded decision is a defect.
 

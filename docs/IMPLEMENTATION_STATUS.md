@@ -1948,3 +1948,19 @@ and the two §5.4 ticks.
 | What the reconciliation confirms | `OPEN-01` and `OPEN-13` are RESOLVED and correctly absent from a blocker table; the other 27 are live and named, singly or in the two grouped rows |
 | Decisions and their homes | Eight ADRs; four `Accepted` (`ADR-004`–`ADR-007`), four `Proposed` (`ADR-001`–`ADR-003` and `ADR-008`, which is waiting on `OPEN-18`). The first three describe architecture that is already implemented — flipping an ADR's status is the owner's decision, so it is recorded here rather than changed |
 | What is not guarded | Nothing compares the two documents automatically. The comparison was a one-off, and adding a check would need a parser for two hand-written Markdown tables — recorded as a known gap rather than pretended away |
+
+### The table count, reconciled against the catalogue — 2026-11-28
+
+`docs/data-model/entity-catalog.md`, `docs/data-model/README.md`,
+`docs/data-model/physical-model.md`, `docs/architecture/domain-model.md`, and one
+test title in `packages/database/test/schema/schema-conformance.test.mjs`.
+
+| Item | State |
+|---|---|
+| What was measured | `pg_class` in schema `app`: 26 base tables including `_prisma_migrations`, so 25 application tables — 24 domain plus `sessions` |
+| Finding 1 | `entity-catalog.md` listed 24 rows: 22 from Phase 3, plus `sessions` and `climatology_baselines`. `jobs` (`20261122000000_jobs`, Phase 5.3) was never added, so the inventory the database documentation calls normative was missing a table that has held rows since Phase 5.3. Added as row 25, with the ownership split restated (10 tenant, 14 global/reference, 1 identity) |
+| Finding 2 | The same file said the identity table was "row 23"; it is row 24, and row 23 is `ai_briefings` — a pointer into the wrong table in a document whose job is the inventory |
+| Finding 3 | `physical-model.md` and `data-model/README.md` §1 both said "all 22 tables"; `data-model/README.md`'s opening said 24 domain tables. Three documents, three different totals for one schema |
+| Finding 4 | `schema-conformance.test.mjs` asserted `globalTables.length === 14` in a test whose name said "the thirteen reference tables are neither". The assertion was right and the name had been wrong since `jobs` was added. Renamed |
+| Why these survived | Every stale count was written when it was true, and nothing re-derives a prose count from the catalogue. The inventory test does check the *set* of 25 tables, which is why the schema was never wrong — only the sentences about it |
+| Evidence | `test:schema` 25 pass; the partition test asserts 10 + 14 + 1 = 25 |
