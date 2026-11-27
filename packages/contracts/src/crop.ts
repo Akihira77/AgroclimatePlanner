@@ -222,7 +222,12 @@ export const sourceRefSchema = z.strictObject({
   authors: z.string().min(1).nullable(),
   publicationYear: z.number().int().min(1900).max(2100),
   publisher: z.string().min(1),
-  url: z.url(),
+  /**
+   * `http(s)` only. `z.url()` alone accepts `javascript:` and `data:`, and this
+   * value is rendered as an `href`: a scheme-restricted URL here is the difference
+   * between a citation and a same-origin script the reader clicks.
+   */
+  url: z.url({ protocol: /^https?$/ }),
   accessedAt: isoDateSchema,
   grade: evidenceGradeSchema,
 });
