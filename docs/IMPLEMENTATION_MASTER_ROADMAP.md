@@ -971,7 +971,10 @@ This is a hard blocker for persisting valid planting windows.
 
 # 10. Phase 6 — Agronomic Suitability & Planting Window Engine
 
-**Status: `NOT_STARTED`**
+**Status: `PARTIAL`** — contracts, catalog reads, constraint evaluation and stage
+alignment are implemented; the catalog seed, scoring, window generation, persistence and
+recomputation are blocked by `OPEN-20`, `OPEN-26` and `OPEN-27`. See §18 Priority 5 for
+what each blocked item waits on.
 
 ## Objective
 
@@ -996,21 +999,21 @@ Sebelum implementasi:
 
 ## 10.2 Domain contracts and profile versioning — 6.1
 
-- [ ] Define CropProfile domain contracts.
-- [ ] Define CropProfileVersion.
-- [ ] Define AgronomicConstraint.
-- [ ] Define GrowthStage.
-- [ ] Define EvidenceGrade.
-- [ ] Define AgronomicSourceReference.
-- [ ] Define ProfileVersion immutability.
-- [ ] Define Profile activation/deactivation.
-- [ ] Define Profile version comparison.
-- [ ] Define field snapshot contract.
-- [ ] Define suitability input contract.
-- [ ] Define suitability output contract.
-- [ ] Define reason/explanation contract.
-- [ ] Define engine version contract.
-- [ ] Define deterministic hash input.
+- [x] Define CropProfile domain contracts.
+- [x] Define CropProfileVersion.
+- [x] Define AgronomicConstraint.
+- [x] Define GrowthStage.
+- [x] Define EvidenceGrade.
+- [x] Define AgronomicSourceReference.
+- [x] Define ProfileVersion immutability, enforced by trigger on the version and on its stages, thresholds and citations.
+- [ ] Define Profile activation/deactivation. **Deliberately absent**: publishing is a `migration_owner` operation in v1, and no HTTP mutation route exists.
+- [ ] Define Profile version comparison. **Deliberately absent**: no screen or engine reads two versions at once yet.
+- [x] Define field snapshot contract.
+- [x] Define suitability input contract — as the persisted row shapes, `suitabilityRunSchema` and `plantingWindowSchema`.
+- [x] Define suitability output contract — same rows; the verdict vocabulary is the migration's `D25`, not the older category list in §10.4.
+- [ ] Define reason/explanation contract. **Open document by design**: `risks`, `explanations`, `constraintsEvaluated` and `missingInputs` are arrays until the engine that gives them meaning exists.
+- [x] Define engine version contract.
+- [x] Define deterministic hash input, in `derivationDescriptorSchema` and `hashDerivationDescriptor`.
 
 ### Acceptance criteria
 
@@ -1047,16 +1050,16 @@ Important limitations:
 
 ## 10.4 Deterministic suitability engine — 6.3
 
-- [ ] Implement pure suitability calculation.
-- [ ] Implement climate dimension.
+- [x] Implement pure suitability calculation — the per-constraint half, in `packages/agronomy/src/constraint.ts`.
+- [ ] Implement climate dimension. **Dimension dispatch is not scoring**: each dimension is evaluated by the same comparator function, so a dimension ships when its constraints can be authored, which is the catalogue seed.
 - [ ] Implement water dimension.
 - [ ] Implement soil dimension.
 - [ ] Implement timing dimension.
 - [ ] Implement risk dimension.
-- [ ] Implement hard constraint evaluation.
-- [ ] Implement soft constraint evaluation.
-- [ ] Implement insufficient-data propagation.
-- [ ] Implement suitability category classification.
+- [x] Implement hard constraint evaluation.
+- [x] Implement soft constraint evaluation.
+- [x] Implement insufficient-data propagation, at the constraint and per-dimension levels.
+- [ ] Implement suitability category classification. **Vocabulary conflict resolved in favour of the database**: `planting_windows.suitability` is `suitable | conditional | unsuitable | insufficient_data`, so the `excellent/good/poor` list below is superseded, not pending.
 - [ ] Implement reason generation.
 - [ ] Implement source reference propagation.
 - [ ] Implement deterministic ordering.
@@ -1067,15 +1070,15 @@ Important limitations:
 - [ ] Add metamorphic tests.
 - [ ] Add deterministic repeatability tests.
 
-Suitability categories:
+Suitability categories — **superseded by the migration's `D25` vocabulary**:
 
-- `excellent`
-- `good`
+- `suitable`
 - `conditional`
-- `poor`
+- `unsuitable`
 - `insufficient_data`
 
-A numeric score, if introduced, must not be interpreted as the probability of crop success.
+`poor` is not a verdict, and `excellent`/`good` never existed in the DDL. A numeric score,
+if introduced, must not be interpreted as the probability of crop success.
 
 ### Acceptance criteria
 
@@ -1087,8 +1090,8 @@ A numeric score, if introduced, must not be interpreted as the probability of cr
 
 ## 10.5 Growth-stage alignment — 6.4
 
-- [ ] Implement crop growth-stage timeline.
-- [ ] Map crop duration to stages.
+- [x] Implement crop growth-stage timeline — `stageAtOffset`.
+- [x] Map crop duration to stages, clipped at both cycle-length extremes — `criticalStageWindows`.
 - [ ] Align climate data with growth stages.
 - [ ] Evaluate rainfall during critical stages.
 - [ ] Evaluate temperature stress where supported.

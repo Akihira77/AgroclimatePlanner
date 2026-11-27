@@ -603,7 +603,10 @@ The provider's `precipitation_mean` is not automatically the monthly accumulatio
 
 ## 4.7 Agronomic Suitability Engine
 
-**Status repository: Not started. Domain and physical data-model foundations exist.**
+**Status repository: partially implemented.** The rulebook's contracts, its immutability,
+one-threshold evaluation and stage alignment exist (`0937838`, `738f001`). No seed, no
+score, no verdict, no window, and no route: those wait on `OPEN-20`, `OPEN-26` and
+`OPEN-27`.
 
 ### Objective
 
@@ -1469,19 +1472,22 @@ These decisions supersede older documentation that still says seasonal 1–7 and
 
 ## Phase 6 — Agronomic Suitability & Planting Window Engine
 
-<badge color="secondary">Not started</badge>
+<badge color="warning">Partially implemented</badge>
 
-Planned sub-phases:
+| Sub-phase | Deliverable | Status |
+|---|---|---|
+| 6.1 | Agronomic domain contracts and profile versioning | Contracts and immutability triggers shipped (`0937838`) |
+| 6.2 | Crop catalog and seed data | Catalog reads shipped; **seed blocked by `OPEN-20`** |
+| 6.3 | Pure deterministic suitability engine | Constraint evaluation and per-dimension coverage shipped (`738f001`); scoring and reasons not started |
+| 6.4 | Growth-stage alignment | Stage and critical-window alignment shipped (`738f001`) |
+| 6.5 | Planting window generation | **Blocked by `OPEN-26`** |
+| 6.6 | EvidenceSegment validation and persistence | **Blocked by `OPEN-26`** |
+| 6.7 | API and recomputation integration | **Blocked by `OPEN-26`/`OPEN-27`** |
 
-| Sub-phase | Deliverable |
-|---|---|
-| 6.1 | Agronomic domain contracts and profile versioning |
-| 6.2 | Crop catalog and seed data |
-| 6.3 | Pure deterministic suitability engine |
-| 6.4 | Growth-stage alignment |
-| 6.5 | Planting window generation |
-| 6.6 | EvidenceSegment validation and persistence |
-| 6.7 | API and recomputation integration |
+What shipped is the half that needs no owner threshold and no provider grid: the
+rulebook's shape, its immutability, the arithmetic that evaluates one threshold, and
+the calendar that places a critical stage. Nothing emits a verdict, a score, or a
+recommendation.
 
 Dependencies:
 - `OPEN-18`
@@ -1494,7 +1500,12 @@ Some pure engine work and synthetic-fixture tests can proceed independently of p
 
 ## Phase 7 — Frontend & Agricultural Calendar
 
-<badge color="secondary">Not started</badge>
+<badge color="warning">Partially implemented</badge>
+
+Shipped 2026-11-27 (`48e9324`): session shell, login/registration, farm and field
+management (create and list), crop catalog browse with version detail, and both climate
+horizons. Pending: editing and deleting farms and fields, map-based geometry, and the
+agricultural calendar itself, which depends on the agronomic engine.
 
 Planned:
 - Application shell.

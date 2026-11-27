@@ -1597,7 +1597,7 @@ vector changed.** The report is `docs/review/open-18-open-meteo-ifs025-evidence.
 
 ---
 
-### Phase 6.2–6.3 — Constraint evaluation and stage alignment — 2026-11-27
+### Constraint evaluation and stage alignment — readiness 6.2–6.3, roadmap §10.4–§10.5 — 2026-11-27
 
 **New workspace package `packages/agronomy`. Pure functions only: no database, no clock, no route, no seed.**
 
