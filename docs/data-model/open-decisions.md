@@ -200,11 +200,13 @@ invalid partition to be persisted as a valid recommendation.
 segments, not with the schema — **done 2026-11-27**. `validatePartition` returns
 one `PartitionViolation` per failed check rather than a boolean, so a refused write
 names every defect at once; it refuses impossible calendar dates instead of
-normalising them, treats a zero-coverage segment as a missing range, and requires
-the union to touch both window extremes. Two limits are stated in the code rather
-than papered over: the contract's coverage formula, read literally, contradicts its
-own rule that a segment may report partial coverage, so only the reachable half is
-checked; and no writer calls the function yet, so the invariant is enforced by the
+normalising them, treats a zero-coverage segment as a missing range, measures a gap
+from the farthest covered day rather than from the previous interval, and requires
+the union to touch both window extremes. Coverage is reconciled **two-sided**: the
+contract's formula weights each segment by its own `coveragePercent`, so a partially
+covered segment lowers its share and a shortfall is the defect — days inside an
+"evidence" segment that are neither covered nor declared missing. One limit is stated
+in the code: no writer calls the function yet, so the invariant is enforced by the
 absence of a write path, not by this code.
 
 ## 2. Detail — the other ten P1 items

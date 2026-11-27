@@ -70,6 +70,9 @@ export function classifyVerdict(input: VerdictInput): Verdict {
 
   for (const dimension of input.hardGateDimensions) {
     const summary = byDimension.get(dimension);
+    // A gated dimension with no summary at all is not a pass: the caller built the
+    // input by hand and dropped a gate, which is the one direction a verdict must
+    // never drift in.
     if (summary === undefined) continue;
     if (summary.hardGateFailed) {
       reasons.push({
@@ -83,7 +86,14 @@ export function classifyVerdict(input: VerdictInput): Verdict {
 
   for (const dimension of input.hardGateDimensions) {
     const summary = byDimension.get(dimension);
-    if (summary === undefined) continue;
+    if (summary === undefined) {
+      reasons.push({
+        code: "hard_gate_unknown",
+        dimension,
+        detail: `the profile hard-gates ${dimension} and no summary mentions it`,
+      });
+      continue;
+    }
     if (summary.hardGateUnknown) {
       reasons.push({
         code: "hard_gate_unknown",

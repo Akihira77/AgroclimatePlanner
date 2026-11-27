@@ -10,13 +10,20 @@ import { addDays, daysBetween } from "./stages.js";
  * uncovered, or claim more coverage than they carry is storable. A dashboard
  * rendering such a window paints a gap as evidence.
  *
- * The six checks are the ones `provenance-contract.md` §4 states, in its order, and
- * each one reports itself separately so a failed write names every defect at once
- * instead of the first.
+ * The six checks are the ones `provenance-contract.md` §4 states, and each one
+ * reports itself separately so a failed write names every defect it can see instead
+ * of only the first.
  *
- * Pure: no clock, no I/O, no locale. Dates are calendar days, compared as strings
- * only after their arithmetic has been validated, so `2026-02-30` is refused rather
- * than normalised into March.
+ * **One limit, stated rather than hidden:** an interval whose own dates are invalid,
+ * or a segment with no evidence at all, is reported and then left out of the
+ * interval walk. Its relationship with the other intervals is therefore not
+ * reported in the same pass — an operator who fixes the dates may meet a second
+ * finding. Keeping a malformed interval in the walk would mean sorting by a date
+ * that does not exist, which reports a defect that is not real.
+ *
+ * Pure: no clock, no I/O, no locale. Dates are compared as fixed-width strings,
+ * which is chronologically correct for `YYYY-MM-DD`, and their arithmetic is
+ * validated first, so `2026-02-30` is refused rather than normalised into March.
  */
 
 export type PartitionViolationCode =
@@ -46,8 +53,14 @@ export interface PartitionInput {
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-/** Percentage points of slack allowed when reconciling coverage. */
-const COVERAGE_EPSILON = 0.5;
+/**
+ * Slack allowed when reconciling coverage, as a **percentage of the window**.
+ *
+ * A fixed number of days would be a different rule on a 10-day window than on a
+ * 30-day one: half a day of slack is 5 % of ten days and 1.7 % of thirty, so the
+ * short window would tolerate the error the check exists to catch.
+ */
+const COVERAGE_EPSILON_PERCENT = 0.5;
 
 function isCalendarDate(value: string): boolean {
   if (!ISO_DATE.test(value)) return false;
@@ -104,9 +117,11 @@ export function validatePartition(input: PartitionInput): readonly PartitionViol
   }
 
   const usable: Interval[] = [];
+  let dropped = 0;
 
   for (const segment of segments) {
     if (!isCalendarDate(segment.startDate) || !isCalendarDate(segment.endDate)) {
+      dropped += 1;
       violations.push({
         code: "invalid_range",
         startDate: segment.startDate,
@@ -116,6 +131,7 @@ export function validatePartition(input: PartitionInput): readonly PartitionViol
       continue;
     }
     if (daysBetween(segment.startDate, segment.endDate) < 0) {
+      dropped += 1;
       violations.push({
         code: "invalid_range",
         startDate: segment.startDate,
@@ -127,6 +143,7 @@ export function validatePartition(input: PartitionInput): readonly PartitionViol
     // A segment carrying no evidence at all is a missing range. `coveragePercent`
     // is the only signal the row has, and 0 means "every day in here is a hole".
     if (segment.coveragePercent === 0) {
+      dropped += 1;
       violations.push({
         code: "no_evidence_segment",
         startDate: segment.startDate,
@@ -145,6 +162,7 @@ export function validatePartition(input: PartitionInput): readonly PartitionViol
 
   for (const range of missingRanges) {
     if (!isCalendarDate(range.startDate) || !isCalendarDate(range.endDate)) {
+      dropped += 1;
       violations.push({
         code: "invalid_range",
         startDate: range.startDate,
@@ -154,6 +172,7 @@ export function validatePartition(input: PartitionInput): readonly PartitionViol
       continue;
     }
     if (daysBetween(range.startDate, range.endDate) < 0) {
+      dropped += 1;
       violations.push({
         code: "invalid_range",
         startDate: range.startDate,
@@ -176,58 +195,67 @@ export function validatePartition(input: PartitionInput): readonly PartitionViol
     usable.push({ kind: "missing", startDate: range.startDate, endDate: range.endDate });
   }
 
-  // Checks 1–3 need sorted intervals; ties are broken by end so that a contained
-  // interval sorts before the one that contains it and the overlap is reported once.
+  // Fixed-width ISO dates sort chronologically as strings, so this needs no locale.
   const ordered = [...usable].sort(
-    (a, b) => a.startDate.localeCompare(b.startDate) || a.endDate.localeCompare(b.endDate),
+    (a, b) =>
+      (a.startDate < b.startDate ? -1 : a.startDate > b.startDate ? 1 : 0) ||
+      (a.endDate < b.endDate ? -1 : a.endDate > b.endDate ? 1 : 0),
   );
 
   let overlapping = false;
   let gapped = false;
+  // The furthest day covered so far, not the previous interval's end: an interval
+  // can be contained by one that is not its immediate predecessor, and a gap has to
+  // be measured from the real edge of coverage or it names days that are covered.
+  let maxEnd: string | null = null;
 
-  for (let index = 1; index < ordered.length; index += 1) {
-    const previous = ordered[index - 1] as Interval;
-    const current = ordered[index] as Interval;
-
-    // Check 1: adjacency is legal, sharing a day is not.
-    if (current.startDate <= previous.endDate) {
-      overlapping = true;
-      violations.push({
-        code: "overlap",
-        startDate: current.startDate,
-        endDate: current.endDate,
-        detail: `overlaps the ${previous.kind} ending ${previous.endDate}`,
-      });
-      continue;
+  for (const current of ordered) {
+    if (maxEnd !== null) {
+      // Check 1: adjacency is legal, sharing a day is not.
+      if (current.startDate <= maxEnd) {
+        overlapping = true;
+        violations.push({
+          code: "overlap",
+          startDate: current.startDate,
+          endDate: current.endDate,
+          detail: `overlaps the interval ending ${maxEnd}`,
+        });
+      } else if (windowValid && daysBetween(maxEnd, current.startDate) > 1) {
+        // Check 2: a gap is any day that no interval covers — the days between the
+        // farthest edge so far and this interval's start.
+        gapped = true;
+        violations.push({
+          code: "gap",
+          startDate: addDays(maxEnd, 1),
+          endDate: addDays(current.startDate, -1),
+          detail: "no interval covers these days",
+        });
+      }
     }
-
-    // Check 2: a gap is any day that no interval covers.
-    if (windowValid && daysBetween(previous.endDate, current.startDate) > 1) {
-      gapped = true;
-      violations.push({
-        code: "gap",
-        startDate: addDays(previous.endDate, 1),
-        endDate: addDays(current.startDate, -1),
-        detail: "no interval covers these days",
-      });
-    }
+    if (maxEnd === null || current.endDate > maxEnd) maxEnd = current.endDate;
   }
 
   // Check 3: the union must touch both ends of the window. This reads the extremes,
   // so it stands independently of an overlap or a gap in the middle — a partition
   // can end short *and* overlap, and a caller fixing one must see the other.
-  if (windowValid && ordered.length === 0) {
+  let spanBroken = false;
+
+  if (windowValid && maxEnd === null) {
+    spanBroken = true;
     violations.push({
       code: "span",
       startDate: windowStart,
       endDate: windowEnd,
-      detail: "the window has no segments and no missing ranges",
+      detail:
+        dropped === 0
+          ? "the window has no segments and no missing ranges"
+          : `the window has no usable interval: ${dropped} were refused before the walk`,
     });
-  } else if (windowValid) {
+  } else if (windowValid && maxEnd !== null) {
     const first = ordered[0] as Interval;
-    const last = ordered[ordered.length - 1] as Interval;
 
     if (first.startDate !== windowStart) {
+      spanBroken = true;
       violations.push({
         code: "span",
         startDate: windowStart,
@@ -235,30 +263,27 @@ export function validatePartition(input: PartitionInput): readonly PartitionViol
         detail: `the partition starts at ${first.startDate}, not at the window start`,
       });
     }
-    if (last.endDate !== windowEnd) {
+    if (maxEnd !== windowEnd) {
+      spanBroken = true;
       violations.push({
         code: "span",
-        startDate: last.endDate,
+        startDate: maxEnd,
         endDate: windowEnd,
-        detail: `the partition ends at ${last.endDate}, not at the window end`,
+        detail: `the partition ends at ${maxEnd}, not at the window end`,
       });
     }
   }
 
-  // Check 6: the reported coverage must not claim more days than the window has.
+  // Check 6: coverage reconciles with the days under it.
   //
-  // The contract's formula is `Σ coveragePercent × length / window + missing share
-  // = 100 %`. Read literally it forbids any segment below 100 %, contradicting its
-  // own construction rule 3, where a segment may report partial coverage. The
-  // enforceable half is the one direction the row can actually contradict itself
-  // in: evidence plus declared missing days cannot exceed the window.
-  //
-  // The other sentence — "a reported 100 % coverage alongside missing ranges is a
-  // defect" — cannot be checked from these fields once overlap and span have
-  // passed: segments' spans plus the missing days already tile the window, so a
-  // segment claiming 100 % over missing days *inside itself* is the overlap case.
-  // Inventing a second test for it would be coverage theatre, so it is not here.
-  if (windowValid && !overlapping && !gapped) {
+  // `Σ coveragePercent × length / window + missing share = 100 %` is an equality in
+  // both directions, and it is consistent with a partially covered segment: the
+  // weight is what makes a 90 % segment lower its own share. So a shortfall is the
+  // defect this check exists for — days inside an "evidence" segment that are
+  // neither covered nor declared missing. Only computed when the intervals tile the
+  // window exactly, because otherwise the sum is measuring two defects at once; the
+  // same reasoning skips it when the partition does not reach the window's ends.
+  if (windowValid && !overlapping && !gapped && !spanBroken) {
     const windowDays = lengthInDays(windowStart, windowEnd);
     let accounted = 0;
 
@@ -268,12 +293,12 @@ export function validatePartition(input: PartitionInput): readonly PartitionViol
         interval.kind === "missing" ? days : ((interval.coveragePercent as number) / 100) * days;
     }
 
-    if (accounted > windowDays + COVERAGE_EPSILON) {
+    const slack = (windowDays * COVERAGE_EPSILON_PERCENT) / 100;
+
+    if (Math.abs(accounted - windowDays) > slack) {
       violations.push({
         code: "coverage_mismatch",
-        detail: `segments plus missing days account for ${accounted.toFixed(
-          2,
-        )} of ${windowDays} days`,
+        detail: `coverage accounts for ${accounted.toFixed(2)} of ${windowDays} days`,
       });
     }
   }

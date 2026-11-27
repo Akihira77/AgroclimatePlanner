@@ -44,8 +44,10 @@ export interface ArtifactRunRefs {
 export type AuditFindingCode =
   | "dangling_forecast_run"
   | "dangling_ingestion_run"
+  | "empty_expectation"
   | "missing_record"
   | "duplicate_record"
+  | "duplicate_expectation"
   | "unexpected_record";
 
 export interface AuditFinding {
@@ -121,10 +123,36 @@ export function reconcileCoverage(input: {
   readonly expected: readonly StoredRecordRef[];
   readonly present: readonly StoredRecordRef[];
 }): CoverageReconciliation {
-  const expectedKeys = new Set(input.expected.map(recordKey));
+  const expectedKeys = new Set<string>();
   const seen = new Set<string>();
   const findings: AuditFinding[] = [];
   let unexpected = 0;
+
+  // An empty specification is not a clean audit. A caller whose expectation-building
+  // step failed upstream would otherwise be told that nothing is wrong — the false
+  // pass this module exists to prevent, at the exact value an operator reads.
+  if (input.expected.length === 0) {
+    findings.push({
+      code: "empty_expectation",
+      key: "*",
+      detail: "no expected records were supplied, so nothing was reconciled",
+    });
+  }
+
+  for (const record of input.expected) {
+    const key = recordKey(record);
+    // Deduplicating a specification silently would hide a caller defect on the one
+    // side of this check the auditor does not otherwise see.
+    if (expectedKeys.has(key)) {
+      findings.push({
+        code: "duplicate_expectation",
+        key,
+        detail: "the expected set lists the same record twice",
+      });
+      continue;
+    }
+    expectedKeys.add(key);
+  }
 
   for (const record of input.present) {
     const key = recordKey(record);

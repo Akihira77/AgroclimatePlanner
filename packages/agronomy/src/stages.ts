@@ -64,7 +64,9 @@ export function stageAtOffset(
       (a, b) =>
         a.startDayOffset - b.startDayOffset ||
         a.endDayOffset - b.endDayOffset ||
-        a.id.localeCompare(b.id),
+        // Plain comparison, not `localeCompare`: the header promises no locale, and
+        // ICU collation is a runtime dependency the reproducibility claim cannot take.
+        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
     );
 
   return candidates[0] ?? null;
@@ -100,7 +102,7 @@ export function criticalStageWindows(
 
   return stages
     .filter((stage) => stage.isCritical)
-    .sort((a, b) => a.startDayOffset - b.startDayOffset || a.id.localeCompare(b.id))
+    .sort((a, b) => a.startDayOffset - b.startDayOffset || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     .flatMap((stage) => {
       const startDayOffset = stage.startDayOffset;
       const endDayOffset =

@@ -110,8 +110,14 @@ describe("reconcileCoverage — expected versus stored", () => {
       ],
     });
 
-    expect(result).toMatchObject({ expected: 2, present: 2 });
-    expect(result.findings.map((finding) => finding.code)).toEqual(["duplicate_record"]);
+    expect(result).toMatchObject({ expected: 2, present: 2, unexpected: 0 });
+    expect(result.findings).toEqual([
+      {
+        code: "duplicate_record",
+        key: "cell-a|precipitation_sum|2026-11-01T00:00:00.000Z",
+        detail: "the same cell, variable and instant is stored more than once",
+      },
+    ]);
   });
 
   it("separates an extra stored record from a missing one", () => {
@@ -133,6 +139,29 @@ describe("reconcileCoverage — expected versus stored", () => {
       "cell-a|temperature_2m_mean|2026-11-01T00:00:00.000Z",
       "cell-a|precipitation_sum|2026-11-02T00:00:00.000Z",
     ]);
+  });
+});
+
+describe("reconcileCoverage — the specification itself is checked", () => {
+  it("does not call an empty specification a clean audit", () => {
+    const result = reconcileCoverage({ expected: [], present: [] });
+
+    expect(result).toMatchObject({ expected: 0, present: 0, unexpected: 0 });
+    expect(result.findings).toEqual([
+      {
+        code: "empty_expectation",
+        key: "*",
+        detail: "no expected records were supplied, so nothing was reconciled",
+      },
+    ]);
+  });
+
+  it("reports a duplicated expectation instead of quietly collapsing it", () => {
+    const one = record("cell-a", "precipitation_sum", "2026-11-01T00:00:00.000Z");
+    const result = reconcileCoverage({ expected: [one, one], present: [one] });
+
+    expect(result).toMatchObject({ expected: 1, present: 1 });
+    expect(result.findings.map((finding) => finding.code)).toEqual(["duplicate_expectation"]);
   });
 });
 

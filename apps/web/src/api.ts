@@ -158,6 +158,9 @@ const query = (params: Record<string, string | number | undefined>): string => {
   return encoded === "" ? "" : `?${encoded}`;
 };
 
+/** A guard against a server that never runs out of pages. See `allPages`. */
+const MAX_PAGES = 50;
+
 /**
  * Every page, not the first one.
  *
@@ -165,19 +168,25 @@ const query = (params: Record<string, string | number | undefined>): string => {
  * and a truncated list rendered as a total is a lie: farm 101 would simply stop
  * existing on screen. The loop stops at `total`, which the server counts under
  * the same predicates as the page.
+ *
+ * `MAX_PAGES` is a guard, not a limit anyone should reach: `total` comes from the
+ * server, and a proxy returning a constant non-empty page with a large `total`
+ * would otherwise spin forever. Fifty pages is 5 000 rows — past any v1 account.
  */
 async function allPages<T>(
   path: string,
   params: Record<string, string | number | undefined>,
 ): Promise<T[]> {
   const items: T[] = [];
-  for (let page = 1; ; page += 1) {
+  for (let page = 1; page <= MAX_PAGES; page += 1) {
     const body = await request<{ data: T[]; meta: PageMeta }>(
       `${path}${query({ ...params, page, pageSize: 100 })}`,
     );
     items.push(...body.data);
     if (body.data.length === 0 || items.length >= body.meta.total) return items;
   }
+  // Returning a prefix here would be the same lie the loop exists to avoid.
+  throw new Error(`list at ${path} exceeded ${MAX_PAGES} pages; refusing to render a prefix`);
 }
 
 export const api = {
