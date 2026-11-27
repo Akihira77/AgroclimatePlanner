@@ -8,6 +8,7 @@ import { ClimatePage } from "./pages/ClimatePage.js";
 import { CropCatalogPage } from "./pages/CropCatalogPage.js";
 import { DashboardPage } from "./pages/DashboardPage.js";
 import { FarmsPage } from "./pages/FarmsPage.js";
+import { PlanPage } from "./pages/PlanPage.js";
 import { ErrorNotice, Loading } from "./ui.js";
 
 type Session =
@@ -139,6 +140,9 @@ function Shell({
           <Link to="/katalog" className={navClass(current === "katalog")}>
             Katalog
           </Link>
+          <Link to="/rencana" className={navClass(current === "rencana")}>
+            Rencana
+          </Link>
           <Link to="/iklim" className={navClass(current === "iklim")}>
             Iklim
           </Link>
@@ -162,7 +166,9 @@ function Shell({
 
         <div className="content">
           {logoutError !== null ? <ErrorNotice error={logoutError} /> : null}
-          {current === "lahan" ? (
+          {current === "rencana" ? (
+            <PlanPage />
+          ) : current === "lahan" ? (
             <FarmsPage />
           ) : current === "katalog" ? (
             <CropCatalogPage {...(slug === undefined ? {} : { slug })} />
@@ -189,6 +195,8 @@ function sectionTitle(section: string): string {
       return "Katalog komoditas";
     case "iklim":
       return "Horizon iklim";
+    case "rencana":
+      return "Rencana siklus tanam";
     default:
       return "Ringkasan";
   }
@@ -198,5 +206,6 @@ function headline(section: string): string {
   if (section === "katalog") return "Katalog";
   if (section === "lahan") return "Lahan";
   if (section === "iklim") return "Iklim";
+  if (section === "rencana") return "Rencana";
   return "Ringkasan";
 }

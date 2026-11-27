@@ -1933,7 +1933,7 @@ The verdict classifier exists and is tested; nothing constructs its input yet.
 
 ## Priority 6 — Calendar and AI
 
-- [ ] Implement agricultural calendar and planting opportunities.
+- [ ] Implement agricultural calendar and planting opportunities. **Partial:** the catalog projection (`GET /v1/crop-profiles/:id/cycle`) and the "Rencana" screen date a chosen cultivar from a chosen start day, and state where today falls. No planting is written (`OPEN-27`), no opportunity is ranked, and no climate value is consulted.
 - [ ] Implement AI context pipeline and briefing (`OPEN-11` first).
 - [ ] Implement AI auditability and deterministic fallback.
 
