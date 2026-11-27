@@ -131,6 +131,8 @@ export function missingReasonLabel(reason: string): string {
   switch (reason) {
     case "pending":
       return "Belum tersedia";
+    case "provider_null":
+      return "Provider tidak menerbitkan nilai";
     case "not_requested":
       return "Tidak diminta";
     case "beyond_horizon":

@@ -117,13 +117,18 @@ describe("assembleDailyHorizon — dense, ordered, no invention", () => {
     expect(daily!.days[9]!.missingReason).toBeNull();
   });
 
-  it("treats a stored null value as pending, because nothing records why", () => {
+  it("distinguishes a provider-published null from a day that was never stored", () => {
     const [daily] = assembled([row(1, null)]);
 
-    expect(daily!.days[1]!.valueMm).toBeNull();
-    expect(daily!.days[1]!.missingReason).toBe("pending");
-    expect(daily!.days[1]!.dataClass).toBeNull();
-    expect(daily!.days[1]!.model).toBeNull();
+    const published = daily!.days[1]!;
+    expect(published.valueMm).toBeNull();
+    // Not `pending`: the provider answered, so the value will not arrive later.
+    expect(published.missingReason).toBe("provider_null");
+    expect(published.dataClass).toBe("weather_forecast");
+    expect(published.model).toBe("ecmwf_ifs025");
+    expect(published.initializedAt).not.toBeNull();
+    // The day beside it has no row at all, which is what `pending` means.
+    expect(daily!.days[2]!.missingReason).toBe("pending");
   });
 
   it("drops rows outside the horizon instead of failing them", () => {

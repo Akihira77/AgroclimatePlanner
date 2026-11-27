@@ -468,6 +468,7 @@ export type OutlookEvaluationBasis = z.infer<typeof outlookEvaluationBasisSchema
 /** The reasons that mean "no value may be claimed" (`beyond_horizon` is separate). */
 const noValueReasons = new Set([
   "pending",
+  "provider_null",
   "ingest_failed",
   "provider_unavailable",
   "not_requested",
@@ -1013,18 +1014,42 @@ export function calendarDaysBetween(from: string, to: string): number {
 }
 
 /**
+ * The daily reason set.
+ *
+ * `provider_null` is **served only** — no column stores it, so it is not part of
+ * `missingReasonSchema`, and it must not be added to the monthly `CHECK`: a
+ * stored seasonal member-month null has no recoverable cause and must not be
+ * reported as `provider_null` (§8.7C.7). A daily row is different — it is the
+ * provider's own value for that day, so a null there *is* an answer, and the row
+ * beside it names the class, model and run that gave it.
+ */
+export const dailyMissingReasonSchema = z.union([missingReasonSchema, z.literal("provider_null")]);
+export type DailyMissingReason = z.infer<typeof dailyMissingReasonSchema>;
+
+/**
  * One served day.
  *
  * Identity is per day, never flattened to the segment: a 45-day horizon may mix
  * forecast runs, and a segment-level `model` would attribute one run's value to
- * another's. A day with no value is `pending` and carries **nothing** — no class,
- * no model, no run, no availability. `pending` is the weakest true claim: a row
- * with a null value and a missing row are indistinguishable here, and the read
- * path cannot prove a cause it never stored.
+ * another's.
+ *
+ * Two different absences, and they do not share a shape.
+ *
+ * A day with no stored row is `pending` and carries **nothing** — no class, no
+ * model, no run, no availability. It may still arrive, so there is nothing to
+ * attribute.
+ *
+ * A stored row whose value is null is `provider_null`: the run answered, and the
+ * answer was null. It will not fill, and its class, model and run are known, so
+ * they travel with the reason. Only `valueMm` is absent. That is the one shape
+ * where provenance exists without a value, and the refinement below allows it —
+ * a rule that forced provenance to be absent would throw away the only fact that
+ * separates the two cases.
  *
  * `staleAfterHours` is the TTL the band allows at this lead day (`6`, `12`, or
  * `48`), stated so the consumer can age a time on screen without duplicating the
- * rule. `availability` is computed against it at read time and never stored.
+ * rule. `availability` is computed against it at read time and never stored — a
+ * null from a stale run is still a stale run.
  */
 export const dailyForecastDaySchema = z
   .strictObject({
@@ -1034,7 +1059,7 @@ export const dailyForecastDaySchema = z
     dataClass: weatherDataClassSchema.nullable(),
     model: z.string().min(1).max(128).nullable(),
     valueMm: z.number().nonnegative().nullable(),
-    missingReason: missingReasonSchema.nullable(),
+    missingReason: dailyMissingReasonSchema.nullable(),
     initializedAt: isoInstantSchema.nullable(),
     availability: outlookAvailabilitySchema.nullable(),
     staleAfterHours: z.number().int().min(1).max(168),
@@ -1042,16 +1067,19 @@ export const dailyForecastDaySchema = z
     aggregationLevel: z.literal("daily_sum"),
   })
   .superRefine((day, ctx) => {
-    // A value and its provenance travel together. Any one of these without the
-    // others is either an unlabelled number or a label on an absence.
-    const provenance = [day.valueMm, day.dataClass, day.model, day.initializedAt, day.availability];
+    // Provenance travels with a value, and with a provider-published null, which
+    // is a statement about a known run. It cannot travel with a bare gap: that
+    // would label an absence the read path never attributed.
+    const provenance = [day.dataClass, day.model, day.initializedAt, day.availability];
     const present = provenance.filter((part) => part !== null).length;
-    if (present !== 0 && present !== provenance.length) {
+    const attributed = day.valueMm !== null || day.missingReason === "provider_null";
+    if (attributed ? present !== provenance.length : present !== 0) {
       ctx.addIssue({
         code: "custom",
         path: ["valueMm"],
-        message:
-          "valueMm, dataClass, model, initializedAt and availability must be present or absent together",
+        message: attributed
+          ? "valueMm or provider_null requires dataClass, model, initializedAt and availability"
+          : "a day with no value and no provider_null carries no dataClass, model, initializedAt or availability",
       });
     }
     if (day.valueMm === null && day.missingReason === null) {

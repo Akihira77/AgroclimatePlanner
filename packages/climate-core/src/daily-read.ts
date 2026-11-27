@@ -1,6 +1,6 @@
 import type {
   DailyHorizonBand,
-  MissingReason,
+  DailyMissingReason,
   OutlookAvailability,
   WeatherDataClass,
 } from "@agroclimate/contracts";
@@ -101,7 +101,7 @@ export interface ServedDailyDay {
   readonly dataClass: WeatherDataClass | null;
   readonly model: string | null;
   readonly valueMm: number | null;
-  readonly missingReason: MissingReason | null;
+  readonly missingReason: DailyMissingReason | null;
   readonly initializedAt: string | null;
   readonly availability: OutlookAvailability | null;
   readonly staleAfterHours: number;
@@ -224,18 +224,40 @@ export function assembleDailyHorizon(input: DailyHorizonReadInput): DailyReadOut
       const staleAfterHours = weatherForecastStaleAfterHours(leadDay);
       const row = byDate.get(date);
 
-      if (row === undefined || row.value === null) {
+      if (row === undefined) {
         days.push({
           date,
           leadDay,
           dataClass: null,
           model: null,
           valueMm: null,
-          // The weakest true claim. A null value and a missing row are both
-          // "nothing to serve"; nothing stored records which one happened.
+          // Nothing is stored for this instant, so "may still arrive" is the true
+          // claim.
           missingReason: "pending",
           initializedAt: null,
           availability: null,
+          staleAfterHours,
+          temporalResolution: "daily",
+          aggregationLevel: "daily_sum",
+        });
+        continue;
+      }
+
+      if (row.value === null) {
+        // The provider published a null for this instant. That is not a gap: it
+        // will not fill, and the row exists — so class, model and run are known and
+        // worth serving beside the reason.
+        days.push({
+          date,
+          leadDay,
+          dataClass: row.dataClass as WeatherDataClass,
+          model: row.model,
+          valueMm: null,
+          missingReason: "provider_null",
+          initializedAt: row.initializedAt,
+          // A null from a stale run is still stale: freshness is a property of the
+          // run, not of the value it did or did not publish.
+          availability: dailyAvailability(row.initializedAt, input.now, leadDay),
           staleAfterHours,
           temporalResolution: "daily",
           aggregationLevel: "daily_sum",
