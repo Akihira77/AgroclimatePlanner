@@ -1,15 +1,16 @@
 import type { ClimateDailyOutlook, ClimateOutlook } from "@agroclimate/contracts";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api } from "../api.js";
 import { Link } from "../router.js";
 import {
-  ErrorNotice,
   Empty,
+  ErrorNotice,
   Loading,
-  Mono,
   Notice,
+  PageGuide,
   Tag,
+  availabilityLabel,
   dataClassLabel,
   dayLabel,
   millimetres,
@@ -18,23 +19,11 @@ import {
 } from "../ui.js";
 import { useAsync } from "../useAsync.js";
 
-/** The only grid production binds today; a real provider is `OPEN-18`. */
 const SYNTHETIC_PROVIDER = "synthetic";
 const SYNTHETIC_MODEL = "synthetic_1deg_20x20";
 
 type Basis = "monthly" | "daily";
 
-/**
- * The climate read, both horizons.
- *
- * The grid identity is typed by the caller, not derived from the field: the
- * field → cell mapping has no writer (`OPEN-18`), so this screen asks for the pair
- * and shows the failure the resolver returns rather than guessing one.
- *
- * Every value is labelled with its data class. A number without its class would be
- * the exact confusion the contract exists to prevent: a climatology normal and a
- * seasonal forecast are not the same claim.
- */
 export function ClimatePage() {
   const fields = useAsync("climate-fields", () => api.listFields());
 
@@ -48,33 +37,57 @@ export function ClimatePage() {
     model: string;
   } | null>(null);
 
+  const available = fields.data ?? [];
+  const selected = available.find((field) => field.id === fieldId) ?? available[0];
+
+  useEffect(() => {
+    if (request === null && selected !== undefined) {
+      setRequest({ fieldId: selected.id, provider: SYNTHETIC_PROVIDER, model: SYNTHETIC_MODEL });
+    }
+  }, [request, selected]);
+
   if (fields.loading) return <Loading />;
   if (fields.error !== null) return <ErrorNotice error={fields.error} />;
   if (fields.data === null) return null;
 
-  const available = fields.data;
-  const selected = available.find((field) => field.id === fieldId) ?? available[0];
-
   return (
     <div className="stack">
-      <div className="stack-tight">
-        <p className="lede">
-          Horizon bulanan materialisasi bulan 1–12, dan horizon harian 0–45 yang membaca baris cuaca
-          langsung. Keduanya menampilkan kelas data tiap nilai.
-        </p>
-        <Notice tone="warn">
-          <span>
-            Grid produksi belum divalidasi (<Mono>OPEN-18</Mono>). Pasangan{" "}
-            <Mono>{`${SYNTHETIC_PROVIDER}/${SYNTHETIC_MODEL}`}</Mono> adalah grid sintetis untuk
-            pengujian; provider nyata akan menjawab <Mono>GRID_NOT_FOUND</Mono>.
-          </span>
-        </Notice>
-      </div>
+      <PageGuide
+        storageKey="climate"
+        title="Panduan Membaca Data Cuaca & Iklim"
+        summary="Pantau perkiraan curah hujan 12 bulan ke depan dan prakiraan harian 0–45 hari untuk lokasi lahan Anda."
+        steps={[
+          {
+            title: "Ringkasan 12 Bulan",
+            detail:
+              "Menampilkan gambaran curah hujan per bulan. Warna hijau berarti prakiraan musiman, kuning berarti rata-rata iklim historis.",
+          },
+          {
+            title: "Prakiraan 0–45 Hari",
+            detail:
+              "Menampilkan prakiraan curah hujan harian (hari 0–14) dan jangka menengah (hari 15–45).",
+          },
+          {
+            title: "Arti Kolom Kosong",
+            detail:
+              "Kotak abu-abu putus-putus berarti data belum tersedia — bukan berarti curah hujan 0 mm.",
+          },
+        ]}
+      />
+
+      <Notice tone="info">
+        <span>
+          <strong>Info Sumber Data:</strong> Grafik di bawah menggunakan data cuaca simulasi bawaan
+          agar Anda dapat langsung menguji perencanaan lahan.
+        </span>
+      </Notice>
 
       {available.length === 0 ? (
         <Empty>
-          Belum ada lahan. <Link to="/lahan">Buat lahan</Link> lalu hitung titik pusatnya menjadi
-          sel grid.
+          <p>Belum ada lahan yang tercatat.</p>
+          <Link className="btn btn-primary" to="/lahan">
+            Buat lahan pertama Anda
+          </Link>
         </Empty>
       ) : (
         <>
@@ -86,62 +99,90 @@ export function ClimatePage() {
               setRequest({ fieldId: selected.id, provider: provider.trim(), model: model.trim() });
             }}
           >
-            <div className="panel-body form-grid">
-              <div className="field">
-                <label htmlFor="climate-field">Lahan</label>
-                <select
-                  id="climate-field"
-                  value={selected?.id ?? ""}
-                  onChange={(event) => setFieldId(event.target.value)}
-                >
-                  {available.map((field) => (
-                    <option key={field.id} value={field.id}>
-                      {field.name}
-                    </option>
-                  ))}
-                </select>
+            <div className="panel-body stack">
+              <div className="form-grid">
+                <div className="field">
+                  <label htmlFor="climate-field">Pilih Lahan</label>
+                  <select
+                    id="climate-field"
+                    value={selected?.id ?? ""}
+                    onChange={(event) => {
+                      const nextId = event.target.value;
+                      setFieldId(nextId);
+                      setRequest({
+                        fieldId: nextId,
+                        provider: provider.trim(),
+                        model: model.trim(),
+                      });
+                    }}
+                  >
+                    {available.map((field) => (
+                      <option key={field.id} value={field.id}>
+                        {field.name} · {field.areaHa.toFixed(2)} ha
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="field">
+                  <label>Rentang Waktu</label>
+                  <div className="tabs" role="tablist" aria-label="Pilih rentang waktu iklim">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={basis === "monthly"}
+                      className={`tab-btn${basis === "monthly" ? " is-active" : ""}`}
+                      onClick={() => setBasis("monthly")}
+                    >
+                      Ringkasan 12 Bulan
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={basis === "daily"}
+                      className={`tab-btn${basis === "daily" ? " is-active" : ""}`}
+                      onClick={() => setBasis("daily")}
+                    >
+                      Prakiraan 0–45 Hari
+                    </button>
+                  </div>
+                </div>
+
+                <div className="form-actions">
+                  <button className="btn btn-primary" type="submit">
+                    Muat Ulang Data
+                  </button>
+                </div>
               </div>
-              <div className="field">
-                <label htmlFor="climate-provider">Provider</label>
-                <input
-                  id="climate-provider"
-                  required
-                  value={provider}
-                  onChange={(event) => setProvider(event.target.value)}
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="climate-model">Model</label>
-                <input
-                  id="climate-model"
-                  required
-                  value={model}
-                  onChange={(event) => setModel(event.target.value)}
-                />
-              </div>
-              <div className="field">
-                <label htmlFor="climate-basis">Horizon</label>
-                <select
-                  id="climate-basis"
-                  value={basis}
-                  onChange={(event) =>
-                    setBasis(event.target.value === "daily" ? "daily" : "monthly")
-                  }
-                >
-                  <option value="monthly">12 bulan</option>
-                  <option value="daily">0–45 hari</option>
-                </select>
-              </div>
-              <div className="form-actions">
-                <button className="btn btn-primary" type="submit">
-                  Tampilkan
-                </button>
-              </div>
+
+              <details className="tech-details">
+                <summary>Pengaturan sumber data lanjutan</summary>
+                <div className="form-grid">
+                  <div className="field">
+                    <label htmlFor="climate-provider">Penyedia Data</label>
+                    <input
+                      id="climate-provider"
+                      required
+                      value={provider}
+                      onChange={(event) => setProvider(event.target.value)}
+                    />
+                  </div>
+                  <div className="field">
+                    <label htmlFor="climate-model">Model Cuaca</label>
+                    <input
+                      id="climate-model"
+                      required
+                      value={model}
+                      onChange={(event) => setModel(event.target.value)}
+                    />
+                  </div>
+                </div>
+              </details>
             </div>
           </form>
 
           {request === null ? (
-            <Empty>Pilih lahan dan horizon, lalu tampilkan.</Empty>
+            <Empty>Pilih lahan dan rentang waktu, lalu klik Muat Ulang Data.</Empty>
           ) : basis === "monthly" ? (
             <MonthlyView
               key={`${request.fieldId}:${request.provider}:${request.model}`}
@@ -170,7 +211,7 @@ function MonthlyView({ request }: { readonly request: ReadRequest }) {
     api.outlook(request.fieldId, request.provider, request.model),
   );
 
-  if (state.loading) return <Loading label="Membaca horizon bulanan…" />;
+  if (state.loading) return <Loading label="Memuat ringkasan curah hujan 12 bulan…" />;
   if (state.error !== null) return <ErrorNotice error={state.error} />;
   if (state.data === null) return null;
 
@@ -185,7 +226,7 @@ function MonthlyTable({ outlook }: { readonly outlook: ClimateOutlook }) {
       <div className="spread">
         <h2>{`Mulai ${monthLabel(outlook.firstMonth)}`}</h2>
         <span className="muted">
-          {present} dari 12 bulan bernilai · satuan {outlook.unit}
+          {present} dari 12 bulan terisi · satuan {outlook.unit}
         </span>
       </div>
 
@@ -199,22 +240,20 @@ function MonthlyTable({ outlook }: { readonly outlook: ClimateOutlook }) {
               {month.dataClass === null ? (
                 <Tag>
                   {month.missingReason === null
-                    ? "kosong"
+                    ? "Data kosong"
                     : missingReasonLabel(month.missingReason)}
                 </Tag>
               ) : (
                 <>
-                  <Tag tone={month.dataClass === "climatology" ? undefined : "accent"}>
+                  <Tag tone={month.dataClass === "climatology" ? "warn" : "accent"}>
                     {dataClassLabel(month.dataClass)}
                   </Tag>
                   {month.availability !== null ? (
                     <Tag tone={month.availability === "stale" ? "warn" : undefined}>
-                      {month.availability === "fresh" ? "segar" : "basi"}
+                      {availabilityLabel(month.availability)}
                     </Tag>
                   ) : null}
-                  {month.baselineVersion !== null ? (
-                    <Tag>baseline {month.baselineVersion}</Tag>
-                  ) : null}
+                  {month.baselineVersion !== null ? <Tag>Acuan {month.baselineVersion}</Tag> : null}
                 </>
               )}
             </span>
@@ -230,8 +269,8 @@ function MonthlyTable({ outlook }: { readonly outlook: ClimateOutlook }) {
       </div>
 
       <p className="faint">
-        Bulan tanpa baris tidak diisi dari bulan sebelahnya. Nilai normal iklim dan prakiraan
-        musiman berbeda kelas dan tidak boleh dibaca sebagai satu rangkaian yang setara.
+        Catatan: Nilai rata-rata iklim historis dan prakiraan musiman memiliki tingkat kepastian
+        yang berbeda dan ditampilkan terpisah agar mudah dibandingkan.
       </p>
     </section>
   );
@@ -254,10 +293,10 @@ function MonthlyRainfallChart({ outlook }: { readonly outlook: ClimateOutlook })
           <span className="legend-swatch" data-kind="forecast" /> Prakiraan musiman
         </span>
         <span className="legend-item">
-          <span className="legend-swatch" data-kind="climatology" /> Normal iklim (historis)
+          <span className="legend-swatch" data-kind="climatology" /> Rata-rata iklim historis
         </span>
         <span className="legend-item">
-          <span className="legend-swatch" data-kind="missing" /> Data kosong (bukan nol)
+          <span className="legend-swatch" data-kind="missing" /> Data belum tersedia (bukan nol)
         </span>
       </div>
       <svg
@@ -281,9 +320,9 @@ function MonthlyRainfallChart({ outlook }: { readonly outlook: ClimateOutlook })
                   fill="var(--surface-muted)"
                   stroke="var(--line-strong)"
                   strokeDasharray="3 3"
-                  rx={2}
+                  rx={3}
                 >
-                  <title>{`${monthLabel(m.month)}: data kosong`}</title>
+                  <title>{`${monthLabel(m.month)}: data belum tersedia`}</title>
                 </rect>
                 <text
                   x={x + barWidth / 2}
@@ -302,7 +341,7 @@ function MonthlyRainfallChart({ outlook }: { readonly outlook: ClimateOutlook })
           const fill = m.dataClass === "climatology" ? "var(--warn)" : "var(--accent)";
           return (
             <g key={m.month}>
-              <rect x={x} y={y} width={barWidth} height={barH} fill={fill} rx={2}>
+              <rect x={x} y={y} width={barWidth} height={barH} fill={fill} rx={3}>
                 <title>{`${monthLabel(m.month)}: ${millimetres(m.valueMm)} (${dataClassLabel(m.dataClass ?? "")})`}</title>
               </rect>
               <text
@@ -327,7 +366,7 @@ function DailyView({ request }: { readonly request: ReadRequest }) {
     api.forecast(request.fieldId, request.provider, request.model),
   );
 
-  if (state.loading) return <Loading label="Membaca horizon 0–45 hari…" />;
+  if (state.loading) return <Loading label="Memuat prakiraan 0–45 hari…" />;
   if (state.error !== null) return <ErrorNotice error={state.error} />;
   if (state.data === null) return null;
 
@@ -337,7 +376,7 @@ function DailyView({ request }: { readonly request: ReadRequest }) {
 function DailySegments({ forecast }: { readonly forecast: ClimateDailyOutlook }) {
   return (
     <section className="stack">
-      <h2>{`Hari 0 dimulai ${forecast.firstDate}`}</h2>
+      <h2>{`Prakiraan Mulai ${forecast.firstDate}`}</h2>
 
       {forecast.segments.map((segment) => {
         const present = segment.days.filter((day) => day.valueMm !== null).length;
@@ -347,12 +386,12 @@ function DailySegments({ forecast }: { readonly forecast: ClimateDailyOutlook })
           <div key={segment.band} className="stack-tight">
             <div className="segment-head">
               <h3>
-                {segment.band === "daily" ? "Harian (0–14)" : "Subseasonal (15–45)"} ·{" "}
+                {segment.band === "daily" ? "Harian (Hari 0–14)" : "Jangka Menengah (Hari 15–45)"} ·{" "}
                 <span className="muted">{dataClassLabel(segment.dataClass)}</span>
               </h3>
               <span className="muted numeric">
-                {present}/{segment.days.length} hari bernilai
-                {stale > 0 ? ` · ${stale} basi` : ""}
+                {present}/{segment.days.length} hari terisi
+                {stale > 0 ? ` · ${stale} perlu diperbarui` : ""}
               </span>
             </div>
 
@@ -367,7 +406,7 @@ function DailySegments({ forecast }: { readonly forecast: ClimateDailyOutlook })
                   title={
                     day.availability === null
                       ? undefined
-                      : `TTL ${day.staleAfterHours} jam · ${day.availability}`
+                      : `Masa berlaku ${day.staleAfterHours} jam · ${availabilityLabel(day.availability)}`
                   }
                 >
                   <span className="date">{dayLabel(day.date)}</span>
@@ -377,15 +416,14 @@ function DailySegments({ forecast }: { readonly forecast: ClimateDailyOutlook })
                   {day.valueMm === null ? (
                     <Tag>
                       {day.missingReason === null
-                        ? "kosong"
+                        ? "Kosong"
                         : missingReasonLabel(day.missingReason)}
                     </Tag>
                   ) : (
                     <span className="row">
                       <Tag tone={day.availability === "stale" ? "warn" : "accent"}>
-                        {day.availability === "stale" ? "basi" : "segar"}
+                        {availabilityLabel(day.availability ?? "fresh")}
                       </Tag>
-                      {day.model !== null ? <span className="faint">{day.model}</span> : null}
                     </span>
                   )}
                 </div>
@@ -396,8 +434,8 @@ function DailySegments({ forecast }: { readonly forecast: ClimateDailyOutlook })
       })}
 
       <p className="faint">
-        Tiap hari membawa model, waktu inisialisasi, dan kesegarannya sendiri: satu horizon 45 hari
-        bisa memuat lebih dari satu run. Hari tanpa baris bukan nol.
+        Setiap kotak menampilkan perkiraan curah hujan harian beserta status pembaruannya. Hari yang
+        kosong menandakan data tidak tersedia, bukan berarti 0 mm.
       </p>
     </section>
   );
@@ -424,7 +462,7 @@ function DailyRainfallChart({
         className="chart-svg"
         viewBox={`0 0 ${width} ${height}`}
         role="img"
-        aria-label={`Grafik curah hujan ${segment.band === "daily" ? "harian" : "subseasonal"}`}
+        aria-label={`Grafik curah hujan ${segment.band === "daily" ? "harian" : "jangka menengah"}`}
       >
         {segment.days.map((d, idx) => {
           const x = idx * slotWidth + 2;
@@ -442,7 +480,7 @@ function DailyRainfallChart({
                 strokeDasharray="2 2"
                 rx={1}
               >
-                <title>{`${dayLabel(d.date)}: data kosong`}</title>
+                <title>{`${dayLabel(d.date)}: data belum tersedia`}</title>
               </rect>
             );
           }

@@ -2,6 +2,17 @@ import type { RegisteredUser } from "@agroclimate/contracts";
 import { useEffect, useState } from "react";
 
 import { api, onSessionLost } from "./api.js";
+import {
+  IconBook,
+  IconCalendar,
+  IconClipboard,
+  IconCloud,
+  IconHome,
+  IconLeaf,
+  IconLogout,
+  IconMap,
+  IconSettings,
+} from "./icons.js";
 import { Link, navigate, useRoute } from "./router.js";
 import { ActivitiesPage } from "./pages/ActivitiesPage.js";
 import { AuthPage } from "./pages/AuthPage.js";
@@ -23,8 +34,6 @@ export function App() {
   const [logoutError, setLogoutError] = useState<unknown>(null);
   const route = useRoute();
 
-  // A session that expires while the user works must leave the shell, not paint
-  // "Sesi berakhir" over a page it can no longer load.
   useEffect(() => {
     onSessionLost(() => setSession({ state: "anonymous" }));
     return () => onSessionLost(null);
@@ -38,8 +47,6 @@ export function App() {
       },
       (error: unknown) => {
         if (!alive) return;
-        // Anything but a 401 is a real failure, not "logged out": showing the form
-        // would hide a broken API behind a login screen.
         if (isStatus(error, 401)) setSession({ state: "anonymous" });
         else setSession({ state: "failed", error });
       },
@@ -49,11 +56,6 @@ export function App() {
     };
   }, []);
 
-  /**
-   * Only a revoked session is a logout. A failed call leaves the cookie and the
-   * server-side row in place, so claiming success would leave a shared machine
-   * signed in while the screen said otherwise.
-   */
   const logout = async () => {
     setLogoutError(null);
     try {
@@ -79,7 +81,7 @@ export function App() {
   if (session.state === "loading") {
     return (
       <div className="auth-shell">
-        <Loading label="Memeriksa sesi…" />
+        <Loading label="Memeriksa sesi masuk…" />
       </div>
     );
   }
@@ -87,13 +89,15 @@ export function App() {
   if (session.state === "failed") {
     return (
       <div className="auth-shell">
-        <div className="auth-card">
-          <h1>Tidak dapat menghubungi API</h1>
-          <ErrorNotice error={session.error} />
-          <p className="muted">
-            Periksa alamat API dan apakah prosesnya berjalan. Layar masuk tidak ditampilkan karena
-            masalahnya bukan sesi.
-          </p>
+        <div className="panel" style={{ maxWidth: 460, width: "100%" }}>
+          <div className="panel-body stack">
+            <h1>Layanan tidak dapat dijangkau</h1>
+            <ErrorNotice error={session.error} />
+            <p className="muted">
+              Periksa koneksi atau pastikan server API sedang berjalan. Halaman masuk tidak
+              ditampilkan karena kendala berasal dari sambungan layanan, bukan sesi Anda.
+            </p>
+          </div>
         </div>
       </div>
     );
@@ -140,81 +144,126 @@ function Shell({
   readonly onDeleteAccount: () => Promise<void>;
   readonly logoutError: unknown;
 }) {
+  const [accountOpen, setAccountOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [section, ...rest] = route.segments;
   const slug = rest[0];
   const current = section ?? "ringkasan";
 
+  const meta = pageMeta(current);
+
   return (
     <div className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <strong>Agroclimate</strong>
-          <span>Planner</span>
+          <span className="brand-mark">
+            <IconLeaf size={20} />
+          </span>
+          <div className="brand-text">
+            <strong>Agroclimate</strong>
+            <span>Asisten Tanam &amp; Iklim</span>
+          </div>
         </div>
 
         <nav className="nav" aria-label="Navigasi utama">
           <Link to="/" className={navClass(current === "ringkasan")}>
-            Ringkasan
+            <IconHome size={18} />
+            <span>Beranda</span>
           </Link>
           <Link to="/lahan" className={navClass(current === "lahan")}>
-            Lahan
+            <IconMap size={18} />
+            <span>Kebun &amp; Lahan</span>
           </Link>
           <Link to="/katalog" className={navClass(current === "katalog")}>
-            Katalog
+            <IconBook size={18} />
+            <span>Panduan Tanaman</span>
           </Link>
           <Link to="/rencana" className={navClass(current === "rencana")}>
-            Rencana
+            <IconCalendar size={18} />
+            <span>Rencana Tanam</span>
           </Link>
           <Link to="/aktivitas" className={navClass(current === "aktivitas")}>
-            Aktivitas
+            <IconClipboard size={18} />
+            <span>Aktivitas &amp; Panen</span>
           </Link>
           <Link to="/iklim" className={navClass(current === "iklim")}>
-            Iklim
+            <IconCloud size={18} />
+            <span>Cuaca &amp; Iklim</span>
           </Link>
         </nav>
 
         <div className="sidebar-foot">
-          <span className="email">{user.email}</span>
-          <div className="btn-row">
-            <button className="btn btn-quiet" type="button" onClick={onLogout}>
-              Keluar
-            </button>
-            {!confirmDelete ? (
-              <button
-                className="btn btn-danger"
-                type="button"
-                onClick={() => setConfirmDelete(true)}
-              >
-                Hapus akun
-              </button>
-            ) : (
-              <>
-                <button
-                  className="btn btn-danger"
-                  type="button"
-                  onClick={() => void onDeleteAccount()}
-                >
-                  Konfirmasi hapus
-                </button>
-                <button
-                  className="btn btn-quiet"
-                  type="button"
-                  onClick={() => setConfirmDelete(false)}
-                >
-                  Batal
-                </button>
-              </>
-            )}
+          <div className="user-chip">
+            <span className="user-avatar" aria-hidden="true">
+              {user.email.slice(0, 1)}
+            </span>
+            <span className="user-email">{user.email}</span>
           </div>
+
+          <div className="sidebar-actions">
+            <button className="btn-sidebar" type="button" onClick={onLogout}>
+              <IconLogout size={16} />
+              <span>Keluar</span>
+            </button>
+            <button
+              className="btn-sidebar"
+              type="button"
+              aria-expanded={accountOpen}
+              onClick={() => {
+                setAccountOpen((open) => !open);
+                setConfirmDelete(false);
+              }}
+            >
+              <IconSettings size={16} />
+              <span>Kelola akun</span>
+            </button>
+          </div>
+
+          {accountOpen ? (
+            <div className="account-drawer">
+              <p>
+                Menghapus akun akan menonaktifkan akses Anda. Email tetap bisa didaftarkan ulang di
+                kemudian hari.
+              </p>
+              {!confirmDelete ? (
+                <button
+                  className="btn-sidebar btn-sidebar-danger"
+                  type="button"
+                  onClick={() => setConfirmDelete(true)}
+                >
+                  Hapus akun
+                </button>
+              ) : (
+                <div className="btn-row">
+                  <button
+                    className="btn-sidebar btn-sidebar-danger"
+                    type="button"
+                    onClick={() => void onDeleteAccount()}
+                  >
+                    Konfirmasi hapus
+                  </button>
+                  <button
+                    className="btn-sidebar"
+                    type="button"
+                    onClick={() => setConfirmDelete(false)}
+                  >
+                    Batal
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : null}
         </div>
       </aside>
 
       <main className="main">
         <header className="topbar">
-          <div className="stack-tight">
-            <span className="eyebrow">{sectionTitle(current)}</span>
-            <h1>{headline(current)}</h1>
+          <div className="topbar-inner">
+            <div>
+              <span className="eyebrow">{meta.eyebrow}</span>
+              <h1>{meta.title}</h1>
+              <p className="topbar-sub">{meta.subtitle}</p>
+            </div>
           </div>
         </header>
 
@@ -243,28 +292,50 @@ function navClass(active: boolean): string {
   return active ? "nav-link is-active" : "nav-link";
 }
 
-function sectionTitle(section: string): string {
+function pageMeta(section: string): {
+  readonly eyebrow: string;
+  readonly title: string;
+  readonly subtitle: string;
+} {
   switch (section) {
     case "lahan":
-      return "Kebun dan lahan";
+      return {
+        eyebrow: "Pemetaan & Profil",
+        title: "Kebun & Lahan",
+        subtitle:
+          "Atur daftar kebun, gambar batas area lahan, dan lengkapi kondisi tanah serta pengairan.",
+      };
     case "katalog":
-      return "Katalog komoditas";
-    case "iklim":
-      return "Horizon iklim";
+      return {
+        eyebrow: "Referensi Komoditas",
+        title: "Panduan Tanaman",
+        subtitle: "Pelajari fase tumbuh, perkiraan durasi panen, dan syarat iklim tiap varietas.",
+      };
     case "rencana":
-      return "Rencana & evaluasi tanam";
+      return {
+        eyebrow: "Analisis & Jadwal",
+        title: "Rencana Tanam",
+        subtitle:
+          "Uji kecocokan tanggal tanam, kelola kalender, dan minta ringkasan dari Asisten AI.",
+      };
     case "aktivitas":
-      return "Catatan aktivitas lapangan";
+      return {
+        eyebrow: "Catatan Lapangan",
+        title: "Aktivitas & Panen",
+        subtitle:
+          "Catat jadwal penanaman yang sedang berjalan, hasil panen bertahap, dan pengamatan cuaca.",
+      };
+    case "iklim":
+      return {
+        eyebrow: "Data Curah Hujan",
+        title: "Cuaca & Iklim",
+        subtitle: "Pantau perkiraan curah hujan 12 bulan ke depan dan prakiraan harian 45 hari.",
+      };
     default:
-      return "Ringkasan";
+      return {
+        eyebrow: "Ringkasan Usaha Tani",
+        title: "Beranda",
+        subtitle: "Pantau kesiapan kebun Anda dan ikuti panduan langkah demi langkah.",
+      };
   }
-}
-
-function headline(section: string): string {
-  if (section === "katalog") return "Katalog";
-  if (section === "lahan") return "Lahan";
-  if (section === "iklim") return "Iklim";
-  if (section === "rencana") return "Rencana";
-  if (section === "aktivitas") return "Aktivitas";
-  return "Ringkasan";
 }

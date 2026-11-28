@@ -7,12 +7,15 @@ import type {
 import { useEffect, useState } from "react";
 
 import { api } from "../api.js";
+import { IconPlus } from "../icons.js";
 import { Link } from "../router.js";
 import {
-  ErrorNotice,
   Empty,
+  ErrorNotice,
   Loading,
   Mono,
+  Notice,
+  PageGuide,
   Tag,
   drainageClassLabel,
   irrigationLabel,
@@ -20,18 +23,19 @@ import {
 } from "../ui.js";
 import { useAsync } from "../useAsync.js";
 
-/**
- * Farms and their fields, one screen.
- *
- * A field needs a polygon, and typing a GeoJSON ring is not a thing anyone does.
- * The form draws the ring in a plain SVG frame anchored on the centre and span:
- * click adds a vertex, drag moves it, and the sketch keeps its shape when the
- * frame changes because vertices are stored normalised, not in degrees.
- *
- * No map tiles, no projection. The frame is small enough that equirectangular
- * degrees-per-kilometre is honest, and the stored geometry is whatever PostGIS
- * accepted — a self-intersecting ring is refused there, not here.
- */
+const LOCATION_PRESETS = [
+  { label: "Area Simulasi Cuaca (uji grafik)", lat: "0.5000", lon: "0.5000" },
+  { label: "Karawang, Jabar", lat: "-6.3020", lon: "107.3020" },
+  { label: "Lembang, Bandung", lat: "-6.8140", lon: "107.6180" },
+] as const;
+
+const SQUARE_PRESET: readonly SketchPoint[] = [
+  { x: 0.25, y: 0.25 },
+  { x: 0.75, y: 0.25 },
+  { x: 0.75, y: 0.75 },
+  { x: 0.25, y: 0.75 },
+];
+
 export function FarmsPage() {
   const state = useAsync("farms", async () => {
     const [farms, fields] = await Promise.all([api.listFarms(), api.listFields()]);
@@ -45,18 +49,16 @@ export function FarmsPage() {
   const [farmName, setFarmName] = useState("");
   const [farmRegion, setFarmRegion] = useState("");
   const [fieldName, setFieldName] = useState("");
-  const [lat, setLat] = useState("-6.2");
-  const [lon, setLon] = useState("106.816");
+  const [lat, setLat] = useState("0.5000");
+  const [lon, setLon] = useState("0.5000");
   const [spanKm, setSpanKm] = useState("1");
   const [vertices, setVertices] = useState<readonly SketchPoint[]>([]);
   const [dragging, setDragging] = useState<number | null>(null);
   const [polygonText, setPolygonText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  const [savedNotice, setSavedNotice] = useState<string | null>(null);
 
-  // Only the *first* load replaces the page. A failed refresh keeps the list that is
-  // already on screen and says so, because the write that triggered it may have
-  // landed: replacing the page with an error reads as "your save failed".
   if (state.data === null) {
     if (state.loading) return <Loading />;
     return state.error === null ? null : <ErrorNotice error={state.error} />;
@@ -91,11 +93,17 @@ export function FarmsPage() {
     event.preventDefault();
     setBusy(true);
     setError(null);
+    setSavedNotice(null);
     try {
       const farm =
         editingFarmId === null
           ? await api.createFarm(name, region)
           : await api.updateFarm(editingFarmId, { name, region });
+      setSavedNotice(
+        editingFarmId === null
+          ? `Kebun "${farm.name}" berhasil ditambahkan.`
+          : `Perubahan pada kebun "${farm.name}" tersimpan.`,
+      );
       setFarmName("");
       setFarmRegion("");
       setEditingFarmId(null);
@@ -108,10 +116,10 @@ export function FarmsPage() {
     }
   };
 
-  /** The server refuses a farm that still has live fields (`409`); the message says so. */
   const removeFarm = async (farmId: string) => {
     setBusy(true);
     setError(null);
+    setSavedNotice(null);
     try {
       await api.deleteFarm(farmId);
       if (selectedFarmId === farmId) setSelectedFarmId(null);
@@ -120,6 +128,7 @@ export function FarmsPage() {
         setFarmName("");
         setFarmRegion("");
       }
+      setSavedNotice("Kebun berhasil dihapus.");
       state.reload();
     } catch (failure) {
       setError(failure);
@@ -131,27 +140,26 @@ export function FarmsPage() {
   const saveField = async (event: React.FormEvent) => {
     event.preventDefault();
     if (selected === undefined) return;
-    // The button is disabled for the same condition, but the guard reports rather
-    // than returning: a silent no-op is indistinguishable from a hung form.
     if (geometry === null && (editingFieldId === null || polygonText.trim() !== "")) {
-      setError(new Error(reason === "" ? "Bentuk lahan belum valid." : reason));
+      setError(new Error(reason === "" ? "Bentuk area lahan belum lengkap." : reason));
       return;
     }
     setBusy(true);
     setError(null);
+    setSavedNotice(null);
     try {
       if (editingFieldId === null && geometry !== null) {
-        await api.createField(selected.id, fieldName.trim(), geometry);
+        const created = await api.createField(selected.id, fieldName.trim(), geometry);
+        setDetailFieldId(created.id);
+        setSavedNotice(
+          `Lahan "${created.name}" berhasil disimpan. Anda dapat melengkapi kondisi tanah dan pengairannya di panel Detail di atas.`,
+        );
       } else if (editingFieldId !== null) {
         const stored = fields.find((field) => field.id === editingFieldId);
-        // Compare values, not text: a formatting-only edit (`106.8,-6.2` versus
-        // `106.8, -6.2`) is not a geometry change and should not bump `updated_at`.
         const unchanged =
           stored === undefined ||
           polygonText.trim() === "" ||
           (geometry !== null && JSON.stringify(geometry) === JSON.stringify(stored.geometry));
-        // An untouched textarea would re-send the same ring and bump `updated_at` for
-        // nothing, so geometry travels only when the text actually differs.
         if (unchanged) {
           await api.updateField(editingFieldId, { name: fieldName.trim() });
         } else if (geometry !== null) {
@@ -160,6 +168,7 @@ export function FarmsPage() {
             geometry,
           });
         }
+        setSavedNotice("Perubahan data lahan berhasil disimpan.");
       }
       setFieldName("");
       setEditingFieldId(null);
@@ -176,15 +185,16 @@ export function FarmsPage() {
   const removeField = async (fieldId: string) => {
     setBusy(true);
     setError(null);
+    setSavedNotice(null);
     try {
       await api.deleteField(fieldId);
       if (editingFieldId === fieldId) {
         setEditingFieldId(null);
         setFieldName("");
-        // The form's textarea was prefilled from this field, so clearing the edit
-        // session without clearing the text would leave its ring in a create form.
         setPolygonText("");
       }
+      if (detailFieldId === fieldId) setDetailFieldId(null);
+      setSavedNotice("Lahan berhasil dihapus.");
       state.reload();
     } catch (failure) {
       setError(failure);
@@ -195,18 +205,50 @@ export function FarmsPage() {
 
   return (
     <div className="stack">
+      <PageGuide
+        storageKey="farms"
+        title="Panduan Kebun & Lahan"
+        summary="Kelola lokasi kebun Anda, petakan batas tiap bidang lahan, dan isi profil tanah serta irigasi untuk penilaian tanam."
+        steps={[
+          {
+            title: "1. Buat Kebun",
+            detail:
+              "Kebun adalah nama lokasi atau kelompok usaha tani Anda (misalnya: Kebun Karawang).",
+          },
+          {
+            title: "2. Gambar Batas Lahan",
+            detail:
+              "Pilih titik koordinat atau gunakan contoh wilayah, lalu klik di kotak sketsa minimal 3 sudut (atau pakai tombol persegi otomatis).",
+          },
+          {
+            title: "3. Lengkapi Kondisi Tanah",
+            detail:
+              "Klik tombol Detail pada lahan untuk mengisi jenis tanah, drainase, pH, dan irigasi.",
+          },
+        ]}
+        glossary={[
+          { term: "Kebun", meaning: "Lokasi induk atau kelompok lahan" },
+          { term: "Lahan", meaning: "Petak/bidang tanam dengan batas area tertentu" },
+          { term: "Drainase", meaning: "Kecepatan air meresap atau mengalir keluar dari lahan" },
+        ]}
+      />
+
       {state.error === null ? null : (
         <ErrorNotice
           error={state.error}
-          note="daftar gagal dimuat ulang; perubahan terakhir mungkin sudah tersimpan"
+          note="Daftar gagal dimuat ulang; perubahan terakhir Anda mungkin sudah tersimpan."
         />
       )}
       {error !== null ? <ErrorNotice error={error} /> : null}
+      {savedNotice !== null ? <Notice tone="success">{savedNotice}</Notice> : null}
 
       <section className="section">
-        <h2>Kebun</h2>
+        <div className="section-head">
+          <h2>Daftar Kebun</h2>
+          <Tag>{farms.length} kebun</Tag>
+        </div>
         {farms.length === 0 ? (
-          <Empty>Belum ada kebun. Tambahkan satu di formulir di bawah.</Empty>
+          <Empty>Belum ada kebun. Tambahkan kebun pertama Anda melalui formulir di bawah.</Empty>
         ) : (
           <div className="crop-grid">
             {farms.map((farm) => (
@@ -226,13 +268,13 @@ export function FarmsPage() {
                   onClick={() => setSelectedFarmId(farm.id)}
                 >
                   <h3>{farm.name}</h3>
-                  <span className="muted">{farm.region ?? "Tanpa wilayah"}</span>
+                  <span className="muted">{farm.region ?? "Wilayah belum diisi"}</span>
                   <span className="faint">{countLabel(fields, farm.id)}</span>
                 </button>
                 <div className="btn-row">
                   <button
                     type="button"
-                    className="btn btn-quiet"
+                    className="btn btn-quiet btn-sm"
                     onClick={() => {
                       setEditingFarmId(farm.id);
                       setFarmName(farm.name);
@@ -243,7 +285,7 @@ export function FarmsPage() {
                   </button>
                   <button
                     type="button"
-                    className="btn btn-danger"
+                    className="btn btn-danger btn-sm"
                     disabled={busy}
                     onClick={() => void removeFarm(farm.id)}
                   >
@@ -257,31 +299,34 @@ export function FarmsPage() {
 
         <form className="panel" onSubmit={saveFarm}>
           <div className="panel-head">
-            <h3>{editingFarmId === null ? "Kebun baru" : "Ubah kebun"}</h3>
+            <h3>{editingFarmId === null ? "Tambah Kebun Baru" : "Ubah Data Kebun"}</h3>
           </div>
           <div className="panel-body form-grid">
             <div className="field">
-              <label htmlFor="farm-name">Nama</label>
+              <label htmlFor="farm-name">Nama Kebun</label>
               <input
                 id="farm-name"
                 required
                 maxLength={100}
+                placeholder="Contoh: Kebun Subang Timur"
                 value={farmName}
                 onChange={(event) => setFarmName(event.target.value)}
               />
             </div>
             <div className="field">
-              <label htmlFor="farm-region">Wilayah (opsional)</label>
+              <label htmlFor="farm-region">Kabupaten / Wilayah (opsional)</label>
               <input
                 id="farm-region"
                 maxLength={120}
+                placeholder="Contoh: Kab. Subang, Jawa Barat"
                 value={farmRegion}
                 onChange={(event) => setFarmRegion(event.target.value)}
               />
             </div>
             <div className="form-actions">
               <button className="btn btn-primary" type="submit" disabled={busy}>
-                {editingFarmId === null ? "Tambah kebun" : "Simpan kebun"}
+                <IconPlus size={16} />
+                <span>{editingFarmId === null ? "Simpan Kebun" : "Simpan Perubahan"}</span>
               </button>
               {editingFarmId === null ? null : (
                 <button
@@ -303,50 +348,50 @@ export function FarmsPage() {
 
       <section className="section">
         <div className="section-head">
-          <h2>Lahan {selected === undefined ? "" : `· ${selected.name}`}</h2>
-          {selected !== undefined ? <Tag tone="accent">geometri tersimpan</Tag> : null}
+          <h2>Daftar Lahan {selected === undefined ? "" : `· ${selected.name}`}</h2>
+          {selected !== undefined ? <Tag tone="accent">{selectedFields.length} lahan</Tag> : null}
         </div>
 
         {selected === undefined ? (
-          <Empty>Pilih atau buat kebun dulu.</Empty>
+          <Empty>Buat atau pilih salah satu kebun di atas terlebih dahulu.</Empty>
         ) : selectedFields.length === 0 ? (
-          <Empty>Belum ada lahan di kebun ini.</Empty>
+          <Empty>
+            Belum ada lahan di kebun ini. Gunakan formulir di bawah untuk menambahkan lahan.
+          </Empty>
         ) : (
           <div className="panel table-wrap">
             <table className="table">
               <thead>
                 <tr>
-                  <th>Nama</th>
+                  <th>Nama Lahan</th>
                   <th className="numeric">Luas (ha)</th>
-                  <th>Dibuat</th>
-                  <th>Id</th>
+                  <th>Tanggal Dibuat</th>
                   <th />
                 </tr>
               </thead>
               <tbody>
                 {selectedFields.map((field) => (
                   <tr key={field.id}>
-                    <td>{field.name}</td>
-                    <td className="numeric">{field.areaHa.toFixed(2)}</td>
-                    <td className="muted numeric">{field.createdAt.slice(0, 10)}</td>
                     <td>
-                      <Mono>{field.id.slice(0, 8)}</Mono>
+                      <strong>{field.name}</strong>
                     </td>
+                    <td className="numeric">{field.areaHa.toFixed(2)} ha</td>
+                    <td className="muted numeric">{field.createdAt.slice(0, 10)}</td>
                     <td>
                       <div className="btn-row">
                         <button
                           type="button"
-                          className="btn btn-quiet"
+                          className="btn btn-quiet btn-sm"
                           aria-pressed={detailFieldId === field.id}
                           onClick={() =>
                             setDetailFieldId(detailFieldId === field.id ? null : field.id)
                           }
                         >
-                          Detail
+                          {detailFieldId === field.id ? "Tutup Detail" : "Detail & Profil Tanah"}
                         </button>
                         <button
                           type="button"
-                          className="btn btn-quiet"
+                          className="btn btn-quiet btn-sm"
                           disabled={busy}
                           onClick={() => {
                             setEditingFieldId(field.id);
@@ -358,7 +403,7 @@ export function FarmsPage() {
                         </button>
                         <button
                           type="button"
-                          className="btn btn-danger"
+                          className="btn btn-danger btn-sm"
                           disabled={busy}
                           onClick={() => void removeField(field.id)}
                         >
@@ -382,33 +427,38 @@ export function FarmsPage() {
           return (
             <div className="panel">
               <div className="panel-head">
-                <h3>Detail lahan · {detailField.name}</h3>
+                <h3>Detail Lahan · {detailField.name}</h3>
                 <Tag tone="accent">{detailField.areaHa.toFixed(2)} ha</Tag>
               </div>
               <div className="panel-body stack">
-                <p className="muted">
-                  ID lengkap: <Mono>{detailField.id}</Mono> · Titik sudut:{" "}
-                  {Math.max(0, ring.length - 1)} · Rentang bujur{" "}
-                  {lons.length > 0
-                    ? `${Math.min(...lons).toFixed(4)}..${Math.max(...lons).toFixed(4)}`
-                    : "—"}{" "}
-                  · Rentang lintang{" "}
-                  {lats.length > 0
-                    ? `${Math.min(...lats).toFixed(4)}..${Math.max(...lats).toFixed(4)}`
-                    : "—"}
-                </p>
                 <div className="btn-row">
-                  <Link className="btn btn-quiet" to="/aktivitas">
-                    Catat aktivitas
+                  <Link className="btn btn-primary btn-sm" to="/rencana">
+                    Evaluasi &amp; Rencana Tanam
                   </Link>
-                  <Link className="btn btn-quiet" to="/rencana">
-                    Evaluasi &amp; rencana
+                  <Link className="btn btn-quiet btn-sm" to="/aktivitas">
+                    Catat Aktivitas &amp; Panen
                   </Link>
-                  <Link className="btn btn-quiet" to="/iklim">
-                    Lihat iklim
+                  <Link className="btn btn-quiet btn-sm" to="/iklim">
+                    Lihat Cuaca &amp; Iklim
                   </Link>
                 </div>
+
                 <FieldAgronomyForm fieldId={detailField.id} />
+
+                <details className="tech-details">
+                  <summary>Lihat info koordinat &amp; identitas teknis</summary>
+                  <p className="muted">
+                    ID Lahan: <Mono>{detailField.id}</Mono> · Jumlah sudut batas:{" "}
+                    {Math.max(0, ring.length - 1)} titik · Rentang bujur:{" "}
+                    {lons.length > 0
+                      ? `${Math.min(...lons).toFixed(4)} s.d. ${Math.max(...lons).toFixed(4)}`
+                      : "—"}{" "}
+                    · Rentang lintang:{" "}
+                    {lats.length > 0
+                      ? `${Math.min(...lats).toFixed(4)} s.d. ${Math.max(...lats).toFixed(4)}`
+                      : "—"}
+                  </p>
+                </details>
               </div>
             </div>
           );
@@ -417,23 +467,42 @@ export function FarmsPage() {
         {selected !== undefined ? (
           <form className="panel" onSubmit={saveField}>
             <div className="panel-head">
-              <h3>{editingFieldId === null ? "Lahan baru" : "Ubah lahan"}</h3>
+              <h3>{editingFieldId === null ? "Tambah Lahan Baru" : "Ubah Data Lahan"}</h3>
             </div>
             <div className="panel-body form-grid">
               <div className="field">
-                <label htmlFor="field-name">Nama</label>
+                <label htmlFor="field-name">Nama Lahan</label>
                 <input
                   id="field-name"
                   required
                   maxLength={100}
+                  placeholder="Contoh: Petak Sawah A1"
                   value={fieldName}
                   onChange={(event) => setFieldName(event.target.value)}
                 />
               </div>
+
               {editingFieldId === null ? (
                 <>
+                  <div className="preset-chips">
+                    <span className="faint">Contoh lokasi cepat:</span>
+                    {LOCATION_PRESETS.map((preset) => (
+                      <button
+                        key={preset.label}
+                        type="button"
+                        className="preset-chip"
+                        onClick={() => {
+                          setLat(preset.lat);
+                          setLon(preset.lon);
+                        }}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+
                   <div className="field">
-                    <label htmlFor="field-lat">Lintang pusat</label>
+                    <label htmlFor="field-lat">Koordinat Lintang (Latitude)</label>
                     <input
                       id="field-lat"
                       type="number"
@@ -446,7 +515,7 @@ export function FarmsPage() {
                     />
                   </div>
                   <div className="field">
-                    <label htmlFor="field-lon">Bujur pusat</label>
+                    <label htmlFor="field-lon">Koordinat Bujur (Longitude)</label>
                     <input
                       id="field-lon"
                       type="number"
@@ -459,7 +528,7 @@ export function FarmsPage() {
                     />
                   </div>
                   <div className="field">
-                    <label htmlFor="field-span">Sisi (km)</label>
+                    <label htmlFor="field-span">Lebar Area Peta (km)</label>
                     <input
                       id="field-span"
                       type="number"
@@ -470,78 +539,136 @@ export function FarmsPage() {
                       value={spanKm}
                       onChange={(event) => setSpanKm(event.target.value)}
                     />
-                    <span className="hint">Sisi bingkai sketsa.</span>
+                    <span className="hint">
+                      Ukuran kotak sketsa di bawah (1 km cukup untuk 1–20 ha).
+                    </span>
                   </div>
+
                   <div className="sketch-block">
                     <div className="spread">
-                      <span className="eyebrow">Batas lahan</span>
-                      <span className="faint numeric">{vertices.length} titik</span>
+                      <span className="eyebrow">Gambar Batas Lahan</span>
+                      <span className="faint numeric">{vertices.length} titik sudut</span>
                     </div>
-                    <svg
-                      className="sketch"
-                      viewBox="0 0 100 100"
-                      role="group"
-                      aria-label={`Sketsa batas lahan, ${vertices.length} titik`}
-                    >
-                      <rect
-                        className="sketch-frame"
-                        x={PLOT_MIN}
-                        y={PLOT_MIN}
-                        width={PLOT_SIZE}
-                        height={PLOT_SIZE}
-                        onPointerDown={addVertex}
-                      />
-                      {vertices.length < 2 ? null : (
-                        <polygon
-                          className="sketch-area"
-                          points={vertices
-                            .map((vertex) => `${plot(vertex.x)},${plot(vertex.y)}`)
-                            .join(" ")}
-                        />
-                      )}
-                      {vertices.map((vertex, index) => (
-                        <circle
-                          key={index}
-                          className="sketch-vertex"
-                          cx={plot(vertex.x)}
-                          cy={plot(vertex.y)}
-                          r={6}
-                          role="img"
-                          aria-label={`Titik ${index + 1}`}
-                          onPointerDown={(event) => {
-                            event.currentTarget.setPointerCapture(event.pointerId);
-                            setDragging(index);
-                          }}
-                          onPointerMove={(event) => {
-                            if (dragging === index) moveVertex(index, event);
-                          }}
-                          onPointerUp={(event) => {
-                            event.currentTarget.releasePointerCapture(event.pointerId);
-                            setDragging(null);
-                          }}
-                          onPointerCancel={() => setDragging(null)}
-                        />
-                      ))}
-                    </svg>
-                    <p className="faint">
-                      Klik di dalam bingkai untuk menambah titik; seret titik untuk memindahkannya.
-                    </p>
-                    <div className="row">
+
+                    <div className="btn-row">
                       <button
                         type="button"
-                        className="btn btn-quiet"
+                        className="btn btn-quiet btn-sm"
+                        disabled={busy}
+                        onClick={() => setVertices(SQUARE_PRESET)}
+                      >
+                        Buat bentuk persegi otomatis
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-quiet btn-sm"
                         disabled={busy || vertices.length === 0}
                         onClick={() => setVertices((current) => current.slice(0, -1))}
                       >
                         Hapus titik terakhir
                       </button>
+                      <button
+                        type="button"
+                        className="btn btn-quiet btn-sm"
+                        disabled={busy || vertices.length === 0}
+                        onClick={() => setVertices([])}
+                      >
+                        Ulangi sketsa
+                      </button>
                     </div>
-                    {reason === "" ? null : <p className="faint">{reason}</p>}
-                    <details>
-                      <summary className="faint">Tanpa tetikus: tulis poligon</summary>
+
+                    <div className="sketch-wrap">
+                      <svg
+                        className="sketch"
+                        viewBox="0 0 100 100"
+                        role="group"
+                        aria-label={`Sketsa batas lahan, ${vertices.length} titik`}
+                      >
+                        <rect
+                          className="sketch-frame"
+                          x={PLOT_MIN}
+                          y={PLOT_MIN}
+                          width={PLOT_SIZE}
+                          height={PLOT_SIZE}
+                          onPointerDown={addVertex}
+                        />
+                        {[0.25, 0.5, 0.75].map((ratio) => {
+                          const pos = plot(ratio);
+                          return (
+                            <g key={ratio}>
+                              <line
+                                className="sketch-grid-line"
+                                x1={pos}
+                                y1={PLOT_MIN}
+                                x2={pos}
+                                y2={PLOT_MIN + PLOT_SIZE}
+                              />
+                              <line
+                                className="sketch-grid-line"
+                                x1={PLOT_MIN}
+                                y1={pos}
+                                x2={PLOT_MIN + PLOT_SIZE}
+                                y2={pos}
+                              />
+                            </g>
+                          );
+                        })}
+                        <text
+                          x={90}
+                          y={13}
+                          fontSize="4.5"
+                          fontWeight="700"
+                          fill="var(--ink-faint)"
+                          textAnchor="end"
+                          pointerEvents="none"
+                        >
+                          U ↑
+                        </text>
+                        {vertices.length < 2 ? null : (
+                          <polygon
+                            className="sketch-area"
+                            points={vertices
+                              .map((vertex) => `${plot(vertex.x)},${plot(vertex.y)}`)
+                              .join(" ")}
+                          />
+                        )}
+                        {vertices.map((vertex, index) => (
+                          <circle
+                            key={index}
+                            className="sketch-vertex"
+                            cx={plot(vertex.x)}
+                            cy={plot(vertex.y)}
+                            r={4.8}
+                            role="img"
+                            aria-label={`Titik ${index + 1}`}
+                            onPointerDown={(event) => {
+                              event.currentTarget.setPointerCapture(event.pointerId);
+                              setDragging(index);
+                            }}
+                            onPointerMove={(event) => {
+                              if (dragging === index) moveVertex(index, event);
+                            }}
+                            onPointerUp={(event) => {
+                              event.currentTarget.releasePointerCapture(event.pointerId);
+                              setDragging(null);
+                            }}
+                            onPointerCancel={() => setDragging(null)}
+                          />
+                        ))}
+                      </svg>
+                      <p className="faint">
+                        Klik di dalam kotak untuk menandai sudut lahan (minimal 3 titik), seret
+                        titik untuk mengubah posisi, atau klik &ldquo;Buat bentuk persegi
+                        otomatis&rdquo;.
+                      </p>
+                      {reason === "" ? null : <p className="faint">{reason}</p>}
+                    </div>
+
+                    <details className="tech-details">
+                      <summary>Input koordinat manual (lanjutan)</summary>
                       <div className="field">
                         <label htmlFor="field-polygon">
-                          Poligon (bujur, lintang — satu titik per baris)
+                          Daftar titik koordinat (bujur, lintang — satu titik per baris)
                         </label>
                         <textarea
                           id="field-polygon"
@@ -550,8 +677,8 @@ export function FarmsPage() {
                           onChange={(event) => setPolygonText(event.target.value)}
                         />
                         <span className="hint">
-                          Kalau diisi, teks ini menggantikan sketsa. Satu titik per baris, tiap
-                          baris berisi bujur lalu lintang; ring ditutup otomatis.
+                          Jika diisi, daftar koordinat ini menggantikan gambar sketsa. Garis batas
+                          akan ditutup otomatis dari titik akhir ke titik awal.
                         </span>
                       </div>
                     </details>
@@ -560,7 +687,7 @@ export function FarmsPage() {
               ) : (
                 <div className="sketch-block">
                   <div className="field">
-                    <label htmlFor="field-polygon">Poligon (bujur, lintang)</label>
+                    <label htmlFor="field-polygon">Daftar titik koordinat (bujur, lintang)</label>
                     <textarea
                       id="field-polygon"
                       rows={5}
@@ -568,17 +695,16 @@ export function FarmsPage() {
                       onChange={(event) => setPolygonText(event.target.value)}
                     />
                     <span className="hint">
-                      Satu titik per baris, bujur lalu lintang. Kosongkan untuk mempertahankan
-                      bentuk sekarang; ring ditutup otomatis.
+                      Satu titik per baris (bujur, lintang). Kosongkan jika hanya ingin mengubah
+                      nama lahan tanpa mengubah bentuk batasnya.
                     </span>
                   </div>
-                  {/* A blank box means "keep the current ring", so the sketch's own
-                      "no points yet" reason would be a lie here. */}
                   {polygonText.trim() === "" || reason === "" ? null : (
                     <p className="faint">{reason}</p>
                   )}
                 </div>
               )}
+
               <div className="form-actions">
                 <button
                   className="btn btn-primary"
@@ -588,7 +714,7 @@ export function FarmsPage() {
                     (geometry === null && (editingFieldId === null || polygonText.trim() !== ""))
                   }
                 >
-                  {editingFieldId === null ? "Tambah lahan" : "Simpan"}
+                  {editingFieldId === null ? "Simpan Lahan" : "Simpan Perubahan"}
                 </button>
                 {editingFieldId === null ? null : (
                   <button
@@ -604,13 +730,6 @@ export function FarmsPage() {
                   </button>
                 )}
               </div>
-            </div>
-            <div className="panel-body">
-              <p className="faint">
-                {editingFieldId === null
-                  ? "Titik disimpan sebagai bujur dan lintang saat formulir dikirim; ring ditutup otomatis. Bentuk nyata mengikuti apa yang diterima PostGIS."
-                  : "Nama dan batas lahan bisa diubah. Luas adalah kolom turunan, jadi basis data menghitungnya ulang hanya bila bentuknya berubah."}
-              </p>
             </div>
           </form>
         ) : null}
@@ -658,7 +777,7 @@ function FieldAgronomyForm({ fieldId }: { readonly fieldId: string }) {
     };
   }, [fieldId]);
 
-  if (loading) return <Loading label="Memuat profil agronomi lahan…" />;
+  if (loading) return <Loading label="Memuat kondisi tanah & pengairan…" />;
 
   const save = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -684,14 +803,21 @@ function FieldAgronomyForm({ fieldId }: { readonly fieldId: string }) {
 
   return (
     <form className="stack" onSubmit={save}>
-      <h4>Profil agronomi lahan (OPEN-21)</h4>
+      <div className="stack-tight">
+        <h4>Kondisi Tanah &amp; Pengairan</h4>
+        <p className="muted" style={{ fontSize: "0.875rem" }}>
+          Lengkapi data ini agar evaluasi kecocokan tanaman di halaman Rencana Tanam lebih akurat.
+        </p>
+      </div>
       {error !== null ? <ErrorNotice error={error} /> : null}
-      {savedNotice ? <p className="muted">Profil agronomi tersimpan.</p> : null}
+      {savedNotice ? (
+        <Notice tone="success">Profil tanah dan pengairan berhasil disimpan.</Notice>
+      ) : null}
       <div className="form-grid">
         <div className="field">
-          <label htmlFor="agro-soil">Jenis tanah</label>
+          <label htmlFor="agro-soil">Jenis Tanah</label>
           <select id="agro-soil" value={soilType} onChange={(e) => setSoilType(e.target.value)}>
-            <option value="">Belum diisi (null)</option>
+            <option value="">— Pilih / belum diisi —</option>
             {(
               [
                 "clay",
@@ -714,13 +840,13 @@ function FieldAgronomyForm({ fieldId }: { readonly fieldId: string }) {
         </div>
 
         <div className="field">
-          <label htmlFor="agro-drainage">Kelas drainase</label>
+          <label htmlFor="agro-drainage">Aliran Air / Drainase</label>
           <select
             id="agro-drainage"
             value={drainageClass}
             onChange={(e) => setDrainageClass(e.target.value)}
           >
-            <option value="">Belum diisi (null)</option>
+            <option value="">— Pilih / belum diisi —</option>
             {(["poor", "moderate", "well", "excessive", "unknown"] as const).map((v) => (
               <option key={v} value={v}>
                 {drainageClassLabel(v)}
@@ -730,13 +856,13 @@ function FieldAgronomyForm({ fieldId }: { readonly fieldId: string }) {
         </div>
 
         <div className="field">
-          <label htmlFor="agro-irrigation">Ketersediaan irigasi</label>
+          <label htmlFor="agro-irrigation">Ketersediaan Irigasi</label>
           <select
             id="agro-irrigation"
             value={irrigation}
             onChange={(e) => setIrrigation(e.target.value)}
           >
-            <option value="">Belum diisi (null)</option>
+            <option value="">— Pilih / belum diisi —</option>
             {(["irrigated", "partial_irrigation", "rainfed", "unknown"] as const).map((v) => (
               <option key={v} value={v}>
                 {irrigationLabel(v)}
@@ -746,36 +872,41 @@ function FieldAgronomyForm({ fieldId }: { readonly fieldId: string }) {
         </div>
 
         <div className="field">
-          <label htmlFor="agro-ph">pH tanah (3.0–10.0)</label>
+          <label htmlFor="agro-ph">pH Tanah (3.0–10.0)</label>
           <input
             id="agro-ph"
             type="number"
             step="0.1"
             min="3"
             max="10"
+            placeholder="Contoh: 6.3"
             value={soilPh}
             onChange={(e) => setSoilPh(e.target.value)}
           />
+          <span className="hint">Umumnya tanah subur berada di kisaran 5,5 – 7,0.</span>
         </div>
 
         <div className="field">
-          <label htmlFor="agro-elev">Elevasi (m dpl)</label>
+          <label htmlFor="agro-elev">Ketinggian Lokasi (mdpl)</label>
           <input
             id="agro-elev"
             type="number"
             step="1"
             min="-500"
             max="6000"
+            placeholder="Contoh: 420"
             value={elevationM}
             onChange={(e) => setElevationM(e.target.value)}
           />
+          <span className="hint">Meter di atas permukaan laut.</span>
         </div>
 
         <div className="field">
-          <label htmlFor="agro-water">Sumber air (opsional)</label>
+          <label htmlFor="agro-water">Sumber Air Utama (opsional)</label>
           <input
             id="agro-water"
             maxLength={200}
+            placeholder="Contoh: Irigasi teknis / sumur bor"
             value={waterSource}
             onChange={(e) => setWaterSource(e.target.value)}
           />
@@ -783,7 +914,7 @@ function FieldAgronomyForm({ fieldId }: { readonly fieldId: string }) {
 
         <div className="form-actions">
           <button type="submit" className="btn btn-primary" disabled={saving}>
-            Simpan profil agronomi
+            {saving ? "Menyimpan…" : "Simpan profil agronomi"}
           </button>
         </div>
       </div>
@@ -791,11 +922,6 @@ function FieldAgronomyForm({ fieldId }: { readonly fieldId: string }) {
   );
 }
 
-/**
- * The stored ring as the textarea's own dialect, one point per line and without the
- * closing repeat: what a user typed (or drew) round-trips through `String`, which is
- * exact for a double, so re-sending an untouched field changes no coordinate.
- */
 function ringText(geometry: PolygonGeometry): string {
   const ring = geometry.coordinates[0] ?? [];
   const corners = ring.length > 1 ? ring.slice(0, -1) : ring;
@@ -807,13 +933,11 @@ function countLabel(fields: readonly { farmId: string }[], farmId: string): stri
   return count === 1 ? "1 lahan" : `${count} lahan`;
 }
 
-/** Sketch space is 0..1 on both axes; `0,0` is the frame's north-west corner. */
 interface SketchPoint {
   readonly x: number;
   readonly y: number;
 }
 
-/** The lat/lon window the sketch covers, in degrees. */
 interface Frame {
   readonly top: number;
   readonly bottom: number;
@@ -822,16 +946,8 @@ interface Frame {
 }
 
 const KM_PER_DEGREE = 111.32;
-
-/**
- * Caps, not rules: a parcel has a handful of corners, and a pasted or clicked ring
- * of thousands would freeze this tab long before the server saw it.
- */
 const MAX_VERTICES = 200;
-/** 200 corners at full double precision, plus room to type. Refused, not truncated. */
 const MAX_POLYGON_TEXT = 12000;
-
-/** The plot is inset so a vertex at 0 or 1 is still a full circle on screen. */
 const PLOT_MIN = 6;
 const PLOT_SIZE = 88;
 
@@ -843,18 +959,6 @@ function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
-/**
- * Degrees per kilometre: 1/111.32 north-south, divided by cos(latitude) east-west.
- * The contract refuses |lat| > 90; here a frame that would cross a pole or the
- * antimeridian is refused outright, because clamping a corner would move the
- * drawing away from the centre the user typed.
- */
-/**
- * The frame, or null. The inputs arrive as the strings the form holds, and a
- * cleared `type="number"` field is `""` — which `Number` turns into `0`, not
- * `NaN`. Accepting that would silently anchor the drawing on the equator, so a
- * blank field is refused here rather than defaulted.
- */
 function frameFrom(latText: string, lonText: string, spanText: string): Frame | null {
   if (latText.trim() === "" || lonText.trim() === "" || spanText.trim() === "") return null;
   return frameBounds(Number(latText), Number(lonText), Number(spanText));
@@ -878,7 +982,6 @@ function frameBounds(lat: number, lon: number, spanKm: number): Frame | null {
     : frame;
 }
 
-/** Pointer position in sketch space. The `viewBox` is square and `aspect-ratio` is 1. */
 function sketchPoint(svg: SVGSVGElement, clientX: number, clientY: number): SketchPoint {
   const rect = svg.getBoundingClientRect();
   const x = ((clientX - rect.left) / rect.width) * 100;
@@ -900,16 +1003,6 @@ type RingResult =
   | { readonly geometry: PolygonGeometry; readonly reason?: undefined }
   | { readonly geometry?: undefined; readonly reason: string };
 
-/**
- * A closed ring, or the reason it cannot be one.
- *
- * Two different repeats, two different answers. The *same* corner twice in a row is
- * one corner drawn twice — dragging two vertices onto each other — and dropping the
- * repeat changes nothing a user would recognise. A corner visited again **later**
- * makes the ring touch itself, and `ST_IsValid` reads that as a zero-area or
- * invalid polygon. Silently dropping it would send a shape the user did not draw, so
- * that case is refused instead.
- */
 function ringOf(positions: readonly (readonly [number, number])[]): RingResult {
   const ring: [number, number][] = [];
   for (const [lon, lat] of positions) {
@@ -918,7 +1011,6 @@ function ringOf(positions: readonly (readonly [number, number])[]): RingResult {
     ring.push([lon, lat]);
   }
 
-  // A typed ring may already be closed; that repeat is the closure, not a repeat.
   const first = ring[0];
   if (first !== undefined) {
     while (ring.length > 1) {
@@ -930,30 +1022,27 @@ function ringOf(positions: readonly (readonly [number, number])[]): RingResult {
 
   for (const [index, [lon, lat]] of ring.entries()) {
     if (ring.findIndex(([seenLon, seenLat]) => seenLon === lon && seenLat === lat) !== index) {
-      return { reason: `Titik ${lon}, ${lat} muncul lebih dari sekali; tiap titik hanya sekali.` };
+      return { reason: `Titik ${lon}, ${lat} muncul lebih dari sekali; tiap titik harus berbeda.` };
     }
   }
 
   const start = ring[0];
   if (ring.length < 3 || start === undefined) {
-    return { reason: "Poligon butuh minimal 3 titik berbeda." };
+    return { reason: "Area lahan membutuhkan minimal 3 titik sudut berbeda." };
   }
   return { geometry: { type: "Polygon", coordinates: [[...ring, [start[0], start[1]]]] } };
 }
 
 type Parsed = { readonly positions: [number, number][] } | { readonly error: string };
 
-/** `bujur, lintang` per line, comma or whitespace separated. */
 function parsePositions(text: string): Parsed {
   const positions: [number, number][] = [];
   for (const raw of text.split(/[\n;]+/)) {
     const line = raw.trim();
     if (line === "") continue;
     const parts = line.split(/[\s,]+/);
-    // A leading or trailing separator splits into an empty part, and `Number("")`
-    // is 0 — a missing ordinate would become the equator or the prime meridian.
     if (parts.length !== 2 || parts.some((part) => part === ""))
-      return { error: `Baris "${line}" butuh tepat dua angka: bujur, lintang.` };
+      return { error: `Baris "${line}" membutuhkan tepat dua angka: bujur, lintang.` };
 
     const lon = Number(parts[0]);
     const lat = Number(parts[1]);
@@ -968,22 +1057,15 @@ function parsePositions(text: string): Parsed {
   return { positions };
 }
 
-/**
- * The geometry the form can submit, and the reason it cannot.
- * Typed text wins when non-empty, so the two inputs never mix into one ring.
- */
 function geometryFor(
   vertices: readonly SketchPoint[],
   frame: Frame | null,
   text: string,
 ): { readonly geometry: PolygonGeometry | null; readonly reason: string } {
   if (text.length > MAX_POLYGON_TEXT) {
-    // `maxLength` was here first, and it is the wrong tool: it lets a prefilled
-    // value through and then truncates the moment a key is pressed, silently
-    // dropping trailing corners from a ring that already exists.
     return {
       geometry: null,
-      reason: `Poligon terlalu panjang: ${text.length} karakter, maksimum ${MAX_POLYGON_TEXT}.`,
+      reason: `Daftar koordinat terlalu panjang (${text.length} karakter, maksimum ${MAX_POLYGON_TEXT}).`,
     };
   }
   if (text.trim() !== "") {
@@ -996,18 +1078,18 @@ function geometryFor(
   }
 
   if (frame === null) {
-    // Every way `frameBounds` can refuse — a non-numeric field, a side that is not
-    // positive, a corner past ±90/±180 — ends here, so the message names the inputs
-    // rather than guessing which one is wrong.
-    return { geometry: null, reason: "Bingkai tidak valid; periksa lintang, bujur, dan sisi." };
+    return { geometry: null, reason: "Koordinat pusat atau lebar peta belum valid." };
   }
   if (vertices.length < 3) {
     if (vertices.length === 0) {
-      return { geometry: null, reason: "Belum ada titik; butuh minimal 3 titik." };
+      return {
+        geometry: null,
+        reason: "Belum ada titik batas; klik minimal 3 titik atau gunakan persegi otomatis.",
+      };
     }
     return {
       geometry: null,
-      reason: `Baru ${vertices.length} titik; butuh minimal 3 titik berbeda.`,
+      reason: `Baru ${vertices.length} titik sudut; butuh minimal 3 titik berbeda.`,
     };
   }
 

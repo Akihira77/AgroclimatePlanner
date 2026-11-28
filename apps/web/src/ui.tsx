@@ -1,8 +1,9 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { ApiError, describeError } from "./api.js";
+import { IconChevronDown, IconInfo } from "./icons.js";
 
-/** A quoted value in the ledger's voice: monospaced, never a link. */
+/** Monospaced technical identifier for optional details. */
 export function Mono({ children }: { readonly children: ReactNode }) {
   return <span className="mono">{children}</span>;
 }
@@ -27,7 +28,7 @@ export function Notice({
   tone = "info",
   children,
 }: {
-  readonly tone?: "info" | "warn" | "error" | undefined;
+  readonly tone?: "info" | "success" | "warn" | "error" | undefined;
   readonly children: ReactNode;
 }) {
   return (
@@ -41,7 +42,7 @@ export function Notice({
   );
 }
 
-export function Loading({ label = "Memuat…" }: { readonly label?: string }) {
+export function Loading({ label = "Memuat data…" }: { readonly label?: string }) {
   return (
     <p className="loading" role="status">
       {label}
@@ -53,23 +54,142 @@ export function Empty({ children }: { readonly children: ReactNode }) {
   return <div className="empty">{children}</div>;
 }
 
-/** Every fetch in the app reports through here, so a new screen cannot invent wording. */
-export function ErrorNotice({
-  error,
-  note,
-}: {
-  readonly error: unknown;
-  /** What this failure does *not* mean, when the default reading would be wrong. */
-  readonly note?: string;
-}) {
+/** Consistent error banner across every page. */
+export function ErrorNotice({ error, note }: { readonly error: unknown; readonly note?: string }) {
   return (
     <Notice tone="error">
       <span>{describeError(error)}</span>
       {note ? <span className="faint"> · {note}</span> : null}
       {error instanceof ApiError && error.requestId !== undefined ? (
-        <span className="faint"> · {error.requestId}</span>
+        <span className="faint"> · Ref: {error.requestId.slice(0, 8)}</span>
       ) : null}
     </Notice>
+  );
+}
+
+export interface GuideStep {
+  readonly title: string;
+  readonly detail: string;
+}
+
+export interface GuideTerm {
+  readonly term: string;
+  readonly meaning: string;
+}
+
+function readGuideCollapsed(storageKey: string): boolean {
+  try {
+    return window.localStorage.getItem(`agroclimate.guide.${storageKey}`) === "collapsed";
+  } catch {
+    return false;
+  }
+}
+
+function writeGuideCollapsed(storageKey: string, collapsed: boolean): void {
+  try {
+    if (collapsed) {
+      window.localStorage.setItem(`agroclimate.guide.${storageKey}`, "collapsed");
+    } else {
+      window.localStorage.removeItem(`agroclimate.guide.${storageKey}`);
+    }
+  } catch {
+    // Ignore storage unavailability (private browsing or sandboxed contexts).
+  }
+}
+
+/**
+ * Collapsible per-page guidance banner so users immediately understand what a screen
+ * does, what order to take actions, and what domain labels mean.
+ */
+export function PageGuide({
+  storageKey,
+  title,
+  summary,
+  steps,
+  glossary,
+  tip,
+}: {
+  readonly storageKey: string;
+  readonly title: string;
+  readonly summary: string;
+  readonly steps: readonly GuideStep[];
+  readonly glossary?: readonly GuideTerm[];
+  readonly tip?: string;
+}) {
+  const [collapsed, setCollapsed] = useState(() => readGuideCollapsed(storageKey));
+
+  const toggle = (next: boolean) => {
+    setCollapsed(next);
+    writeGuideCollapsed(storageKey, next);
+  };
+
+  if (collapsed) {
+    return (
+      <div className="page-guide-collapsed">
+        <span className="page-guide-collapsed-label">
+          <IconInfo size={16} />
+          <span>{title}</span>
+        </span>
+        <button
+          type="button"
+          className="btn btn-quiet btn-sm"
+          onClick={() => toggle(false)}
+          aria-expanded={false}
+        >
+          Tampilkan panduan halaman
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <aside className="page-guide" aria-label={title}>
+      <div className="page-guide-head">
+        <div className="page-guide-title">
+          <span className="page-guide-icon">
+            <IconInfo size={18} />
+          </span>
+          <div>
+            <h2>{title}</h2>
+            <p className="page-guide-summary">{summary}</p>
+          </div>
+        </div>
+        <button
+          type="button"
+          className="btn btn-quiet btn-sm"
+          onClick={() => toggle(true)}
+          aria-expanded={true}
+        >
+          <span>Sembunyikan panduan</span>
+          <IconChevronDown size={15} />
+        </button>
+      </div>
+
+      <div className="guide-steps">
+        {steps.map((step, index) => (
+          <div className="guide-step" key={step.title}>
+            <span className="guide-step-num">{index + 1}</span>
+            <div>
+              <strong>{step.title}</strong>
+              <p>{step.detail}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {glossary !== undefined && glossary.length > 0 ? (
+        <div className="guide-glossary" aria-label="Arti istilah">
+          {glossary.map((item) => (
+            <span className="guide-term" key={item.term}>
+              <strong>{item.term}:</strong>
+              <span>{item.meaning}</span>
+            </span>
+          ))}
+        </div>
+      ) : null}
+
+      {tip !== undefined ? <div className="page-guide-tip">{tip}</div> : null}
+    </aside>
   );
 }
 
@@ -88,14 +208,14 @@ const MONTHS = [
   "Desember",
 ];
 
-/** `2026-11-01` → `November 2026`. The stored value is always a first-of-month. */
+/** `2026-11-01` → `November 2026`. */
 export function monthLabel(isoDate: string): string {
   const [year, month] = isoDate.split("-");
   if (year === undefined || month === undefined) return isoDate;
   return `${MONTHS[Number(month) - 1] ?? month} ${year}`;
 }
 
-/** `2026-11-27` → `27 Nov`. Compact, still unambiguous within one horizon. */
+/** `2026-11-27` → `27 Nov`. */
 export function dayLabel(isoDate: string): string {
   const [, month, day] = isoDate.split("-");
   if (month === undefined || day === undefined) return isoDate;
@@ -109,15 +229,15 @@ export function millimetres(value: number): string {
 export function dataClassLabel(dataClass: string): string {
   switch (dataClass) {
     case "weather_forecast":
-      return "Prakiraan harian";
+      return "Prakiraan cuaca harian";
     case "subseasonal_forecast":
-      return "Prakiraan subseasonal";
+      return "Prakiraan jangka menengah";
     case "seasonal_forecast":
       return "Prakiraan musiman";
     case "climatology":
-      return "Normal iklim";
+      return "Rata-rata iklim historis";
     case "field_observation":
-      return "Pengamatan lahan";
+      return "Pengamatan lapangan";
     case "station_observation":
       return "Pengamatan stasiun";
     case "satellite_estimate":
@@ -130,19 +250,123 @@ export function dataClassLabel(dataClass: string): string {
 export function missingReasonLabel(reason: string): string {
   switch (reason) {
     case "pending":
-      return "Belum tersedia";
+      return "Sedang disiapkan";
     case "provider_null":
-      return "Provider tidak menerbitkan nilai";
+      return "Belum tersedia dari sumber";
     case "not_requested":
       return "Tidak diminta";
     case "beyond_horizon":
-      return "Di luar horizon";
+      return "Di luar rentang prakiraan";
     case "insufficient_history":
-      return "Riwayat kurang";
+      return "Riwayat data belum cukup";
     case "insufficient_provenance":
-      return "Provenans kurang";
+      return "Sumber data belum lengkap";
     default:
       return reason;
+  }
+}
+
+export function availabilityLabel(value: string): string {
+  return value === "stale" ? "Perlu diperbarui" : "Terbaru";
+}
+
+export function dimensionLabel(dimension: string): string {
+  switch (dimension) {
+    case "climate":
+      return "Iklim & Cuaca";
+    case "water":
+      return "Ketersediaan Air";
+    case "soil":
+      return "Kondisi Tanah";
+    case "timing":
+      return "Waktu Tanam";
+    case "risk":
+      return "Risiko Cuaca";
+    default:
+      return dimension;
+  }
+}
+
+export function dimensionStateLabel(state: string): string {
+  return state === "known" ? "Tersedia" : "Belum lengkap";
+}
+
+export function translateEvaluationDetail(detail: string): string {
+  const match =
+    /^(climate|water|soil|timing|risk) is judged by the rulebook but was not observed$/i.exec(
+      detail.trim(),
+    );
+  if (match?.[1] !== undefined) {
+    return `Aspek ${dimensionLabel(match[1].toLowerCase())} diperlukan dalam penilaian, tetapi datanya belum tersedia pada evaluasi ini.`;
+  }
+  return detail;
+}
+
+export function comparatorLabel(comparator: string): string {
+  switch (comparator) {
+    case "min":
+      return "Minimal";
+    case "max":
+      return "Maksimal";
+    case "range":
+      return "Rentang ideal";
+    case "count":
+      return "Jumlah kejadian";
+    default:
+      return comparator;
+  }
+}
+
+export function severityLabel(severity: string): string {
+  switch (severity) {
+    case "hard":
+      return "Syarat wajib";
+    case "soft":
+      return "Anjuran";
+    case "high":
+      return "Risiko tinggi";
+    case "warning":
+      return "Perlu perhatian";
+    case "info":
+      return "Informasi";
+    default:
+      return severity;
+  }
+}
+
+export function gradeLabel(grade: string): string {
+  switch (grade) {
+    case "A":
+      return "Rujukan utama (A)";
+    case "B":
+      return "Rujukan pendukung (B)";
+    default:
+      return `Tingkat ${grade}`;
+  }
+}
+
+export function cropCategoryLabel(category: string): string {
+  switch (category.toLowerCase()) {
+    case "cereal":
+    case "grain":
+      return "Tanaman pangan & biji-bijian";
+    case "vegetable":
+    case "horticulture":
+      return "Sayuran & hortikultura";
+    case "legume":
+    case "pulse":
+      return "Kacang-kacangan";
+    case "fruit":
+      return "Buah-buahan";
+    case "root":
+    case "tuber":
+      return "Umbi-umbian";
+    case "plantation":
+      return "Tanaman perkebunan";
+    case "spice":
+      return "Rempah-rempah";
+    default:
+      return category;
   }
 }
 
@@ -151,11 +375,11 @@ export function suitabilityLabel(verdict: string): string {
     case "suitable":
       return "Sesuai";
     case "conditional":
-      return "Bersyarat";
+      return "Sesuai bersyarat";
     case "unsuitable":
-      return "Tidak sesuai";
+      return "Kurang sesuai";
     case "insufficient_data":
-      return "Data tidak cukup";
+      return "Data belum cukup";
     default:
       return verdict;
   }
@@ -177,13 +401,13 @@ export function suitabilityTone(verdict: string): Tone {
 export function plantingStatusLabel(status: string): string {
   switch (status) {
     case "active":
-      return "Aktif";
+      return "Sedang berjalan";
     case "harvested":
-      return "Dipanen";
+      return "Selesai panen";
     case "failed":
-      return "Gagal";
+      return "Gagal tanam";
     case "abandoned":
-      return "Ditinggalkan";
+      return "Dihentikan";
     default:
       return status;
   }
@@ -208,7 +432,7 @@ export function irrigationLabel(value: string): string {
     case "irrigated":
       return "Beririgasi penuh";
     case "partial_irrigation":
-      return "Irigasi parsial";
+      return "Irigasi sebagian (parsial)";
     case "rainfed":
       return "Tadah hujan";
     case "unknown":
@@ -225,7 +449,7 @@ export function observationKindLabel(kind: string): string {
     case "soil_moisture":
       return "Kelembapan tanah";
     case "temperature":
-      return "Suhu";
+      return "Suhu udara/tanah";
     case "note":
       return "Catatan lapangan";
     default:
@@ -236,11 +460,11 @@ export function observationKindLabel(kind: string): string {
 export function soilTypeLabel(value: string): string {
   switch (value) {
     case "clay":
-      return "Liat (clay)";
+      return "Tanah liat";
     case "loam":
-      return "Lempung (loam)";
+      return "Tanah lempung";
     case "sandy":
-      return "Berpasir (sandy)";
+      return "Tanah berpasir";
     case "clay_loam":
       return "Lempung berliat";
     case "sandy_loam":
@@ -248,11 +472,11 @@ export function soilTypeLabel(value: string): string {
     case "silt_loam":
       return "Lempung berdebu";
     case "peat":
-      return "Gambut (peat)";
+      return "Tanah gambut";
     case "alluvial":
-      return "Aluvial";
+      return "Tanah aluvial";
     case "volcanic":
-      return "Vulkanik";
+      return "Tanah vulkanik";
     case "unknown":
       return "Belum diketahui";
     default:
@@ -263,13 +487,13 @@ export function soilTypeLabel(value: string): string {
 export function drainageClassLabel(value: string): string {
   switch (value) {
     case "poor":
-      return "Buruk / tergenang";
+      return "Buruk (mudah tergenang)";
     case "moderate":
       return "Sedang";
     case "well":
-      return "Baik";
+      return "Baik (air mengalir lancar)";
     case "excessive":
-      return "Berlebih / cepat kering";
+      return "Terlalu cepat kering";
     case "unknown":
       return "Belum diketahui";
     default:

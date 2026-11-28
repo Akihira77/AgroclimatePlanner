@@ -2,17 +2,11 @@ import type { RegisteredUser } from "@agroclimate/contracts";
 import { useState } from "react";
 
 import { ApiError, api } from "../api.js";
+import { IconCalendar, IconClipboard, IconLeaf, IconMap } from "../icons.js";
 import { ErrorNotice, Notice } from "../ui.js";
 
 type Mode = "login" | "register";
 
-/**
- * Login and registration, one form, because they differ by one call.
- *
- * Registration does not issue a session (`IG-3`), so a successful registration
- * immediately logs in with the same credentials — one visible step for the user,
- * and the cookie comes from the endpoint that is allowed to set it.
- */
 export function AuthPage({
   onAuthenticated,
 }: {
@@ -34,16 +28,16 @@ export function AuthPage({
     try {
       if (mode === "register") {
         await api.register(email, password);
-        setNotice("Akun dibuat. Masuk dengan kata sandi yang sama…");
+        setNotice("Akun berhasil dibuat. Sedang masuk ke aplikasi…");
       }
       const user = await api.login(email, password);
       onAuthenticated(user);
     } catch (failure) {
-      // `CONFLICT` is the code for "this email exists" and for "this farm still has
-      // fields" alike, so the wording belongs to the screen that knows which.
       setError(
         mode === "register" && failure instanceof ApiError && failure.code === "CONFLICT"
-          ? new Error("Alamat email sudah terdaftar.")
+          ? new Error(
+              "Alamat email ini sudah terdaftar. Silakan masuk menggunakan kata sandi Anda.",
+            )
           : failure,
       );
     } finally {
@@ -53,69 +47,127 @@ export function AuthPage({
 
   return (
     <div className="auth-shell">
-      <div className="auth-card">
-        <div className="stack-tight">
-          <span className="eyebrow">Agroclimate Planner</span>
-          <h1>{mode === "login" ? "Masuk" : "Buat akun"}</h1>
-          <p className="lede">
-            Catat lahan, lihat horizon iklim 0–45 hari dan 12 bulan, dan periksa katalog komoditas
-            yang dipakai mesin agronomi.
+      <div className="auth-split">
+        <section className="auth-hero" aria-label="Pengenalan Agroclimate Planner">
+          <div className="brand">
+            <span className="brand-mark">
+              <IconLeaf size={20} />
+            </span>
+            <div className="brand-text">
+              <strong>Agroclimate Planner</strong>
+              <span>Asisten Tanam &amp; Iklim</span>
+            </div>
+          </div>
+
+          <div className="stack">
+            <h2>Rencanakan waktu tanam lebih tenang berdasarkan kondisi iklim lahan Anda.</h2>
+            <ul className="auth-hero-list">
+              <li>
+                <IconMap size={18} />
+                <span>Petakan batas kebun, jenis tanah, dan ketersediaan irigasi tiap lahan.</span>
+              </li>
+              <li>
+                <IconCalendar size={18} />
+                <span>
+                  Uji kecocokan tanggal tanam terhadap prakiraan hujan dan minta penjelasan Asisten
+                  AI.
+                </span>
+              </li>
+              <li>
+                <IconClipboard size={18} />
+                <span>Catat penanaman, hasil panen bertahap, dan pengamatan cuaca harian.</span>
+              </li>
+            </ul>
+          </div>
+
+          <p style={{ fontSize: "0.8125rem", color: "var(--sidebar-muted)" }}>
+            Dirancang untuk petani, pendamping lapang, dan pengelola kebun.
           </p>
-        </div>
+        </section>
 
-        <form onSubmit={submit}>
-          <div className="field">
-            <label htmlFor="email">Email</label>
-            <input
-              id="email"
-              name="email"
-              type="email"
-              autoComplete="email"
-              required
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-            />
+        <section className="auth-card">
+          <div className="stack-tight">
+            <span className="eyebrow">
+              {mode === "login" ? "Selamat datang kembali" : "Mulai gratis"}
+            </span>
+            <h1>{mode === "login" ? "Masuk ke Akun" : "Buat Akun Baru"}</h1>
+            <p className="muted">
+              {mode === "login"
+                ? "Masukkan email dan kata sandi Anda untuk membuka data kebun dan rencana tanam."
+                : "Daftarkan email Anda untuk mulai mencatat kebun dan menilai jadwal tanam."}
+            </p>
           </div>
 
-          <div className="field">
-            <label htmlFor="password">Kata sandi</label>
-            <input
-              id="password"
-              name="password"
-              type="password"
-              autoComplete={mode === "login" ? "current-password" : "new-password"}
-              required
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-            />
-            {mode === "register" ? <span className="hint">Minimal 12 karakter.</span> : null}
-          </div>
+          <form onSubmit={submit}>
+            <div className="field">
+              <label htmlFor="email">Alamat Email</label>
+              <input
+                id="email"
+                name="email"
+                type="email"
+                autoComplete="email"
+                placeholder="nama@contoh.com"
+                required
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+              />
+            </div>
 
-          {error !== null ? <ErrorNotice error={error} /> : null}
-          {notice !== null ? <Notice>{notice}</Notice> : null}
+            <div className="field">
+              <label htmlFor="password">Kata Sandi</label>
+              <input
+                id="password"
+                name="password"
+                type="password"
+                autoComplete={mode === "login" ? "current-password" : "new-password"}
+                placeholder={mode === "register" ? "Minimal 12 karakter" : "Masukkan kata sandi"}
+                required
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+              />
+              {mode === "register" ? (
+                <span className="hint">Gunakan minimal 12 karakter agar akun aman.</span>
+              ) : null}
+            </div>
 
-          <button className="btn btn-primary" type="submit" disabled={busy}>
-            {busy ? "Memproses…" : mode === "login" ? "Masuk" : "Buat akun dan masuk"}
-          </button>
-        </form>
+            {error !== null ? <ErrorNotice error={error} /> : null}
+            {notice !== null ? <Notice tone="success">{notice}</Notice> : null}
 
-        <p className="auth-switch">
-          {mode === "login" ? (
-            <>
-              Belum punya akun?{" "}
-              <button type="button" onClick={() => setMode("register")}>
-                Daftar
-              </button>
-            </>
-          ) : (
-            <>
-              Sudah punya akun?{" "}
-              <button type="button" onClick={() => setMode("login")}>
-                Masuk
-              </button>
-            </>
-          )}
-        </p>
+            <button className="btn btn-primary" type="submit" disabled={busy}>
+              {busy ? "Memproses…" : mode === "login" ? "Masuk" : "Buat akun dan masuk"}
+            </button>
+          </form>
+
+          <p className="auth-switch">
+            {mode === "login" ? (
+              <>
+                Belum punya akun?{" "}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode("register");
+                    setError(null);
+                  }}
+                >
+                  Daftar di sini
+                </button>
+              </>
+            ) : (
+              <>
+                Sudah punya akun?{" "}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode("login");
+                    setError(null);
+                  }}
+                >
+                  Masuk di sini
+                </button>
+              </>
+            )}
+          </p>
+        </section>
       </div>
     </div>
   );

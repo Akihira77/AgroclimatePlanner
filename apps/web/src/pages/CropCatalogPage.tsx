@@ -1,22 +1,23 @@
 import { useState } from "react";
 
 import { api } from "../api.js";
+import { IconArrowRight } from "../icons.js";
 import { Link } from "../router.js";
-import { ErrorNotice, Empty, Loading, Mono, Tag } from "../ui.js";
+import {
+  Empty,
+  ErrorNotice,
+  Loading,
+  Notice,
+  PageGuide,
+  Tag,
+  comparatorLabel,
+  cropCategoryLabel,
+  dimensionLabel,
+  gradeLabel,
+  severityLabel,
+} from "../ui.js";
 import { useAsync } from "../useAsync.js";
 
-/**
- * The catalog, read-only.
- *
- * Two levels only: the crops, and one crop's cultivars with their version history.
- * A version is opened in place rather than on a third route, because the profile's
- * content is what the version *is* — a separate URL would imply the summary is
- * useful on its own, and it is not.
- *
- * Nothing here presents a threshold as a recommendation. The grade travels with
- * every row, and the header says what the catalog is: the rulebook the engine will
- * read, not one it has already applied.
- */
 export function CropCatalogPage({ slug }: { readonly slug?: string }) {
   if (slug === undefined) return <CropList />;
   return <CropDetail slug={slug} />;
@@ -31,22 +32,72 @@ function CropList() {
 
   if (state.data.crops.length === 0) {
     return (
-      <Empty>
-        Katalog kosong. Jalankan <Mono>pnpm db:seed:catalog</Mono> — baris komoditas diisi oleh seed
-        berjalan sebagai `migration_owner`.
-      </Empty>
+      <div className="stack">
+        <PageGuide
+          storageKey="catalog"
+          title="Tentang Panduan Tanaman"
+          summary="Halaman ini berisi daftar komoditas, varietas, fase tumbuh, dan syarat lingkungan yang menjadi acuan evaluasi."
+          steps={[
+            {
+              title: "Pilih Komoditas",
+              detail:
+                "Klik salah satu kartu komoditas untuk melihat daftar varietas yang tersedia.",
+            },
+            {
+              title: "Periksa Fase & Syarat Tumbuh",
+              detail:
+                "Buka versi panduan untuk melihat lama fase tumbuh dan ambang curah hujan/suhu.",
+            },
+            {
+              title: "Simulasikan Jadwal Panen",
+              detail: "Ubah tanggal tanam untuk memperkirakan rentang waktu panen tiap varietas.",
+            },
+          ]}
+        />
+        <Empty>Belum ada data panduan tanaman yang tersedia saat ini.</Empty>
+      </div>
     );
   }
 
   return (
-    <div className="crop-grid">
-      {state.data.crops.map((crop) => (
-        <Link key={crop.id} to={`/katalog/${crop.slug}`} className="crop-card">
-          <h3>{crop.nameId}</h3>
-          <span className="muted">{crop.nameEn}</span>
-          <span className="faint">{crop.category}</span>
-        </Link>
-      ))}
+    <div className="stack">
+      <PageGuide
+        storageKey="catalog"
+        title="Tentang Panduan Tanaman"
+        summary="Halaman ini berisi referensi varietas, lama masa tanam, dan batas kebutuhan iklim/tanah yang dipakai saat menilai kecocokan lahan."
+        steps={[
+          {
+            title: "Pilih Komoditas",
+            detail: "Klik salah satu komoditas di bawah untuk melihat varietas unggulannya.",
+          },
+          {
+            title: "Lihat Syarat Tumbuh",
+            detail:
+              "Buka versi panduan berstatus Aktif untuk memeriksa fase kritis dan ambang batas.",
+          },
+          {
+            title: "Hitung Perkiraan Panen",
+            detail:
+              "Gunakan simulator tanggal tanam di dalam detail varietas untuk melihat perkiraan panen.",
+          },
+        ]}
+        tip="Catatan: Panduan ini menunjukkan syarat umum tanaman, bukan rekomendasi tanam untuk lahan tertentu. Untuk menilai lahan Anda, gunakan menu Rencana Tanam."
+      />
+
+      <div className="crop-grid">
+        {state.data.crops.map((crop) => (
+          <Link key={crop.id} to={`/katalog/${crop.slug}`} className="crop-card">
+            <div className="spread">
+              <Tag tone="accent">{cropCategoryLabel(crop.category)}</Tag>
+              <IconArrowRight size={16} className="muted" />
+            </div>
+            <h3>{crop.nameId}</h3>
+            <span className="muted" style={{ fontSize: "0.875rem" }}>
+              {crop.nameEn}
+            </span>
+          </Link>
+        ))}
+      </div>
     </div>
   );
 }
@@ -65,7 +116,7 @@ function CropDetail({ slug }: { readonly slug: string }) {
     <div className="stack">
       <div className="spread">
         <div className="stack-tight">
-          <span className="eyebrow">{crop.category}</span>
+          <span className="eyebrow">{cropCategoryLabel(crop.category)}</span>
           <h2>{crop.nameId}</h2>
           <p className="muted">{crop.nameEn}</p>
         </div>
@@ -75,7 +126,7 @@ function CropDetail({ slug }: { readonly slug: string }) {
       </div>
 
       {crop.cultivars.length === 0 ? (
-        <Empty>Belum ada kultivar untuk komoditas ini.</Empty>
+        <Empty>Belum ada varietas tercatat untuk komoditas ini.</Empty>
       ) : (
         <div className="stack">
           {crop.cultivars.map((cultivar) => (
@@ -83,19 +134,21 @@ function CropDetail({ slug }: { readonly slug: string }) {
               <header>
                 <div>
                   <h3>{cultivar.name}</h3>
-                  <p className="muted">
-                    {cultivar.durationDaysMin}–{cultivar.durationDaysMax} hari · mulai{" "}
-                    {cultivar.cycleStart === "sowing" ? "tanam benih" : "pindah tanam"}
+                  <p className="muted" style={{ fontSize: "0.875rem" }}>
+                    Umur panen {cultivar.durationDaysMin}–{cultivar.durationDaysMax} hari · mulai
+                    dari {cultivar.cycleStart === "sowing" ? "tanam benih" : "pindah tanam"}
                     {cultivar.nurseryDays === null
                       ? ""
-                      : ` · persemaian ${cultivar.nurseryDays} hari`}
+                      : ` · masa semai ${cultivar.nurseryDays} hari`}
                   </p>
                 </div>
-                <Tag>{cultivar.profileVersions.length} versi</Tag>
+                <Tag>{cultivar.profileVersions.length} versi panduan</Tag>
               </header>
 
               {cultivar.profileVersions.length === 0 ? (
-                <div className="panel-body muted">Belum ada rulebook untuk kultivar ini.</div>
+                <div className="panel-body muted">
+                  Belum ada data syarat tumbuh untuk varietas ini.
+                </div>
               ) : (
                 <div className="version-list">
                   {cultivar.profileVersions.map((version) => (
@@ -109,20 +162,19 @@ function CropDetail({ slug }: { readonly slug: string }) {
                       }
                     >
                       <span className="row">
-                        <Mono>{version.ruleVersion}</Mono>
+                        <strong>Versi {version.ruleVersion}</strong>
                         <Tag tone={version.status === "published" ? "accent" : undefined}>
                           {version.status === "draft"
-                            ? "draf"
+                            ? "Draf"
                             : version.status === "published"
-                              ? "terbit"
-                              : "pensiun"}
+                              ? "Aktif dipakai"
+                              : "Arsip lama"}
                         </Tag>
-                        {version.supersedesId !== null ? <Tag>menggantikan versi lama</Tag> : null}
                       </span>
                       <span className="faint numeric">
                         {version.publishedAt === null
-                          ? "belum diterbitkan"
-                          : version.publishedAt.slice(0, 10)}
+                          ? "Belum diterbitkan"
+                          : `Terbit ${version.publishedAt.slice(0, 10)}`}
                       </span>
                     </button>
                   ))}
@@ -150,7 +202,7 @@ function VersionDetail({
 }) {
   const state = useAsync(`profile:${id}`, () => api.profileVersion(id));
 
-  if (state.loading) return <div className="panel-body loading">Memuat rulebook…</div>;
+  if (state.loading) return <div className="panel-body loading">Memuat detail syarat tumbuh…</div>;
   if (state.error !== null) {
     return (
       <div className="panel-body">
@@ -167,98 +219,101 @@ function VersionDetail({
   return (
     <div className="panel-body stack">
       <section className="stack-tight">
-        <h4>Cakupan dimensi rulebook</h4>
+        <h4>Kelengkapan Aspek Penilaian</h4>
         <div className="row">
           {dimensions.map((dim) => (
             <Tag key={dim} tone={presentDimensions.has(dim) ? "accent" : "warn"}>
-              {dim}:{" "}
-              {presentDimensions.has(dim) ? "tersedia" : "data tidak cukup (insufficient_data)"}
+              {dimensionLabel(dim)}: {presentDimensions.has(dim) ? "Tersedia" : "Belum lengkap"}
             </Tag>
           ))}
         </div>
       </section>
 
-      <section>
-        <h4>Tahap pertumbuhan</h4>
+      <section className="stack-tight">
+        <h4>Fase Pertumbuhan</h4>
         {profile.growthStages.length === 0 ? (
-          <p className="muted">Tidak ada tahap tercatat.</p>
+          <p className="muted">Tidak ada rincian fase pertumbuhan.</p>
         ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Nama</th>
-                <th>Hari</th>
-                <th>Kritis</th>
-                <th>Profil kebutuhan</th>
-              </tr>
-            </thead>
-            <tbody>
-              {profile.growthStages.map((stage) => (
-                <tr key={stage.id}>
-                  <td>{stage.name}</td>
-                  <td className="numeric">
-                    {stage.startDayOffset}–{stage.endDayOffset}
-                  </td>
-                  <td>{stage.isCritical ? <Tag tone="warn">kritis</Tag> : "—"}</td>
-                  <td className="muted">{stage.requirementProfile ?? "—"}</td>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Nama Fase</th>
+                  <th className="numeric">Rentang Hari</th>
+                  <th>Prioritas</th>
+                  <th>Kebutuhan Khusus</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {profile.growthStages.map((stage) => (
+                  <tr key={stage.id}>
+                    <td>{stage.name}</td>
+                    <td className="numeric">
+                      Hari ke-{stage.startDayOffset} s.d. {stage.endDayOffset}
+                    </td>
+                    <td>{stage.isCritical ? <Tag tone="warn">Fase kritis</Tag> : "Normal"}</td>
+                    <td className="muted">{stage.requirementProfile ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
 
       <CycleProjection id={id} cycleStart={cycleStart} />
 
-      <section>
-        <h4>Ambang batas</h4>
+      <section className="stack-tight">
+        <h4>Ambang Batas Syarat Tumbuh</h4>
         {profile.constraints.length === 0 ? (
-          <p className="muted">Tidak ada ambang tercatat.</p>
+          <p className="muted">Belum ada ambang batas tercatat.</p>
         ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Dimensi</th>
-                <th>Bentuk</th>
-                <th className="numeric">Nilai</th>
-                <th>Tahap</th>
-                <th>Bukti</th>
-                <th>Kekuatan</th>
-              </tr>
-            </thead>
-            <tbody>
-              {profile.constraints.map((constraint) => {
-                const stage = profile.growthStages.find(
-                  (candidate) => candidate.id === constraint.growthStageId,
-                );
-                return (
-                  <tr key={constraint.id}>
-                    <td>{constraint.dimension}</td>
-                    <td className="muted">{constraint.comparator}</td>
-                    <td className="numeric">{thresholdLabel(constraint)}</td>
-                    <td className="muted">{stage?.name ?? "seluruh siklus"}</td>
-                    <td>
-                      <Tag tone={constraint.grade === "A" ? "accent" : undefined}>
-                        {constraint.grade}
-                      </Tag>
-                    </td>
-                    <td>
-                      <Tag tone={constraint.severity === "hard" ? "warn" : undefined}>
-                        {constraint.severity}
-                      </Tag>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Aspek</th>
+                  <th>Jenis Batas</th>
+                  <th className="numeric">Nilai Ideal</th>
+                  <th>Berlaku Pada Fase</th>
+                  <th>Tingkat Rujukan</th>
+                  <th>Sifat Aturan</th>
+                </tr>
+              </thead>
+              <tbody>
+                {profile.constraints.map((constraint) => {
+                  const stage = profile.growthStages.find(
+                    (candidate) => candidate.id === constraint.growthStageId,
+                  );
+                  return (
+                    <tr key={constraint.id}>
+                      <td>{dimensionLabel(constraint.dimension)}</td>
+                      <td className="muted">{comparatorLabel(constraint.comparator)}</td>
+                      <td className="numeric">{thresholdLabel(constraint)}</td>
+                      <td className="muted">{stage?.name ?? "Seluruh masa tanam"}</td>
+                      <td>
+                        <Tag tone={constraint.grade === "A" ? "accent" : undefined}>
+                          {gradeLabel(constraint.grade)}
+                        </Tag>
+                      </td>
+                      <td>
+                        <Tag tone={constraint.severity === "hard" ? "warn" : undefined}>
+                          {severityLabel(constraint.severity)}
+                        </Tag>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </section>
 
-      <section>
-        <h4>Kutipan</h4>
+      <section className="stack-tight">
+        <h4>Sumber Rujukan Ilmiah</h4>
         {profile.sourceRefs.length === 0 ? (
-          <p className="muted">Tidak ada sumber tercatat.</p>
+          <p className="muted">Tidak ada sumber rujukan tercatat.</p>
         ) : (
           <ul className="stack-tight">
             {profile.sourceRefs.map((source) => (
@@ -266,34 +321,32 @@ function VersionDetail({
                 <span>{source.title}</span>
                 <span className="muted">
                   {" "}
-                  — {source.authors ?? "tanpa penulis"}, {source.publisher} {source.publicationYear}
+                  — {source.authors ?? "Tanpa nama penulis"}, {source.publisher}{" "}
+                  {source.publicationYear}
                 </span>{" "}
                 <a href={source.url} target="_blank" rel="noreferrer">
-                  sumber
+                  Buka rujukan
                 </a>{" "}
-                <Tag tone={source.grade === "A" ? "accent" : undefined}>{source.grade}</Tag>
+                <Tag tone={source.grade === "A" ? "accent" : undefined}>
+                  {gradeLabel(source.grade)}
+                </Tag>
               </li>
             ))}
           </ul>
         )}
       </section>
 
-      <p className="faint">
-        Rulebook ini menggambarkan isi katalog, bukan rekomendasi. Mesin agronomi belum
-        mengevaluasinya, dan tidak ada angka yang boleh dibaca sebagai keputusan tanam.
-      </p>
+      <Notice tone="info">
+        <span>
+          Data di atas adalah acuan standar varietas. Untuk memeriksa kecocokan terhadap kondisi
+          cuaca di lahan Anda, jalankan evaluasi di halaman <Link to="/rencana">Rencana Tanam</Link>
+          .
+        </span>
+      </Notice>
     </div>
   );
 }
 
-/**
- * The rulebook's stages as calendar dates.
- *
- * The date input starts at today in Asia/Jakarta — the same zone the API uses for
- * its climate labels — because a cycle boundary is a calendar day there, not in
- * whatever zone the laptop is set to. Re-requesting on each change is the point:
- * the projection is the server's arithmetic, and the browser only displays it.
- */
 function CycleProjection({
   id,
   cycleStart,
@@ -308,14 +361,13 @@ function CycleProjection({
   const startLabel = cycleStart === "sowing" ? "tanam benih" : "pindah tanam";
 
   return (
-    <section>
-      <h4>Proyeksi siklus</h4>
+    <section className="stack-tight">
+      <h4>Simulasi Perkiraan Tanggal Panen</h4>
       <p className="muted">
-        Tanggal {startLabel}. Tahap diletakkan pada durasi khas kultivar; panen tampil sebagai
-        rentang karena durasinya rentang.
+        Pilih rencana tanggal {startLabel} untuk melihat perkiraan tanggal tiap fase pertumbuhan.
       </p>
-      <div className="field">
-        <label htmlFor={`cycle-${id}`}>Tanggal {startLabel}</label>
+      <div className="field" style={{ maxWidth: 260 }}>
+        <label htmlFor={`cycle-${id}`}>Rencana tanggal {startLabel}</label>
         <input
           id={`cycle-${id}`}
           type="date"
@@ -324,14 +376,10 @@ function CycleProjection({
         />
       </div>
       {date === "" ? (
-        <p className="muted">Pilih tanggal untuk melihat proyeksi.</p>
+        <p className="muted">Pilih tanggal untuk melihat perkiraan jadwal.</p>
       ) : (
         <CycleTable id={id} date={date} />
       )}
-      <p className="faint">
-        Proyeksi tanggal, bukan rekomendasi: cuaca dan iklim pada fase ini belum dinilai, karena
-        grid provider belum tervalidasi (<Mono>OPEN-18</Mono>).
-      </p>
     </section>
   );
 }
@@ -339,7 +387,7 @@ function CycleProjection({
 function CycleTable({ id, date }: { readonly id: string; readonly date: string }) {
   const state = useAsync(`cycle:${id}:${date}`, () => api.cropCycle(id, date));
 
-  if (state.loading) return <div className="loading">Menghitung siklus…</div>;
+  if (state.loading) return <div className="loading">Menghitung jadwal fase…</div>;
   if (state.error !== null) return <ErrorNotice error={state.error} />;
   if (state.data === null) return null;
 
@@ -348,43 +396,45 @@ function CycleTable({ id, date }: { readonly id: string; readonly date: string }
   return (
     <>
       <p>
-        Panen: <strong>{cycle.harvest.typical}</strong>
+        Perkiraan panen utama: <strong>{cycle.harvest.typical}</strong>
         <span className="muted">
           {" "}
-          (rentang {cycle.harvest.earliest} – {cycle.harvest.latest}, {cycle.duration.min}–
+          (rentang {cycle.harvest.earliest} – {cycle.harvest.latest}, durasi {cycle.duration.min}–
           {cycle.duration.max} hari)
         </span>
       </p>
       {cycle.stages.length === 0 ? (
-        <p className="muted">Rulebook ini tidak menyatakan tahap pertumbuhan.</p>
+        <p className="muted">Tidak ada rincian fase untuk varietas ini.</p>
       ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Tahap</th>
-              <th className="numeric">Hari</th>
-              <th>Mulai</th>
-              <th>Selesai</th>
-              <th>Kritis</th>
-            </tr>
-          </thead>
-          <tbody>
-            {cycle.stages.map((stage) => (
-              <tr key={stage.stageId}>
-                <td>{stage.name}</td>
-                <td className="numeric">
-                  {stage.startDayOffset}–{stage.endDayOffset}
-                </td>
-                <td className="numeric">{stage.startDate}</td>
-                <td className="numeric">
-                  {stage.endDate}
-                  {stage.clipped ? <Tag>dipotong durasi</Tag> : null}
-                </td>
-                <td>{stage.isCritical ? <Tag tone="warn">kritis</Tag> : "—"}</td>
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Fase</th>
+                <th className="numeric">Hari</th>
+                <th>Mulai</th>
+                <th>Selesai</th>
+                <th>Prioritas</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {cycle.stages.map((stage) => (
+                <tr key={stage.stageId}>
+                  <td>{stage.name}</td>
+                  <td className="numeric">
+                    {stage.startDayOffset}–{stage.endDayOffset}
+                  </td>
+                  <td className="numeric">{stage.startDate}</td>
+                  <td className="numeric">
+                    {stage.endDate}
+                    {stage.clipped ? <Tag>Disesuaikan</Tag> : null}
+                  </td>
+                  <td>{stage.isCritical ? <Tag tone="warn">Fase kritis</Tag> : "Normal"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </>
   );

@@ -485,15 +485,15 @@ export function describeError(error: unknown): string {
   }
   switch (error.code) {
     case "GRID_NOT_FOUND":
-      return "Tidak ada grid produksi untuk provider/model ini. Registry hanya memuat grid sintetis sampai OPEN-18 selesai.";
+      return "Sumber data cuaca yang dipilih belum tersedia. Gunakan pengaturan sumber data bawaan (simulasi).";
     case "CELL_NOT_FOUND":
-      return "Titik tengah lahan berada di luar cakupan grid ini.";
+      return "Lokasi lahan berada di luar cakupan wilayah data cuaca yang tersedia.";
     case "FIELD_NOT_FOUND":
       return "Lahan tidak ditemukan, atau bukan milik akun ini.";
     case "CROP_NOT_FOUND":
-      return "Komoditas tidak ada di katalog.";
+      return "Komoditas tidak ada di panduan tanaman.";
     case "PROFILE_NOT_FOUND":
-      return "Versi profil tidak ditemukan.";
+      return "Data syarat tumbuh tanaman tidak ditemukan.";
     case "NOT_FOUND":
       return "Data yang diminta tidak ditemukan.";
     case "INVALID_TRANSITION":

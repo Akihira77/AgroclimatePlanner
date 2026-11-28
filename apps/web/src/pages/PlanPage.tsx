@@ -11,6 +11,7 @@ import type {
 import { useEffect, useState } from "react";
 
 import { ApiError, api } from "../api.js";
+import { IconCalendar, IconSparkles } from "../icons.js";
 import { Link } from "../router.js";
 import {
   Empty,
@@ -18,23 +19,27 @@ import {
   Loading,
   Mono,
   Notice,
+  PageGuide,
   Tag,
   dataClassLabel,
+  dimensionLabel,
+  dimensionStateLabel,
+  gradeLabel,
   irrigationLabel,
   monthLabel,
   plantingStatusLabel,
   plantingStatusTone,
+  severityLabel,
   suitabilityLabel,
   suitabilityTone,
+  translateEvaluationDetail,
 } from "../ui.js";
 import { useAsync } from "../useAsync.js";
 
 const BASELINE_HASH_PLACEHOLDER = "0".repeat(64);
 
-/**
- * Phase 7.5, 7.6 & 7.8: suitability evaluation, planting calendar & opportunities,
- * grounded AI briefing, and deterministic rulebook cycle projection.
- */
+type PlanTab = "evaluation" | "briefing" | "schedule";
+
 export function PlanPage() {
   const state = useAsync("plan-fields", async () => {
     const [fields, catalog, windows, plantings] = await Promise.all([
@@ -46,6 +51,7 @@ export function PlanPage() {
     return { fields, crops: catalog.crops, windows, plantings };
   });
 
+  const [tab, setTab] = useState<PlanTab>("evaluation");
   const [fieldId, setFieldId] = useState("");
   const [cropSlug, setCropSlug] = useState("");
   const [date, setDate] = useState(today);
@@ -85,11 +91,18 @@ export function PlanPage() {
         if (err instanceof ApiError && err.status === 404) return null;
         throw err;
       }),
+      api.getFieldAgronomy(field.id).catch(() => null),
     ]).then(
-      ([run, latestBriefing]) => {
+      ([run, latestBriefing, agronomy]) => {
         if (!alive) return;
         setSuitabilityRun(run);
         setBriefing(latestBriefing);
+        if (
+          agronomy?.irrigationAvailability !== null &&
+          agronomy?.irrigationAvailability !== undefined
+        ) {
+          setIrrigation(agronomy.irrigationAvailability);
+        }
         setSuitabilityLoading(false);
       },
       (err: unknown) => {
@@ -109,9 +122,7 @@ export function PlanPage() {
 
   if (crops.length === 0) {
     return (
-      <Empty>
-        Katalog kosong. Jalankan <Mono>pnpm db:seed:catalog</Mono> lebih dulu.
-      </Empty>
+      <Empty>Data panduan tanaman belum tersedia saat ini. Silakan periksa kembali nanti.</Empty>
     );
   }
 
@@ -138,7 +149,7 @@ export function PlanPage() {
         .find((entry) => entry.version !== undefined);
 
       if (published?.version === undefined) {
-        throw new Error(`Belum ada versi profil terbit untuk ${crop.nameId}.`);
+        throw new Error(`Belum ada panduan aktif untuk komoditas ${crop.nameId}.`);
       }
 
       const endDate = addDaysIso(date, published.cultivar.durationDaysTypical - 1);
@@ -199,6 +210,7 @@ export function PlanPage() {
       });
 
       setSuitabilityRun(result);
+      setTab("evaluation");
       state.reload();
     } catch (err) {
       setActionError(err);
@@ -227,20 +239,46 @@ export function PlanPage() {
 
   return (
     <div className="stack">
-      <p className="lede">
-        Evaluasi kesesuaian tanam berbasis aturan deterministik, jelajahi kalender &amp; peluang
-        tanam, serta hasilkan briefing AI yang terikat pada segmen bukti.
-      </p>
+      <PageGuide
+        storageKey="plan"
+        title="Panduan Rencana Tanam"
+        summary="Uji apakah tanggal tanam dan komoditas pilihan Anda sesuai dengan kondisi pengairan lahan dan pola cuaca."
+        steps={[
+          {
+            title: "1. Pilih Lahan & Komoditas",
+            detail: "Tentukan lahan, jenis tanaman, rencana tanggal mulai, dan kondisi pengairan.",
+          },
+          {
+            title: "2. Jalankan Evaluasi Kesesuaian",
+            detail:
+              "Klik Evaluasi kesesuaian untuk melihat status kecocokan, alasan, dan kalender tanam.",
+          },
+          {
+            title: "3. Tanya Asisten AI",
+            detail:
+              "Buka tab Asisten AI untuk meminta ringkasan risiko dan penjelasan dalam bahasa sederhana.",
+          },
+        ]}
+        glossary={[
+          { term: "Sesuai", meaning: "Kondisi iklim & air mendukung tanam" },
+          { term: "Sesuai bersyarat", meaning: "Dapat ditanam dengan catatan/pengairan tambahan" },
+          { term: "Kurang sesuai", meaning: "Risiko tinggi terhadap cuaca/kekeringan" },
+          { term: "Data belum cukup", meaning: "Sebagian aspek belum memiliki data lengkap" },
+        ]}
+      />
 
       {actionError !== null ? <ErrorNotice error={actionError} /> : null}
 
       <form className="panel" onSubmit={(event) => event.preventDefault()}>
+        <div className="panel-head">
+          <h3>Parameter Evaluasi Tanam</h3>
+        </div>
         <div className="panel-body form-grid">
           <div className="field">
-            <label htmlFor="plan-field">Lahan</label>
+            <label htmlFor="plan-field">Pilih Lahan</label>
             {fields.length === 0 ? (
               <p className="muted">
-                Belum ada lahan. <Link to="/lahan">Buat lahan</Link> dulu untuk evaluasi.
+                Belum ada lahan. <Link to="/lahan">Buat lahan</Link> terlebih dahulu.
               </p>
             ) : (
               <select
@@ -273,7 +311,7 @@ export function PlanPage() {
           </div>
 
           <div className="field">
-            <label htmlFor="plan-date">Tanggal mulai tanam</label>
+            <label htmlFor="plan-date">Rencana Tanggal Mulai Tanam</label>
             <input
               id="plan-date"
               type="date"
@@ -283,7 +321,7 @@ export function PlanPage() {
           </div>
 
           <div className="field">
-            <label htmlFor="plan-irrigation">Ketersediaan irigasi</label>
+            <label htmlFor="plan-irrigation">Ketersediaan Pengairan</label>
             <select
               id="plan-irrigation"
               value={irrigation}
@@ -294,17 +332,18 @@ export function PlanPage() {
               <option value="rainfed">{irrigationLabel("rainfed")}</option>
               <option value="unknown">{irrigationLabel("unknown")}</option>
             </select>
+            <span className="hint">Otomatis mengikuti profil agronomi lahan jika sudah diisi.</span>
           </div>
 
           <div className="field">
-            <label htmlFor="plan-basis">Basis bukti utama</label>
+            <label htmlFor="plan-basis">Sumber Data Cuaca</label>
             <select
               id="plan-basis"
               value={basis}
               onChange={(e) => setBasis(e.target.value as SingleValueEvaluationBasis)}
             >
-              <option value="climatology">Normal iklim (klimatologi)</option>
-              <option value="daily">Prakiraan harian</option>
+              <option value="climatology">Pola iklim rata-rata (jangka panjang)</option>
+              <option value="daily">Prakiraan cuaca harian</option>
             </select>
           </div>
 
@@ -315,117 +354,155 @@ export function PlanPage() {
               disabled={actionBusy || field === undefined}
               onClick={() => void runEvaluation()}
             >
-              Evaluasi kesesuaian
+              {actionBusy ? "Mengevaluasi…" : "Evaluasi kesesuaian"}
             </button>
           </div>
         </div>
       </form>
 
-      {field !== undefined ? (
-        <section className="section">
-          <div className="section-head">
-            <h2>Hasil evaluasi kesesuaian · {field.name}</h2>
-            {suitabilityRun !== null ? (
-              <Tag tone="accent">Run {suitabilityRun.id.slice(0, 8)}</Tag>
-            ) : null}
-          </div>
+      <div className="tabs" role="tablist" aria-label="Bagian Rencana Tanam">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "evaluation"}
+          className={`tab-btn${tab === "evaluation" ? " is-active" : ""}`}
+          onClick={() => setTab("evaluation")}
+        >
+          <IconCalendar size={16} />
+          <span>Evaluasi &amp; Kalender</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "briefing"}
+          className={`tab-btn${tab === "briefing" ? " is-active" : ""}`}
+          onClick={() => setTab("briefing")}
+        >
+          <IconSparkles size={16} />
+          <span>Asisten AI</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "schedule"}
+          className={`tab-btn${tab === "schedule" ? " is-active" : ""}`}
+          onClick={() => setTab("schedule")}
+        >
+          <span>Jadwal Fase Tanam</span>
+        </button>
+      </div>
 
-          {suitabilityLoading ? (
-            <Loading label="Memuat evaluasi terakhir…" />
-          ) : suitabilityRun === null ? (
-            <Empty>
-              Belum ada evaluasi tersimpan untuk {field.name}. Klik &ldquo;Evaluasi
-              kesesuaian&rdquo; di atas untuk menjalankan mesin agronomi.
-            </Empty>
-          ) : (
-            <div className="panel">
-              <div className="panel-body stack">
-                <div className="row">
-                  {suitabilityRun.maxAchievableLevel !== null ? (
-                    <Tag tone="accent">Grade maks {suitabilityRun.maxAchievableLevel}</Tag>
-                  ) : (
-                    <Tag>Grade tidak tersedia</Tag>
-                  )}
-                  <Tag>{irrigationLabel(suitabilityRun.fieldSnapshot.irrigationAvailability)}</Tag>
-                  {suitabilityRun.dimensionCoverage.map((d) => (
-                    <Tag key={d.dimension} tone={d.state === "known" ? "accent" : "warn"}>
-                      {d.dimension}: {d.state}
-                    </Tag>
-                  ))}
-                </div>
+      {tab === "evaluation" ? (
+        <div className="stack">
+          {field !== undefined ? (
+            <section className="section">
+              <div className="section-head">
+                <h2>Hasil Evaluasi Kesesuaian · {field.name}</h2>
+                {suitabilityRun !== null ? (
+                  <Tag tone="accent">
+                    {irrigationLabel(suitabilityRun.fieldSnapshot.irrigationAvailability)}
+                  </Tag>
+                ) : null}
+              </div>
 
-                {suitabilityRun.plantingWindows.map((w) => (
-                  <div key={w.id} className="panel">
-                    <div className="panel-head">
-                      <strong>
-                        {w.windowStart} s.d. {w.windowEnd}
-                      </strong>
-                      <div className="row">
-                        <Tag tone={suitabilityTone(w.suitability)}>
-                          {suitabilityLabel(w.suitability)}
-                        </Tag>
-                        <Tag>{dataClassLabel(w.weakestEvidenceClass)}</Tag>
-                        {w.mixedEvidence ? <Tag tone="warn">Bukti campuran</Tag> : null}
-                      </div>
-                    </div>
-                    <div className="panel-body stack-tight">
-                      {w.explanations.length > 0 ? (
-                        <ul className="stack-tight">
-                          {w.explanations.map((exp, idx) => (
-                            <li key={idx}>
-                              {typeof exp["detail"] === "string"
-                                ? exp["detail"]
-                                : JSON.stringify(exp)}
-                            </li>
-                          ))}
-                        </ul>
+              {suitabilityLoading ? (
+                <Loading label="Memuat hasil evaluasi terakhir…" />
+              ) : suitabilityRun === null ? (
+                <Empty>
+                  Belum ada evaluasi tersimpan untuk {field.name}. Klik &ldquo;Evaluasi
+                  kesesuaian&rdquo; di atas untuk memulai.
+                </Empty>
+              ) : (
+                <div className="panel">
+                  <div className="panel-body stack">
+                    <div className="row">
+                      {suitabilityRun.maxAchievableLevel !== null ? (
+                        <Tag tone="accent">{gradeLabel(suitabilityRun.maxAchievableLevel)}</Tag>
                       ) : (
-                        <p className="muted">Tidak ada catatan alasan tambahan.</p>
+                        <Tag>Tingkat rujukan tidak tersedia</Tag>
                       )}
+                      <Tag>
+                        Pengairan:{" "}
+                        {irrigationLabel(suitabilityRun.fieldSnapshot.irrigationAvailability)}
+                      </Tag>
+                      {suitabilityRun.dimensionCoverage.map((d) => (
+                        <Tag key={d.dimension} tone={d.state === "known" ? "accent" : "warn"}>
+                          {dimensionLabel(d.dimension)}: {dimensionStateLabel(d.state)}
+                        </Tag>
+                      ))}
                     </div>
+
+                    {suitabilityRun.plantingWindows.map((w) => (
+                      <div key={w.id} className="panel">
+                        <div className="panel-head">
+                          <strong>
+                            Jendela Tanam: {w.windowStart} s.d. {w.windowEnd}
+                          </strong>
+                          <div className="row">
+                            <Tag tone={suitabilityTone(w.suitability)}>
+                              {suitabilityLabel(w.suitability)}
+                            </Tag>
+                            <Tag>{dataClassLabel(w.weakestEvidenceClass)}</Tag>
+                            {w.mixedEvidence ? <Tag tone="warn">Sumber data campuran</Tag> : null}
+                          </div>
+                        </div>
+                        <div className="panel-body stack-tight">
+                          {w.explanations.length > 0 ? (
+                            <ul className="stack-tight">
+                              {w.explanations.map((exp, idx) => (
+                                <li key={idx}>
+                                  {typeof exp["detail"] === "string"
+                                    ? translateEvaluationDetail(exp["detail"])
+                                    : JSON.stringify(exp)}
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="muted">Tidak ada catatan alasan tambahan.</p>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                </div>
+              )}
+            </section>
+          ) : null}
+
+          <section className="section">
+            <div className="section-head">
+              <h2>Kalender &amp; Peluang Tanam</h2>
+              <div className="row">
+                <label htmlFor="filter-verdict" className="muted">
+                  Saring status:
+                </label>
+                <select
+                  id="filter-verdict"
+                  value={verdictFilter}
+                  onChange={(e) => setVerdictFilter(e.target.value as "all" | SuitabilityVerdict)}
+                >
+                  <option value="all">Semua status</option>
+                  <option value="suitable">Sesuai</option>
+                  <option value="conditional">Sesuai bersyarat</option>
+                  <option value="unsuitable">Kurang sesuai</option>
+                  <option value="insufficient_data">Data belum cukup</option>
+                </select>
               </div>
             </div>
-          )}
-        </section>
+
+            <CalendarView windows={filteredWindows} plantings={fieldPlantings} />
+          </section>
+        </div>
       ) : null}
 
-      <section className="section">
-        <div className="section-head">
-          <h2>Kalender &amp; peluang tanam</h2>
-          <div className="row">
-            <label htmlFor="filter-verdict" className="muted">
-              Filter status:
-            </label>
-            <select
-              id="filter-verdict"
-              value={verdictFilter}
-              onChange={(e) => setVerdictFilter(e.target.value as "all" | SuitabilityVerdict)}
-            >
-              <option value="all">Semua status</option>
-              <option value="suitable">Sesuai</option>
-              <option value="conditional">Bersyarat</option>
-              <option value="unsuitable">Tidak sesuai</option>
-              <option value="insufficient_data">Data tidak cukup</option>
-            </select>
-          </div>
-        </div>
-
-        <CalendarView windows={filteredWindows} plantings={fieldPlantings} />
-      </section>
-
-      {field !== undefined ? (
+      {tab === "briefing" && field !== undefined ? (
         <section className="section">
           <div className="section-head">
-            <h2>Briefing analis AI · {field.name}</h2>
+            <h2>Ringkasan Asisten AI · {field.name}</h2>
             {briefing !== null ? (
-              <div className="row">
-                <Tag tone={briefing.body.sourceMode === "llm" ? "accent" : "warn"}>
-                  {briefing.body.sourceMode === "llm" ? "Model AI" : "Fallback deterministik"}
-                </Tag>
-                <Tag>{briefing.narrationStatus}</Tag>
-              </div>
+              <Tag tone={briefing.body.sourceMode === "llm" ? "accent" : "warn"}>
+                {briefing.body.sourceMode === "llm" ? "Analisis AI" : "Ringkasan Otomatis"}
+              </Tag>
             ) : null}
           </div>
 
@@ -433,11 +510,13 @@ export function PlanPage() {
             <div className="panel-body stack">
               <div className="form-grid">
                 <div className="field">
-                  <label htmlFor="briefing-question">Pertanyaan ke analis AI (opsional)</label>
+                  <label htmlFor="briefing-question">
+                    Tanyakan sesuatu tentang rencana ini (opsional)
+                  </label>
                   <input
                     id="briefing-question"
                     maxLength={500}
-                    placeholder="Contoh: Apa risiko utama bila menanam bulan ini?"
+                    placeholder="Contoh: Apa risiko utama bila menanam pada tanggal ini?"
                     value={briefingQuestion}
                     onChange={(e) => setBriefingQuestion(e.target.value)}
                   />
@@ -449,7 +528,7 @@ export function PlanPage() {
                     disabled={actionBusy || suitabilityRun === null}
                     onClick={() => void handleGenerateBriefing(false)}
                   >
-                    Buat briefing
+                    Buat Ringkasan Analisis
                   </button>
                   <button
                     type="button"
@@ -457,19 +536,20 @@ export function PlanPage() {
                     disabled={actionBusy || suitabilityRun === null}
                     onClick={() => void handleGenerateBriefing(true)}
                   >
-                    Buat ulang
+                    Perbarui Analisis
                   </button>
                 </div>
               </div>
 
               {suitabilityRun === null ? (
                 <Notice tone="warn">
-                  Jalankan evaluasi kesesuaian terlebih dahulu sebelum membuat briefing AI.
+                  Jalankan <strong>Evaluasi kesesuaian</strong> terlebih dahulu sebelum meminta
+                  ringkasan Asisten AI.
                 </Notice>
               ) : briefing === null ? (
                 <p className="muted">
-                  Belum ada briefing AI untuk lahan ini. Klik &ldquo;Buat briefing&rdquo; untuk
-                  membuat ringkasan berbasis bukti.
+                  Belum ada ringkasan untuk lahan ini. Klik &ldquo;Buat Ringkasan Analisis&rdquo;
+                  untuk mendapatkan penjelasan cuaca dan risikonya.
                 </p>
               ) : (
                 <BriefingCard briefing={briefing} />
@@ -479,12 +559,12 @@ export function PlanPage() {
         </section>
       ) : null}
 
-      {crop === undefined ? null : (
+      {tab === "schedule" && crop !== undefined ? (
         <section className="section">
-          <h2>Proyeksi siklus rulebook</h2>
+          <h2>Jadwal Fase Tanam · {crop.nameId}</h2>
           <CropPlan slug={crop.slug} date={date} fieldName={field?.name} />
         </section>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -515,8 +595,10 @@ function CalendarView({
   if (sortedMonths.length === 0) {
     return (
       <Empty>
-        Belum ada jendela tanam aktif atau catatan penanaman untuk filter ini. Evaluasi lahan atau
-        catat penanaman di <Link to="/aktivitas">Aktivitas</Link>.
+        <p>
+          Belum ada jendela tanam atau catatan penanaman untuk saringan ini. Jalankan evaluasi di
+          atas atau catat penanaman di <Link to="/aktivitas">Aktivitas &amp; Panen</Link>.
+        </p>
       </Empty>
     );
   }
@@ -537,9 +619,7 @@ function CalendarView({
                   </span>
                   <Tag tone={suitabilityTone(w.suitability)}>{suitabilityLabel(w.suitability)}</Tag>
                 </div>
-                <span className="muted">
-                  Basis: {w.evaluationBasis} · {dataClassLabel(w.weakestEvidenceClass)}
-                </span>
+                <span className="muted">{dataClassLabel(w.weakestEvidenceClass)}</span>
               </div>
             ))}
             {bucket.plantings.map((p) => (
@@ -567,26 +647,26 @@ function BriefingCard({ briefing }: { readonly briefing: AiBriefing }) {
   return (
     <div className="stack">
       <div className="briefing-section">
-        <h4>Ringkasan</h4>
+        <h4>Ringkasan Utama</h4>
         <p>{body.summary}</p>
       </div>
       <div className="briefing-section">
-        <h4>Interpretasi cuaca &amp; iklim</h4>
+        <h4>Kondisi Cuaca &amp; Iklim</h4>
         <p>{body.weatherInterpretation}</p>
       </div>
       <div className="briefing-section">
-        <h4>Penjelasan kesesuaian deterministik</h4>
+        <h4>Alasan Penilaian</h4>
         <p>{body.suitabilityExplanation}</p>
       </div>
       {body.questionAnswer !== null ? (
         <div className="briefing-section">
-          <h4>Jawaban pertanyaan</h4>
+          <h4>Jawaban Pertanyaan Anda</h4>
           <p>{body.questionAnswer}</p>
         </div>
       ) : null}
       {body.riskHighlights.length > 0 ? (
         <div className="briefing-section">
-          <h4>Sorotan risiko</h4>
+          <h4>Hal yang Perlu Diwaspadai</h4>
           <ul className="stack-tight">
             {body.riskHighlights.map((r, i) => (
               <li key={i}>
@@ -595,7 +675,7 @@ function BriefingCard({ briefing }: { readonly briefing: AiBriefing }) {
                     r.severity === "high" ? "danger" : r.severity === "warning" ? "warn" : "neutral"
                   }
                 >
-                  {r.severity}
+                  {severityLabel(r.severity)}
                 </Tag>{" "}
                 {r.message}
               </li>
@@ -605,7 +685,7 @@ function BriefingCard({ briefing }: { readonly briefing: AiBriefing }) {
       ) : null}
       {body.missingDataCaveats.length > 0 ? (
         <div className="briefing-section">
-          <h4>Catatan kekurangan data</h4>
+          <h4>Catatan Kelengkapan Data</h4>
           <ul className="stack-tight">
             {body.missingDataCaveats.map((c, i) => (
               <li key={i} className="muted">
@@ -615,26 +695,25 @@ function BriefingCard({ briefing }: { readonly briefing: AiBriefing }) {
           </ul>
         </div>
       ) : null}
-      <div className="briefing-section">
-        <h4>Segmen bukti yang dirujuk</h4>
-        <div className="segment-chips">
-          {body.evidenceSegmentIds.map((id) => (
-            <Mono key={id}>{id}</Mono>
-          ))}
+
+      <details className="tech-details">
+        <summary>Lihat detail teknis &amp; referensi data</summary>
+        <div className="stack-tight">
+          <div className="segment-chips">
+            {body.evidenceSegmentIds.map((id) => (
+              <Mono key={id}>{id}</Mono>
+            ))}
+          </div>
+          <p className="faint">
+            Model: {briefing.modelId} · Versi prompt: {briefing.promptVersion} · Snapshot:{" "}
+            {briefing.inputSnapshotHash.slice(0, 12)}
+          </p>
         </div>
-      </div>
-      <p className="faint">
-        Model: {briefing.modelId} · Prompt: {briefing.promptVersion} · Snapshot:{" "}
-        {briefing.inputSnapshotHash.slice(0, 12)}
-      </p>
+      </details>
     </div>
   );
 }
 
-/**
- * One crop's published profiles, newest first. A cultivar with no published version
- * is shown as unavailable rather than hidden: an empty catalog row is information.
- */
 function CropPlan({
   slug,
   date,
@@ -658,21 +737,21 @@ function CropPlan({
   if (options.length === 0) {
     return (
       <Empty>
-        Belum ada rulebook terbit untuk {state.data.nameId}. Katalog tidak dapat membuat jadwal
-        tanpa ambang yang disahkan.
+        Belum ada panduan aktif untuk {state.data.nameId} sehingga jadwal belum bisa dihitung.
       </Empty>
     );
   }
 
   if (date === "") {
-    return <p className="muted">Pilih tanggal mulai untuk melihat kalender.</p>;
+    return <p className="muted">Pilih rencana tanggal mulai untuk melihat jadwal fase.</p>;
   }
 
   return (
     <div className="stack">
       {fieldName === undefined ? null : (
         <p className="muted">
-          Proyeksi rulebook untuk <strong>{fieldName}</strong>.
+          Perkiraan jadwal fase untuk lahan <strong>{fieldName}</strong> bila mulai tanam pada{" "}
+          <strong>{date}</strong>.
         </p>
       )}
       {options.map(({ cultivar, version }) => (
@@ -680,7 +759,7 @@ function CropPlan({
           <div className="panel-body stack">
             <div className="section-head">
               <h3>{cultivar.name}</h3>
-              <Tag>{version.ruleVersion}</Tag>
+              <Tag>Panduan v{version.ruleVersion}</Tag>
             </div>
             <PlanTimeline profileVersionId={version.id} cultivarName={cultivar.name} date={date} />
           </div>
@@ -703,7 +782,7 @@ function PlanTimeline({
     api.cropCycle(profileVersionId, date),
   );
 
-  if (state.loading) return <div className="loading">Menghitung siklus…</div>;
+  if (state.loading) return <div className="loading">Menghitung jadwal fase…</div>;
   if (state.error !== null) return <ErrorNotice error={state.error} />;
   if (state.data === null) return null;
 
@@ -713,27 +792,25 @@ function PlanTimeline({
   return (
     <>
       <p>
-        Panen <strong>{cycle.harvest.typical}</strong>
+        Perkiraan panen utama: <strong>{cycle.harvest.typical}</strong>
         <span className="muted">
           {" "}
-          (rentang {cycle.harvest.earliest} – {cycle.harvest.latest}, {cycle.duration.min}–
+          (rentang {cycle.harvest.earliest} – {cycle.harvest.latest}, durasi {cycle.duration.min}–
           {cycle.duration.max} hari)
         </span>
       </p>
 
-      <div className="panel">
-        <div className="panel-body">{position}</div>
-      </div>
+      <Notice tone="info">{position}</Notice>
 
       <div className="table-wrap">
         <table className="table">
           <thead>
             <tr>
-              <th>Tahap</th>
-              <th className="numeric">Hari</th>
+              <th>Fase Pertumbuhan</th>
+              <th className="numeric">Hari ke-</th>
               <th>Mulai</th>
               <th>Selesai</th>
-              <th>Status</th>
+              <th>Status Saat Ini</th>
             </tr>
           </thead>
           <tbody>
@@ -744,7 +821,7 @@ function PlanTimeline({
                   {stage.isCritical ? (
                     <>
                       {" "}
-                      <Tag tone="warn">kritis</Tag>
+                      <Tag tone="warn">Fase kritis</Tag>
                     </>
                   ) : null}
                 </td>
@@ -754,7 +831,7 @@ function PlanTimeline({
                 <td className="numeric">{stage.startDate}</td>
                 <td className="numeric">
                   {stage.endDate}
-                  {stage.clipped ? <Tag>dipotong durasi</Tag> : null}
+                  {stage.clipped ? <Tag>Disesuaikan</Tag> : null}
                 </td>
                 <td className="muted">{stageStatus(stage)}</td>
               </tr>
@@ -764,8 +841,8 @@ function PlanTimeline({
       </div>
 
       <p className="faint">
-        {cultivarName} diproyeksikan pada durasi khas {cycle.duration.typical} hari. Tanggal bukan
-        jaminan: cuaca dan iklim belum dinilai oleh proyeksi kalender ini saja.
+        Jadwal untuk {cultivarName} dihitung berdasarkan durasi rata-rata {cycle.duration.typical}{" "}
+        hari. Untuk menilai risiko cuaca, gunakan tab Evaluasi &amp; Kalender.
       </p>
     </>
   );
@@ -779,7 +856,7 @@ function locate(cycle: CropCycle) {
     const days = daysBetween(now, start);
     return (
       <span>
-        Belum mulai: {days} hari menuju tanggal mulai {start}.
+        Belum dimulai: {days} hari lagi menuju tanggal tanam {start}.
       </span>
     );
   }
@@ -792,29 +869,25 @@ function locate(cycle: CropCycle) {
   if (stage !== undefined) {
     return (
       <span>
-        Hari ini hari ke-{offset + 1} dari {cycle.duration.typical}. Fase{" "}
+        Hari ini hari ke-{offset + 1} dari {cycle.duration.typical}. Sedang berada di fase{" "}
         <strong>{stage.name}</strong>
-        {stage.isCritical ? " (kritis)" : ""}, berakhir {stage.endDate}.
+        {stage.isCritical ? " (fase kritis)" : ""}, berakhir pada {stage.endDate}.
       </span>
     );
   }
 
   if (now > cycle.harvest.latest) {
-    return <span>Siklus pada rencana ini sudah lewat masa panen.</span>;
+    return <span>Siklus pada jadwal ini sudah melewati masa panen.</span>;
   }
 
-  return (
-    <span>
-      Hari ini hari ke-{offset + 1}. Tidak ada tahap yang dinyatakan rulebook untuk hari ini.
-    </span>
-  );
+  return <span>Hari ini hari ke-{offset + 1}.</span>;
 }
 
 function stageStatus(stage: CropCycle["stages"][number]): string {
   const todayDate = today();
-  if (todayDate < stage.startDate) return "belum";
-  if (todayDate > stage.endDate) return "selesai";
-  return "berjalan";
+  if (todayDate < stage.startDate) return "Belum mulai";
+  if (todayDate > stage.endDate) return "Selesai";
+  return "Sedang berjalan";
 }
 
 function today(): string {
