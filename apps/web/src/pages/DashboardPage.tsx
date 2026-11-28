@@ -138,7 +138,7 @@ export function DashboardPage() {
                       </td>
                       <td className="muted">{farm.region ?? "Belum diisi"}</td>
                       <td className="numeric">{count}</td>
-                      <td className="muted numeric">{farm.createdAt.slice(0, 10)}</td>
+                      <td className="muted nowrap">{farm.createdAt.slice(0, 10)}</td>
                     </tr>
                   );
                 })}

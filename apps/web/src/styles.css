@@ -336,7 +336,7 @@ a {
 }
 
 .topbar-inner {
-  max-width: 1120px;
+  width: 100%;
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
@@ -358,7 +358,6 @@ a {
 
 .content {
   width: 100%;
-  max-width: 1120px;
   padding: var(--space-5) var(--space-6) var(--space-7);
 }
 

@@ -711,7 +711,7 @@ export function ActivitiesPage() {
                           <tbody>
                             {harvestState.items.map((h) => (
                               <tr key={h.id}>
-                                <td className="numeric">{h.harvestedAt}</td>
+                                <td className="nowrap">{h.harvestedAt}</td>
                                 <td className="numeric">{h.yieldKg.toLocaleString("id-ID")}</td>
                                 <td className="muted">{h.notes ?? "—"}</td>
                               </tr>
@@ -843,7 +843,7 @@ export function ActivitiesPage() {
                   <tbody>
                     {observations.map((obs) => (
                       <tr key={obs.id}>
-                        <td className="numeric muted">
+                        <td className="nowrap muted">
                           {obs.observedAt.slice(0, 16).replace("T", " ")}
                         </td>
                         <td>{observationKindLabel(obs.kind)}</td>

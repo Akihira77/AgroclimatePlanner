@@ -383,7 +383,7 @@ function CycleTable({ id, date }: { readonly id: string; readonly date: string }
         <p className="muted">Tidak ada rincian fase untuk varietas ini.</p>
       ) : (
         <div className="table-wrap">
-          <table className="table">
+          <table className="table table-cards">
             <thead>
               <tr>
                 <th>Fase</th>
@@ -396,16 +396,27 @@ function CycleTable({ id, date }: { readonly id: string; readonly date: string }
             <tbody>
               {cycle.stages.map((stage) => (
                 <tr key={stage.stageId}>
-                  <td>{stage.name}</td>
-                  <td className="numeric">
+                  <td data-label="Fase">
+                    {stage.name.charAt(0).toUpperCase() + stage.name.slice(1)}
+                  </td>
+                  <td data-label="Hari" className="numeric nowrap">
                     {stage.startDayOffset}–{stage.endDayOffset}
                   </td>
-                  <td className="numeric">{stage.startDate}</td>
-                  <td className="numeric">
-                    {stage.endDate}
-                    {stage.clipped ? <Tag>Disesuaikan</Tag> : null}
+                  <td data-label="Mulai" className="nowrap">
+                    {stage.startDate}
                   </td>
-                  <td>{stage.isCritical ? <Tag tone="warn">Fase kritis</Tag> : "Normal"}</td>
+                  <td data-label="Selesai" className="nowrap">
+                    {stage.endDate}
+                    {stage.clipped ? (
+                      <>
+                        {" "}
+                        <Tag>Disesuaikan</Tag>
+                      </>
+                    ) : null}
+                  </td>
+                  <td data-label="Prioritas">
+                    {stage.isCritical ? <Tag tone="warn">Fase kritis</Tag> : "Normal"}
+                  </td>
                 </tr>
               ))}
             </tbody>
