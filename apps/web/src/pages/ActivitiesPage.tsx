@@ -10,15 +10,19 @@ import type {
 import { useEffect, useState } from "react";
 
 import { api } from "../api.js";
+import { CustomSelect } from "../components/CustomSelect.js";
+import { DatePicker } from "../components/DatePicker.js";
 import { IconClipboard, IconCloud } from "../icons.js";
 import { Link } from "../router.js";
 import {
   Empty,
   ErrorNotice,
+  FieldLabel,
   Loading,
   Notice,
   PageGuide,
   Tag,
+  notifyDataChanged,
   observationKindLabel,
   plantingStatusLabel,
   plantingStatusTone,
@@ -180,6 +184,7 @@ export function ActivitiesPage() {
         areaPlantedHa: area,
       });
       setSavedNotice("Catatan penanaman baru berhasil disimpan.");
+      notifyDataChanged();
       state.reload();
     } catch (failure) {
       setActionError(failure);
@@ -195,6 +200,7 @@ export function ActivitiesPage() {
     try {
       await api.updatePlantingStatus(plantingId, nextStatus);
       setSavedNotice(`Status penanaman diubah menjadi "${plantingStatusLabel(nextStatus)}".`);
+      notifyDataChanged();
       state.reload();
       if (activeHarvestPlanting?.id === plantingId) {
         setActiveHarvestPlanting((prev) =>
@@ -230,6 +236,7 @@ export function ActivitiesPage() {
       const updated = await api.listHarvests(activeHarvestPlanting.id);
       setHarvestState({ items: updated.data, meta: updated.meta });
       setSavedNotice("Catatan hasil panen berhasil ditambahkan.");
+      notifyDataChanged();
       state.reload();
     } catch (failure) {
       setActionError(failure);
@@ -334,85 +341,74 @@ export function ActivitiesPage() {
             <form className="panel" onSubmit={submitPlanting}>
               <div className="panel-body form-grid">
                 <div className="field">
-                  <label htmlFor="act-field">Lahan</label>
-                  <select
+                  <FieldLabel htmlFor="act-field" label="Lahan" />
+                  <CustomSelect
                     id="act-field"
                     value={activeField?.id ?? ""}
-                    onChange={(e) => {
-                      setSelectedFieldId(e.target.value);
-                      const found = fields.find((f) => f.id === e.target.value);
+                    onChange={(val) => {
+                      setSelectedFieldId(val);
+                      const found = fields.find((f) => f.id === val);
                       if (found !== undefined) setAreaPlantedHa(found.areaHa.toFixed(2));
                     }}
-                  >
-                    {fields.map((f) => (
-                      <option key={f.id} value={f.id}>
-                        {f.name} · {f.areaHa.toFixed(2)} ha
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="field">
-                  <label htmlFor="act-crop">Komoditas</label>
-                  <select
-                    id="act-crop"
-                    value={activeCrop?.slug ?? ""}
-                    onChange={(e) => setSelectedCropSlug(e.target.value)}
-                  >
-                    {crops.map((c) => (
-                      <option key={c.slug} value={c.slug}>
-                        {c.nameId}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="field">
-                  <label htmlFor="act-cultivar">Varietas / Kultivar</label>
-                  <select
-                    id="act-cultivar"
-                    value={selectedCultivar?.id ?? ""}
-                    onChange={(e) => {
-                      setSelectedCultivarId(e.target.value);
-                      const found = cultivars.find((c) => c.id === e.target.value);
-                      if (found !== undefined) setCycleStartUsed(found.cycleStart);
-                    }}
-                  >
-                    {cultivars.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} ({c.durationDaysTypical} hr)
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="field">
-                  <label htmlFor="act-planted-at">Tanggal Tanam</label>
-                  <input
-                    id="act-planted-at"
-                    type="date"
-                    required
-                    value={plantedAt}
-                    onChange={(e) => setPlantedAt(e.target.value)}
+                    options={fields.map((f) => ({
+                      value: f.id,
+                      label: `${f.name} · ${f.areaHa.toFixed(2)} ha`,
+                    }))}
                   />
                 </div>
 
                 <div className="field">
-                  <label htmlFor="act-cycle-start">Cara Mulai Tanam</label>
-                  <select
-                    id="act-cycle-start"
-                    value={cycleStartUsed}
-                    onChange={(e) =>
-                      setCycleStartUsed(e.target.value === "sowing" ? "sowing" : "transplant")
-                    }
-                  >
-                    <option value="transplant">Pindah tanam (bibit dari semai)</option>
-                    <option value="sowing">Tanam benih langsung</option>
-                  </select>
+                  <FieldLabel htmlFor="act-crop" label="Komoditas" />
+                  <CustomSelect
+                    id="act-crop"
+                    value={activeCrop?.slug ?? ""}
+                    onChange={setSelectedCropSlug}
+                    options={crops.map((c) => ({
+                      value: c.slug,
+                      label: c.nameId,
+                    }))}
+                  />
                 </div>
 
                 <div className="field">
-                  <label htmlFor="act-area">Luas Tanam (ha)</label>
+                  <FieldLabel htmlFor="act-cultivar" label="Varietas / Kultivar" />
+                  <CustomSelect
+                    id="act-cultivar"
+                    value={selectedCultivar?.id ?? ""}
+                    onChange={(val) => {
+                      setSelectedCultivarId(val);
+                      const found = cultivars.find((c) => c.id === val);
+                      if (found !== undefined) setCycleStartUsed(found.cycleStart);
+                    }}
+                    options={cultivars.map((c) => ({
+                      value: c.id,
+                      label: `${c.name} (${c.durationDaysTypical} hr)`,
+                    }))}
+                  />
+                </div>
+
+                <div className="field">
+                  <FieldLabel htmlFor="act-planted-at" label="Tanggal Tanam" />
+                  <DatePicker id="act-planted-at" value={plantedAt} onChange={setPlantedAt} />
+                </div>
+
+                <div className="field">
+                  <FieldLabel htmlFor="act-cycle-start" label="Cara Mulai Tanam" />
+                  <CustomSelect
+                    id="act-cycle-start"
+                    value={cycleStartUsed}
+                    onChange={(val) =>
+                      setCycleStartUsed(val === "sowing" ? "sowing" : "transplant")
+                    }
+                    options={[
+                      { value: "transplant", label: "Pindah tanam (bibit dari semai)" },
+                      { value: "sowing", label: "Tanam benih langsung" },
+                    ]}
+                  />
+                </div>
+
+                <div className="field">
+                  <FieldLabel htmlFor="act-area" label="Luas Tanam (ha)" />
                   <input
                     id="act-area"
                     type="number"
@@ -543,17 +539,11 @@ export function ActivitiesPage() {
                 <div className="panel-body stack">
                   <form className="form-grid" onSubmit={submitHarvest}>
                     <div className="field">
-                      <label htmlFor="harv-date">Tanggal Panen</label>
-                      <input
-                        id="harv-date"
-                        type="date"
-                        required
-                        value={harvestedAt}
-                        onChange={(e) => setHarvestedAt(e.target.value)}
-                      />
+                      <FieldLabel htmlFor="harv-date" label="Tanggal Panen" />
+                      <DatePicker id="harv-date" value={harvestedAt} onChange={setHarvestedAt} />
                     </div>
                     <div className="field">
-                      <label htmlFor="harv-kg">Berat Hasil (kg)</label>
+                      <FieldLabel htmlFor="harv-kg" label="Berat Hasil (kg)" />
                       <input
                         id="harv-kg"
                         type="number"
@@ -566,7 +556,7 @@ export function ActivitiesPage() {
                       />
                     </div>
                     <div className="field">
-                      <label htmlFor="harv-notes">Catatan Kualitas (opsional)</label>
+                      <FieldLabel htmlFor="harv-notes" label="Catatan Kualitas (opsional)" />
                       <input
                         id="harv-notes"
                         maxLength={200}
@@ -633,42 +623,41 @@ export function ActivitiesPage() {
           <form className="panel" onSubmit={submitObservation}>
             <div className="panel-body form-grid">
               <div className="field">
-                <label htmlFor="obs-field">Pilih Lahan</label>
-                <select
+                <FieldLabel htmlFor="obs-field" label="Pilih Lahan" />
+                <CustomSelect
                   id="obs-field"
                   value={activeField?.id ?? ""}
-                  onChange={(e) => setSelectedFieldId(e.target.value)}
-                >
-                  {fields.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.name} · {f.areaHa.toFixed(2)} ha
-                    </option>
-                  ))}
-                </select>
+                  onChange={setSelectedFieldId}
+                  options={fields.map((f) => ({
+                    value: f.id,
+                    label: `${f.name} · ${f.areaHa.toFixed(2)} ha`,
+                  }))}
+                />
               </div>
 
               <div className="field">
-                <label htmlFor="obs-kind">Jenis Pengamatan</label>
-                <select
+                <FieldLabel htmlFor="obs-kind" label="Jenis Pengamatan" />
+                <CustomSelect
                   id="obs-kind"
                   value={obsKind}
-                  onChange={(e) => {
-                    const next = e.target.value as FieldObservationKind;
+                  onChange={(val) => {
+                    const next = val as FieldObservationKind;
                     setObsKind(next);
                     if (next !== "note") setObsUnit(DEFAULT_UNITS[next]);
                   }}
-                >
-                  <option value="rainfall">Curah hujan</option>
-                  <option value="soil_moisture">Kelembapan tanah</option>
-                  <option value="temperature">Suhu udara/tanah</option>
-                  <option value="note">Catatan lapangan bebas</option>
-                </select>
+                  options={[
+                    { value: "rainfall", label: "Curah hujan" },
+                    { value: "soil_moisture", label: "Kelembapan tanah" },
+                    { value: "temperature", label: "Suhu udara/tanah" },
+                    { value: "note", label: "Catatan lapangan bebas" },
+                  ]}
+                />
               </div>
 
               {obsKind !== "note" ? (
                 <>
                   <div className="field">
-                    <label htmlFor="obs-val">Angka Pengukuran</label>
+                    <FieldLabel htmlFor="obs-val" label="Angka Pengukuran" />
                     <input
                       id="obs-val"
                       type="number"
@@ -680,7 +669,7 @@ export function ActivitiesPage() {
                     />
                   </div>
                   <div className="field">
-                    <label htmlFor="obs-unit">Satuan</label>
+                    <FieldLabel htmlFor="obs-unit" label="Satuan" />
                     <input
                       id="obs-unit"
                       required
@@ -693,9 +682,12 @@ export function ActivitiesPage() {
               ) : null}
 
               <div className="field">
-                <label htmlFor="obs-method">
-                  {obsKind === "note" ? "Isi Catatan Lapangan" : "Alat / Cara Ukur (opsional)"}
-                </label>
+                <FieldLabel
+                  htmlFor="obs-method"
+                  label={
+                    obsKind === "note" ? "Isi Catatan Lapangan" : "Alat / Cara Ukur (opsional)"
+                  }
+                />
                 <input
                   id="obs-method"
                   required={obsKind === "note"}

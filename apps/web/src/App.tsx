@@ -2,6 +2,7 @@ import type { RegisteredUser } from "@agroclimate/contracts";
 import { useEffect, useState } from "react";
 
 import { api, onSessionLost } from "./api.js";
+import { OnboardingTracker } from "./components/OnboardingTracker.js";
 import {
   IconBook,
   IconCalendar,
@@ -284,6 +285,7 @@ function Shell({
           )}
         </div>
       </main>
+      <OnboardingTracker />
     </div>
   );
 }

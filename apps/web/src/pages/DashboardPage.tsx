@@ -1,9 +1,7 @@
 import { api } from "../api.js";
 import {
-  IconArrowRight,
   IconBook,
   IconCalendar,
-  IconCheck,
   IconClipboard,
   IconCloud,
   IconMap,
@@ -32,40 +30,6 @@ export function DashboardPage() {
   const activePlantings = plantings.filter((p) => p.status === "active").length;
   const newest = [...farms].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 4);
 
-  const checklist = [
-    {
-      done: farms.length > 0 && fields.length > 0,
-      title: "Buat kebun & batas lahan",
-      detail: "Daftarkan minimal satu kebun dan gambar area lahannya.",
-      to: "/lahan",
-      cta: "Buka Kebun & Lahan",
-    },
-    {
-      done: fields.length > 0 && windows.length > 0,
-      title: "Lengkapi kondisi tanah & pengairan",
-      detail: "Buka Detail lahan di menu Kebun & Lahan agar analisis lebih akurat.",
-      to: "/lahan",
-      cta: "Isi Profil Tanah",
-    },
-    {
-      done: windows.length > 0,
-      title: "Jalankan Rencana Tanam & AI",
-      detail: "Uji kecocokan tanggal tanam dan baca ringkasan Asisten AI.",
-      to: "/rencana",
-      cta: "Buat Rencana",
-    },
-    {
-      done: plantings.length > 0,
-      title: "Catat penanaman atau panen",
-      detail: "Rekam jadwal tanam aktual serta pengamatan curah hujan di lahan.",
-      to: "/aktivitas",
-      cta: "Catat Aktivitas",
-    },
-  ];
-
-  const completedCount = checklist.filter((step) => step.done).length;
-  const progressPercent = Math.round((completedCount / checklist.length) * 100);
-
   return (
     <div className="stack">
       <PageGuide
@@ -87,54 +51,8 @@ export function DashboardPage() {
             detail: "Catat penanaman aktual, hasil panen bertahap, serta pengamatan hujan harian.",
           },
         ]}
+        tip="Tips: Gunakan tombol mengambang 'Panduan Mulai' di pojok kanan bawah kapan saja untuk memantau progres langkah Anda."
       />
-
-      <section className="onboarding-card" aria-label="Panduan mulai cepat">
-        <div className="spread">
-          <div>
-            <h2>Mulai dalam 4 Langkah</h2>
-            <p className="muted">
-              {completedCount === checklist.length
-                ? "Semua langkah dasar sudah selesai! Anda siap merencanakan musim tanam."
-                : `Kemajuan awal Anda: ${completedCount} dari ${checklist.length} langkah selesai.`}
-            </p>
-          </div>
-          <span
-            className="tag"
-            data-tone={completedCount === checklist.length ? "accent" : undefined}
-          >
-            {progressPercent}% selesai
-          </span>
-        </div>
-
-        <div className="progress-track" aria-hidden="true">
-          <div className="progress-fill" style={{ width: `${progressPercent}%` }} />
-        </div>
-
-        <div className="onboarding-steps">
-          {checklist.map((item, idx) => (
-            <div
-              className="onboarding-step"
-              key={item.title}
-              data-done={item.done ? "true" : "false"}
-            >
-              <div className="onboarding-step-head">
-                <span className="step-badge">{item.done ? <IconCheck size={14} /> : idx + 1}</span>
-                <div>
-                  <strong style={{ fontSize: "0.9rem" }}>{item.title}</strong>
-                  <p className="faint" style={{ marginTop: 2 }}>
-                    {item.detail}
-                  </p>
-                </div>
-              </div>
-              <Link className="btn btn-quiet btn-sm" to={item.to}>
-                <span>{item.cta}</span>
-                <IconArrowRight size={14} />
-              </Link>
-            </div>
-          ))}
-        </div>
-      </section>
 
       <div className="stats">
         <div className="stat">

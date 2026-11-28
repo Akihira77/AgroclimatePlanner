@@ -3,6 +3,60 @@ import { useState, type ReactNode } from "react";
 import { ApiError, describeError } from "./api.js";
 import { IconChevronDown, IconInfo } from "./icons.js";
 
+export const DATA_CHANGED_EVENT = "agroclimate:data-changed";
+
+export function notifyDataChanged(): void {
+  window.dispatchEvent(new CustomEvent(DATA_CHANGED_EVENT));
+}
+
+export function InfoTooltip({ text }: { readonly text: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span
+      className="tooltip-wrap"
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <button
+        type="button"
+        className="tooltip-trigger"
+        aria-label={text}
+        aria-expanded={open}
+        onClick={() => setOpen((prev) => !prev)}
+        onBlur={() => setOpen(false)}
+      >
+        i
+      </button>
+      {open ? (
+        <span className="tooltip-bubble" role="tooltip">
+          {text}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+export function FieldLabel({
+  htmlFor,
+  label,
+  tooltip,
+}: {
+  readonly htmlFor?: string;
+  readonly label: string;
+  readonly tooltip?: string;
+}) {
+  return (
+    <div className="field-label-row">
+      {htmlFor === undefined ? (
+        <span className="field-label-text">{label}</span>
+      ) : (
+        <label htmlFor={htmlFor}>{label}</label>
+      )}
+      {tooltip === undefined ? null : <InfoTooltip text={tooltip} />}
+    </div>
+  );
+}
+
 /** Monospaced technical identifier for optional details. */
 export function Mono({ children }: { readonly children: ReactNode }) {
   return <span className="mono">{children}</span>;

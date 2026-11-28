@@ -7,11 +7,13 @@ import type {
 import { useEffect, useState } from "react";
 
 import { api } from "../api.js";
-import { IconPlus } from "../icons.js";
+import { CustomSelect } from "../components/CustomSelect.js";
+import { IconCompass, IconPlus } from "../icons.js";
 import { Link } from "../router.js";
 import {
   Empty,
   ErrorNotice,
+  FieldLabel,
   Loading,
   Mono,
   Notice,
@@ -19,14 +21,96 @@ import {
   Tag,
   drainageClassLabel,
   irrigationLabel,
+  notifyDataChanged,
   soilTypeLabel,
 } from "../ui.js";
 import { useAsync } from "../useAsync.js";
 
-const LOCATION_PRESETS = [
-  { label: "Area Simulasi Cuaca (uji grafik)", lat: "0.5000", lon: "0.5000" },
-  { label: "Karawang, Jabar", lat: "-6.3020", lon: "107.3020" },
-  { label: "Lembang, Bandung", lat: "-6.8140", lon: "107.6180" },
+const REGION_OPTIONS = [
+  {
+    value: "subang",
+    label: "Subang, Jawa Barat",
+    description: "Sentra padi dataran rendah (-6.322°, 107.752°)",
+    lat: "-6.3220",
+    lon: "107.7520",
+  },
+  {
+    value: "karawang",
+    label: "Karawang, Jawa Barat",
+    description: "Lumbung padi pantura (-6.302°, 107.302°)",
+    lat: "-6.3020",
+    lon: "107.3020",
+  },
+  {
+    value: "lembang",
+    label: "Lembang, Bandung Barat",
+    description: "Sentra hortikultura dataran tinggi (-6.814°, 107.618°)",
+    lat: "-6.8140",
+    lon: "107.6180",
+  },
+  {
+    value: "indramayu",
+    label: "Indramayu, Jawa Barat",
+    description: "Pesisir utara Jawa (-6.337°, 108.320°)",
+    lat: "-6.3370",
+    lon: "108.3200",
+  },
+  {
+    value: "brebes",
+    label: "Brebes, Jawa Tengah",
+    description: "Sentra bawang merah (-6.873°, 109.042°)",
+    lat: "-6.8730",
+    lon: "109.0420",
+  },
+  {
+    value: "demak",
+    label: "Demak, Jawa Tengah",
+    description: "Dataran alluvial (-6.891°, 110.639°)",
+    lat: "-6.8910",
+    lon: "110.6390",
+  },
+  {
+    value: "batu",
+    label: "Batu, Malang",
+    description: "Pegunungan Jawa Timur (-7.871°, 112.526°)",
+    lat: "-7.8710",
+    lon: "112.5260",
+  },
+  {
+    value: "jember",
+    label: "Jember, Jawa Timur",
+    description: "Perkebunan & pangan (-8.172°, 113.700°)",
+    lat: "-8.1720",
+    lon: "113.7000",
+  },
+  {
+    value: "tabanan",
+    label: "Tabanan, Bali",
+    description: "Subak dataran menengah (-8.541°, 115.125°)",
+    lat: "-8.5410",
+    lon: "115.1250",
+  },
+  {
+    value: "lampung",
+    label: "Lampung Tengah, Lampung",
+    description: "Sentra jagung & singkong (-4.867°, 105.233°)",
+    lat: "-4.8670",
+    lon: "105.2330",
+  },
+  {
+    value: "bone",
+    label: "Bone, Sulawesi Selatan",
+    description: "Sentra padi & jagung (-4.538°, 120.328°)",
+    lat: "-4.5380",
+    lon: "120.3280",
+  },
+  {
+    value: "simulasi",
+    label: "Area Simulasi Cuaca (uji grafik)",
+    description: "Di dalam cakupan grid simulasi bawaan (0.500°, 0.500°)",
+    lat: "0.5000",
+    lon: "0.5000",
+  },
 ] as const;
 
 const SQUARE_PRESET: readonly SketchPoint[] = [
@@ -49,8 +133,11 @@ export function FarmsPage() {
   const [farmName, setFarmName] = useState("");
   const [farmRegion, setFarmRegion] = useState("");
   const [fieldName, setFieldName] = useState("");
-  const [lat, setLat] = useState("0.5000");
-  const [lon, setLon] = useState("0.5000");
+  const [regionPreset, setRegionPreset] = useState("subang");
+  const [mapsInput, setMapsInput] = useState("");
+  const [locationFeedback, setLocationFeedback] = useState<string | null>(null);
+  const [lat, setLat] = useState("-6.3220");
+  const [lon, setLon] = useState("107.7520");
   const [spanKm, setSpanKm] = useState("1");
   const [vertices, setVertices] = useState<readonly SketchPoint[]>([]);
   const [dragging, setDragging] = useState<number | null>(null);
@@ -74,6 +161,7 @@ export function FarmsPage() {
 
   const frame = frameFrom(lat, lon, spanKm);
   const { geometry, reason } = geometryFor(vertices, frame, polygonText);
+  const metrics = geometry === null ? null : estimatePolygonMetrics(geometry);
 
   const addVertex = (event: React.PointerEvent<SVGRectElement>) => {
     const svg = event.currentTarget.ownerSVGElement;
@@ -87,6 +175,84 @@ export function FarmsPage() {
     if (svg === null) return;
     const point = sketchPoint(svg, event.clientX, event.clientY);
     setVertices((current) => current.map((vertex, at) => (at === index ? point : vertex)));
+  };
+
+  const applyRegionPreset = (value: string) => {
+    setRegionPreset(value);
+    const found = REGION_OPTIONS.find((opt) => opt.value === value);
+    if (found !== undefined) {
+      setLat(found.lat);
+      setLon(found.lon);
+      setLocationFeedback(`Lokasi dipindahkan ke ${found.label}.`);
+      setError(null);
+    }
+  };
+
+  const applyGoogleMapsInput = () => {
+    const parsed = parseGoogleMapsLocation(mapsInput);
+    if (parsed === null) {
+      setError(
+        new Error(
+          "Format lokasi tidak dikenali. Tempel tautan Google Maps atau angka seperti -6.3220, 107.7520.",
+        ),
+      );
+      return;
+    }
+    setError(null);
+    setLat(parsed.lat.toFixed(5));
+    setLon(parsed.lon.toFixed(5));
+    setLocationFeedback(
+      `Lokasi diperbarui dari Google Maps (${parsed.lat.toFixed(4)}°, ${parsed.lon.toFixed(4)}°).`,
+    );
+  };
+
+  const detectCurrentLocation = () => {
+    if (!("geolocation" in navigator)) {
+      setError(new Error("Peramban Anda tidak mendukung fitur deteksi GPS."));
+      return;
+    }
+    setLocationFeedback("Mencari lokasi GPS Anda…");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setError(null);
+        setLat(pos.coords.latitude.toFixed(5));
+        setLon(pos.coords.longitude.toFixed(5));
+        setLocationFeedback(
+          `Lokasi GPS ditemukan (${pos.coords.latitude.toFixed(4)}°, ${pos.coords.longitude.toFixed(4)}°).`,
+        );
+      },
+      () => {
+        setLocationFeedback(null);
+        setError(
+          new Error(
+            "Izin lokasi ditolak atau GPS tidak tersedia. Gunakan Pilih Wilayah atau tempel dari Google Maps.",
+          ),
+        );
+      },
+      { enableHighAccuracy: true, timeout: 8000 },
+    );
+  };
+
+  const startEditingField = (field: (typeof fields)[number]) => {
+    const fitted = frameAndVerticesFromGeometry(field.geometry);
+    setEditingFieldId(field.id);
+    setFieldName(field.name);
+    setLat(fitted.lat);
+    setLon(fitted.lon);
+    setSpanKm(fitted.spanKm);
+    setVertices(fitted.vertices);
+    setPolygonText("");
+    setLocationFeedback(
+      `Mengubah batas lahan "${field.name}". Seret titik sudut di sketsa untuk mengubah bentuknya.`,
+    );
+  };
+
+  const cancelEditingField = () => {
+    setEditingFieldId(null);
+    setFieldName("");
+    setVertices([]);
+    setPolygonText("");
+    setLocationFeedback(null);
   };
 
   const saveFarm = async (event: React.FormEvent) => {
@@ -108,6 +274,7 @@ export function FarmsPage() {
       setFarmRegion("");
       setEditingFarmId(null);
       setSelectedFarmId(farm.id);
+      notifyDataChanged();
       state.reload();
     } catch (failure) {
       setError(failure);
@@ -129,6 +296,7 @@ export function FarmsPage() {
         setFarmRegion("");
       }
       setSavedNotice("Kebun berhasil dihapus.");
+      notifyDataChanged();
       state.reload();
     } catch (failure) {
       setError(failure);
@@ -140,7 +308,7 @@ export function FarmsPage() {
   const saveField = async (event: React.FormEvent) => {
     event.preventDefault();
     if (selected === undefined) return;
-    if (geometry === null && (editingFieldId === null || polygonText.trim() !== "")) {
+    if (geometry === null) {
       setError(new Error(reason === "" ? "Bentuk area lahan belum lengkap." : reason));
       return;
     }
@@ -148,32 +316,32 @@ export function FarmsPage() {
     setError(null);
     setSavedNotice(null);
     try {
-      if (editingFieldId === null && geometry !== null) {
+      if (editingFieldId === null) {
         const created = await api.createField(selected.id, fieldName.trim(), geometry);
         setDetailFieldId(created.id);
         setSavedNotice(
-          `Lahan "${created.name}" berhasil disimpan. Anda dapat melengkapi kondisi tanah dan pengairannya di panel Detail di atas.`,
+          `Lahan "${created.name}" (${created.areaHa.toFixed(2)} ha) berhasil disimpan. Lengkapi kondisi tanah dan pengairannya di panel Detail di atas.`,
         );
-      } else if (editingFieldId !== null) {
+      } else {
         const stored = fields.find((field) => field.id === editingFieldId);
         const unchanged =
-          stored === undefined ||
-          polygonText.trim() === "" ||
-          (geometry !== null && JSON.stringify(geometry) === JSON.stringify(stored.geometry));
+          stored !== undefined && JSON.stringify(geometry) === JSON.stringify(stored.geometry);
         if (unchanged) {
           await api.updateField(editingFieldId, { name: fieldName.trim() });
-        } else if (geometry !== null) {
+        } else {
           await api.updateField(editingFieldId, {
             name: fieldName.trim(),
             geometry,
           });
         }
-        setSavedNotice("Perubahan data lahan berhasil disimpan.");
+        setSavedNotice("Perubahan data dan batas lahan berhasil disimpan.");
       }
       setFieldName("");
       setEditingFieldId(null);
       setVertices([]);
       setPolygonText("");
+      setLocationFeedback(null);
+      notifyDataChanged();
       state.reload();
     } catch (failure) {
       setError(failure);
@@ -188,13 +356,10 @@ export function FarmsPage() {
     setSavedNotice(null);
     try {
       await api.deleteField(fieldId);
-      if (editingFieldId === fieldId) {
-        setEditingFieldId(null);
-        setFieldName("");
-        setPolygonText("");
-      }
+      if (editingFieldId === fieldId) cancelEditingField();
       if (detailFieldId === fieldId) setDetailFieldId(null);
       setSavedNotice("Lahan berhasil dihapus.");
+      notifyDataChanged();
       state.reload();
     } catch (failure) {
       setError(failure);
@@ -203,32 +368,36 @@ export function FarmsPage() {
     }
   };
 
+  const edgeLabels =
+    geometry !== null && vertices.length >= 3 && polygonText.trim() === ""
+      ? computeEdgeLabels(vertices, geometry)
+      : [];
+
   return (
     <div className="stack">
       <PageGuide
         storageKey="farms"
         title="Panduan Kebun & Lahan"
-        summary="Kelola lokasi kebun Anda, petakan batas tiap bidang lahan, dan isi profil tanah serta irigasi untuk penilaian tanam."
+        summary="Kelola lokasi kebun Anda, tandai batas lahan secara visual tanpa perlu paham koordinat teknis, dan isi profil tanah serta irigasi."
         steps={[
           {
             title: "1. Buat Kebun",
-            detail:
-              "Kebun adalah nama lokasi atau kelompok usaha tani Anda (misalnya: Kebun Karawang).",
+            detail: "Kebun adalah nama lokasi usaha tani Anda (misalnya: Kebun Subang Utara).",
           },
           {
-            title: "2. Gambar Batas Lahan",
+            title: "2. Pilih Lokasi & Gambar Batas",
             detail:
-              "Pilih titik koordinat atau gunakan contoh wilayah, lalu klik di kotak sketsa minimal 3 sudut (atau pakai tombol persegi otomatis).",
+              "Pilih wilayah terdekat, tempel titik dari Google Maps, atau gunakan GPS, lalu gambar bentuk lahan dengan melihat ukuran luas & keliling otomatis.",
           },
           {
-            title: "3. Lengkapi Kondisi Tanah",
+            title: "3. Lengkapi Profil Tanah",
             detail:
-              "Klik tombol Detail pada lahan untuk mengisi jenis tanah, drainase, pH, dan irigasi.",
+              "Klik tombol Detail & Profil Tanah pada lahan untuk mengisi jenis tanah, drainase, pH, dan irigasi.",
           },
         ]}
         glossary={[
           { term: "Kebun", meaning: "Lokasi induk atau kelompok lahan" },
-          { term: "Lahan", meaning: "Petak/bidang tanam dengan batas area tertentu" },
+          { term: "Lahan", meaning: "Petak tanam dengan batas area tertentu" },
           { term: "Drainase", meaning: "Kecepatan air meresap atau mengalir keluar dari lahan" },
         ]}
       />
@@ -303,7 +472,7 @@ export function FarmsPage() {
           </div>
           <div className="panel-body form-grid">
             <div className="field">
-              <label htmlFor="farm-name">Nama Kebun</label>
+              <FieldLabel htmlFor="farm-name" label="Nama Kebun" />
               <input
                 id="farm-name"
                 required
@@ -314,7 +483,7 @@ export function FarmsPage() {
               />
             </div>
             <div className="field">
-              <label htmlFor="farm-region">Kabupaten / Wilayah (opsional)</label>
+              <FieldLabel htmlFor="farm-region" label="Kabupaten / Wilayah (opsional)" />
               <input
                 id="farm-region"
                 maxLength={120}
@@ -393,13 +562,9 @@ export function FarmsPage() {
                           type="button"
                           className="btn btn-quiet btn-sm"
                           disabled={busy}
-                          onClick={() => {
-                            setEditingFieldId(field.id);
-                            setFieldName(field.name);
-                            setPolygonText(ringText(field.geometry));
-                          }}
+                          onClick={() => startEditingField(field)}
                         >
-                          Ubah
+                          Ubah Batas &amp; Nama
                         </button>
                         <button
                           type="button"
@@ -467,11 +632,12 @@ export function FarmsPage() {
         {selected !== undefined ? (
           <form className="panel" onSubmit={saveField}>
             <div className="panel-head">
-              <h3>{editingFieldId === null ? "Tambah Lahan Baru" : "Ubah Data Lahan"}</h3>
+              <h3>{editingFieldId === null ? "Tambah Lahan Baru" : "Ubah Nama & Batas Lahan"}</h3>
+              {editingFieldId !== null ? <Tag tone="warn">Mode Edit Batas</Tag> : null}
             </div>
             <div className="panel-body form-grid">
               <div className="field">
-                <label htmlFor="field-name">Nama Lahan</label>
+                <FieldLabel htmlFor="field-name" label="Nama Lahan" />
                 <input
                   id="field-name"
                   required
@@ -482,250 +648,305 @@ export function FarmsPage() {
                 />
               </div>
 
-              {editingFieldId === null ? (
-                <>
-                  <div className="preset-chips">
-                    <span className="faint">Contoh lokasi cepat:</span>
-                    {LOCATION_PRESETS.map((preset) => (
-                      <button
-                        key={preset.label}
-                        type="button"
-                        className="preset-chip"
-                        onClick={() => {
-                          setLat(preset.lat);
-                          setLon(preset.lon);
-                        }}
-                      >
-                        {preset.label}
-                      </button>
-                    ))}
+              <div className="field">
+                <FieldLabel
+                  htmlFor="field-span"
+                  label="Ukuran Area Kotak Sketsa"
+                  tooltip="Mengatur lebar kotak gambar di bawah (misalnya 0,5 km cocok untuk petak kecil, 1–2 km untuk kebun luas)."
+                />
+                <CustomSelect
+                  id="field-span"
+                  value={spanKm}
+                  onChange={(next) => setSpanKm(next)}
+                  options={[
+                    { value: "0.3", label: "300 m × 300 m (Petak kecil < 5 ha)" },
+                    { value: "0.5", label: "500 m × 500 m (Petak sedang 5–15 ha)" },
+                    { value: "1", label: "1 km × 1 km (Standar kebun)" },
+                    { value: "2", label: "2 km × 2 km (Kawasan luas)" },
+                    { value: "5", label: "5 km × 5 km (Hamparan besar)" },
+                  ]}
+                />
+              </div>
+
+              <div className="location-box">
+                <div className="spread">
+                  <strong>Lokasi Lahan</strong>
+                  <span className="faint numeric">
+                    Titik pusat aktif: {Number(lat).toFixed(4)}°, {Number(lon).toFixed(4)}°
+                  </span>
+                </div>
+
+                <div className="location-row">
+                  <div className="field">
+                    <FieldLabel
+                      htmlFor="field-region-preset"
+                      label="Pilih Wilayah Pertanian"
+                      tooltip="Cara termudah: pilih kabupaten/daerah terdekat jika Anda belum memiliki titik koordinat persis."
+                    />
+                    <CustomSelect
+                      id="field-region-preset"
+                      value={regionPreset}
+                      onChange={applyRegionPreset}
+                      options={REGION_OPTIONS}
+                    />
                   </div>
 
                   <div className="field">
-                    <label htmlFor="field-lat">Koordinat Lintang (Latitude)</label>
-                    <input
-                      id="field-lat"
-                      type="number"
-                      step="0.0001"
-                      min="-90"
-                      max="90"
-                      required
-                      value={lat}
-                      onChange={(event) => setLat(event.target.value)}
+                    <FieldLabel
+                      htmlFor="field-gmaps"
+                      label="Atau Tempel dari Google Maps"
+                      tooltip="Buka Google Maps di HP/laptop → klik kanan atau tekan lama lokasi sawah Anda → salin angkanya (contoh: -6.3220, 107.7520) atau salin link URL-nya lalu tempel di sini."
                     />
+                    <div className="row">
+                      <input
+                        id="field-gmaps"
+                        style={{ flex: "1 1 160px" }}
+                        placeholder="Tempel link Maps atau -6.322, 107.752"
+                        value={mapsInput}
+                        onChange={(e) => setMapsInput(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="btn btn-quiet btn-sm"
+                        onClick={applyGoogleMapsInput}
+                      >
+                        Terapkan
+                      </button>
+                    </div>
                   </div>
-                  <div className="field">
-                    <label htmlFor="field-lon">Koordinat Bujur (Longitude)</label>
-                    <input
-                      id="field-lon"
-                      type="number"
-                      step="0.0001"
-                      min="-180"
-                      max="180"
-                      required
-                      value={lon}
-                      onChange={(event) => setLon(event.target.value)}
-                    />
-                  </div>
-                  <div className="field">
-                    <label htmlFor="field-span">Lebar Area Peta (km)</label>
-                    <input
-                      id="field-span"
-                      type="number"
-                      step="0.1"
-                      min="0.1"
-                      max="50"
-                      required
-                      value={spanKm}
-                      onChange={(event) => setSpanKm(event.target.value)}
-                    />
-                    <span className="hint">
-                      Ukuran kotak sketsa di bawah (1 km cukup untuk 1–20 ha).
+                </div>
+
+                <div className="btn-row">
+                  <button
+                    type="button"
+                    className="btn btn-quiet btn-sm"
+                    onClick={detectCurrentLocation}
+                  >
+                    <IconCompass size={15} />
+                    <span>Gunakan Lokasi Saya (GPS)</span>
+                  </button>
+                  {locationFeedback !== null ? (
+                    <span className="muted" style={{ fontSize: "0.85rem" }}>
+                      {locationFeedback}
                     </span>
+                  ) : null}
+                </div>
+
+                <details className="tech-details">
+                  <summary>Ubah angka lintang / bujur secara manual</summary>
+                  <div className="form-grid">
+                    <div className="field">
+                      <FieldLabel htmlFor="field-lat" label="Lintang (Latitude)" />
+                      <input
+                        id="field-lat"
+                        type="number"
+                        step="0.0001"
+                        min="-90"
+                        max="90"
+                        required
+                        value={lat}
+                        onChange={(event) => setLat(event.target.value)}
+                      />
+                    </div>
+                    <div className="field">
+                      <FieldLabel htmlFor="field-lon" label="Bujur (Longitude)" />
+                      <input
+                        id="field-lon"
+                        type="number"
+                        step="0.0001"
+                        min="-180"
+                        max="180"
+                        required
+                        value={lon}
+                        onChange={(event) => setLon(event.target.value)}
+                      />
+                    </div>
                   </div>
+                </details>
+              </div>
 
-                  <div className="sketch-block">
-                    <div className="spread">
-                      <span className="eyebrow">Gambar Batas Lahan</span>
-                      <span className="faint numeric">{vertices.length} titik sudut</span>
-                    </div>
+              <div className="sketch-block">
+                <div className="spread">
+                  <span className="eyebrow">Gambar Batas Lahan</span>
+                  <span className="faint numeric">{vertices.length} titik sudut</span>
+                </div>
 
-                    <div className="btn-row">
-                      <button
-                        type="button"
-                        className="btn btn-quiet btn-sm"
-                        disabled={busy}
-                        onClick={() => setVertices(SQUARE_PRESET)}
-                      >
-                        Buat bentuk persegi otomatis
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-quiet btn-sm"
-                        disabled={busy || vertices.length === 0}
-                        onClick={() => setVertices((current) => current.slice(0, -1))}
-                      >
-                        Hapus titik terakhir
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-quiet btn-sm"
-                        disabled={busy || vertices.length === 0}
-                        onClick={() => setVertices([])}
-                      >
-                        Ulangi sketsa
-                      </button>
-                    </div>
+                <div className="sketch-metrics" role="status">
+                  {metrics === null ? (
+                    <span className="muted">
+                      Tandai minimal 3 titik sudut di kotak untuk menghitung perkiraan luas dan
+                      keliling secara otomatis.
+                    </span>
+                  ) : (
+                    <>
+                      <Tag tone="accent">Perkiraan Luas: {metrics.areaHa.toFixed(2)} ha</Tag>
+                      <span className="muted numeric">
+                        ({Math.round(metrics.areaSqm).toLocaleString("id-ID")} m²)
+                      </span>
+                      <span>·</span>
+                      <span className="numeric">
+                        Keliling:{" "}
+                        <strong>{Math.round(metrics.perimeterM).toLocaleString("id-ID")} m</strong>
+                      </span>
+                    </>
+                  )}
+                </div>
 
-                    <div className="sketch-wrap">
-                      <svg
-                        className="sketch"
-                        viewBox="0 0 100 100"
-                        role="group"
-                        aria-label={`Sketsa batas lahan, ${vertices.length} titik`}
-                      >
-                        <rect
-                          className="sketch-frame"
-                          x={PLOT_MIN}
-                          y={PLOT_MIN}
-                          width={PLOT_SIZE}
-                          height={PLOT_SIZE}
-                          onPointerDown={addVertex}
-                        />
-                        {[0.25, 0.5, 0.75].map((ratio) => {
-                          const pos = plot(ratio);
-                          return (
-                            <g key={ratio}>
-                              <line
-                                className="sketch-grid-line"
-                                x1={pos}
-                                y1={PLOT_MIN}
-                                x2={pos}
-                                y2={PLOT_MIN + PLOT_SIZE}
-                              />
-                              <line
-                                className="sketch-grid-line"
-                                x1={PLOT_MIN}
-                                y1={pos}
-                                x2={PLOT_MIN + PLOT_SIZE}
-                                y2={pos}
-                              />
-                            </g>
-                          );
-                        })}
-                        <text
-                          x={90}
-                          y={13}
-                          fontSize="4.5"
-                          fontWeight="700"
-                          fill="var(--ink-faint)"
-                          textAnchor="end"
-                          pointerEvents="none"
-                        >
-                          U ↑
-                        </text>
-                        {vertices.length < 2 ? null : (
-                          <polygon
-                            className="sketch-area"
-                            points={vertices
-                              .map((vertex) => `${plot(vertex.x)},${plot(vertex.y)}`)
-                              .join(" ")}
+                <div className="btn-row">
+                  <button
+                    type="button"
+                    className="btn btn-quiet btn-sm"
+                    disabled={busy}
+                    onClick={() => {
+                      setPolygonText("");
+                      setVertices(SQUARE_PRESET);
+                    }}
+                  >
+                    Buat bentuk persegi otomatis
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-quiet btn-sm"
+                    disabled={busy || vertices.length === 0}
+                    onClick={() => setVertices((current) => current.slice(0, -1))}
+                  >
+                    Hapus titik terakhir
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-quiet btn-sm"
+                    disabled={busy || vertices.length === 0}
+                    onClick={() => setVertices([])}
+                  >
+                    Ulangi sketsa
+                  </button>
+                </div>
+
+                <div className="sketch-wrap">
+                  <svg
+                    className="sketch"
+                    viewBox="0 0 100 100"
+                    role="group"
+                    aria-label={`Sketsa batas lahan, ${vertices.length} titik`}
+                  >
+                    <rect
+                      className="sketch-frame"
+                      x={PLOT_MIN}
+                      y={PLOT_MIN}
+                      width={PLOT_SIZE}
+                      height={PLOT_SIZE}
+                      onPointerDown={addVertex}
+                    />
+                    {[0.25, 0.5, 0.75].map((ratio) => {
+                      const pos = plot(ratio);
+                      return (
+                        <g key={ratio}>
+                          <line
+                            className="sketch-grid-line"
+                            x1={pos}
+                            y1={PLOT_MIN}
+                            x2={pos}
+                            y2={PLOT_MIN + PLOT_SIZE}
                           />
-                        )}
-                        {vertices.map((vertex, index) => (
-                          <circle
-                            key={index}
-                            className="sketch-vertex"
-                            cx={plot(vertex.x)}
-                            cy={plot(vertex.y)}
-                            r={4.8}
-                            role="img"
-                            aria-label={`Titik ${index + 1}`}
-                            onPointerDown={(event) => {
-                              event.currentTarget.setPointerCapture(event.pointerId);
-                              setDragging(index);
-                            }}
-                            onPointerMove={(event) => {
-                              if (dragging === index) moveVertex(index, event);
-                            }}
-                            onPointerUp={(event) => {
-                              event.currentTarget.releasePointerCapture(event.pointerId);
-                              setDragging(null);
-                            }}
-                            onPointerCancel={() => setDragging(null)}
+                          <line
+                            className="sketch-grid-line"
+                            x1={PLOT_MIN}
+                            y1={pos}
+                            x2={PLOT_MIN + PLOT_SIZE}
+                            y2={pos}
                           />
-                        ))}
-                      </svg>
-                      <p className="faint">
-                        Klik di dalam kotak untuk menandai sudut lahan (minimal 3 titik), seret
-                        titik untuk mengubah posisi, atau klik &ldquo;Buat bentuk persegi
-                        otomatis&rdquo;.
-                      </p>
-                      {reason === "" ? null : <p className="faint">{reason}</p>}
-                    </div>
+                        </g>
+                      );
+                    })}
+                    <text
+                      x={90}
+                      y={13}
+                      fontSize="4.5"
+                      fontWeight="700"
+                      fill="var(--ink-faint)"
+                      textAnchor="end"
+                      pointerEvents="none"
+                    >
+                      U ↑
+                    </text>
+                    {vertices.length < 2 ? null : (
+                      <polygon
+                        className="sketch-area"
+                        points={vertices
+                          .map((vertex) => `${plot(vertex.x)},${plot(vertex.y)}`)
+                          .join(" ")}
+                      />
+                    )}
+                    {edgeLabels.map((edge, idx) => (
+                      <text
+                        key={`edge-${idx}`}
+                        className="sketch-edge-label"
+                        x={edge.x}
+                        y={edge.y}
+                        textAnchor="middle"
+                      >
+                        {edge.label}
+                      </text>
+                    ))}
+                    {vertices.map((vertex, index) => (
+                      <circle
+                        key={index}
+                        className="sketch-vertex"
+                        cx={plot(vertex.x)}
+                        cy={plot(vertex.y)}
+                        r={4.8}
+                        role="img"
+                        aria-label={`Titik ${index + 1}`}
+                        onPointerDown={(event) => {
+                          event.currentTarget.setPointerCapture(event.pointerId);
+                          setDragging(index);
+                        }}
+                        onPointerMove={(event) => {
+                          if (dragging === index) moveVertex(index, event);
+                        }}
+                        onPointerUp={(event) => {
+                          event.currentTarget.releasePointerCapture(event.pointerId);
+                          setDragging(null);
+                        }}
+                        onPointerCancel={() => setDragging(null)}
+                      />
+                    ))}
+                  </svg>
+                  <p className="faint">
+                    Klik di dalam kotak untuk menandai sudut lahan (minimal 3 titik), seret titik
+                    untuk mengubah bentuknya, atau klik &ldquo;Buat bentuk persegi otomatis&rdquo;.
+                  </p>
+                  {reason === "" ? null : <p className="faint">{reason}</p>}
+                </div>
 
-                    <details className="tech-details">
-                      <summary>Input koordinat manual (lanjutan)</summary>
-                      <div className="field">
-                        <label htmlFor="field-polygon">
-                          Daftar titik koordinat (bujur, lintang — satu titik per baris)
-                        </label>
-                        <textarea
-                          id="field-polygon"
-                          rows={4}
-                          value={polygonText}
-                          onChange={(event) => setPolygonText(event.target.value)}
-                        />
-                        <span className="hint">
-                          Jika diisi, daftar koordinat ini menggantikan gambar sketsa. Garis batas
-                          akan ditutup otomatis dari titik akhir ke titik awal.
-                        </span>
-                      </div>
-                    </details>
-                  </div>
-                </>
-              ) : (
-                <div className="sketch-block">
+                <details className="tech-details">
+                  <summary>Input daftar koordinat poligon manual (lanjutan)</summary>
                   <div className="field">
-                    <label htmlFor="field-polygon">Daftar titik koordinat (bujur, lintang)</label>
+                    <FieldLabel
+                      htmlFor="field-polygon"
+                      label="Daftar titik koordinat (bujur, lintang — satu titik per baris)"
+                      tooltip="Jika diisi, daftar ini menggantikan sketsa visual di atas. Kosongkan untuk memakai gambar sketsa."
+                    />
                     <textarea
                       id="field-polygon"
-                      rows={5}
+                      rows={4}
                       value={polygonText}
                       onChange={(event) => setPolygonText(event.target.value)}
                     />
-                    <span className="hint">
-                      Satu titik per baris (bujur, lintang). Kosongkan jika hanya ingin mengubah
-                      nama lahan tanpa mengubah bentuk batasnya.
-                    </span>
                   </div>
-                  {polygonText.trim() === "" || reason === "" ? null : (
-                    <p className="faint">{reason}</p>
-                  )}
-                </div>
-              )}
+                </details>
+              </div>
 
               <div className="form-actions">
                 <button
                   className="btn btn-primary"
                   type="submit"
-                  disabled={
-                    busy ||
-                    (geometry === null && (editingFieldId === null || polygonText.trim() !== ""))
-                  }
+                  disabled={busy || geometry === null}
                 >
                   {editingFieldId === null ? "Simpan Lahan" : "Simpan Perubahan"}
                 </button>
                 {editingFieldId === null ? null : (
-                  <button
-                    type="button"
-                    className="btn btn-quiet"
-                    onClick={() => {
-                      setEditingFieldId(null);
-                      setFieldName("");
-                      setPolygonText("");
-                    }}
-                  >
+                  <button type="button" className="btn btn-quiet" onClick={cancelEditingField}>
                     Batal
                   </button>
                 )}
@@ -794,6 +1015,7 @@ function FieldAgronomyForm({ fieldId }: { readonly fieldId: string }) {
         waterSource: waterSource.trim() === "" ? null : waterSource.trim(),
       });
       setSavedNotice(true);
+      notifyDataChanged();
     } catch (err) {
       setError(err);
     } finally {
@@ -815,64 +1037,73 @@ function FieldAgronomyForm({ fieldId }: { readonly fieldId: string }) {
       ) : null}
       <div className="form-grid">
         <div className="field">
-          <label htmlFor="agro-soil">Jenis Tanah</label>
-          <select id="agro-soil" value={soilType} onChange={(e) => setSoilType(e.target.value)}>
-            <option value="">— Pilih / belum diisi —</option>
-            {(
-              [
-                "clay",
-                "loam",
-                "sandy",
-                "clay_loam",
-                "sandy_loam",
-                "silt_loam",
-                "peat",
-                "alluvial",
-                "volcanic",
-                "unknown",
-              ] as const
-            ).map((v) => (
-              <option key={v} value={v}>
-                {soilTypeLabel(v)}
-              </option>
-            ))}
-          </select>
+          <FieldLabel htmlFor="agro-soil" label="Jenis Tanah" />
+          <CustomSelect
+            id="agro-soil"
+            value={soilType}
+            onChange={setSoilType}
+            options={[
+              { value: "", label: "— Belum diisi —" },
+              ...(
+                [
+                  "clay",
+                  "loam",
+                  "sandy",
+                  "clay_loam",
+                  "sandy_loam",
+                  "silt_loam",
+                  "peat",
+                  "alluvial",
+                  "volcanic",
+                  "unknown",
+                ] as const
+              ).map((v) => ({ value: v, label: soilTypeLabel(v) })),
+            ]}
+          />
         </div>
 
         <div className="field">
-          <label htmlFor="agro-drainage">Aliran Air / Drainase</label>
-          <select
+          <FieldLabel
+            htmlFor="agro-drainage"
+            label="Aliran Air / Drainase"
+            tooltip="Menunjukkan seberapa cepat genangan air surut setelah hujan deras."
+          />
+          <CustomSelect
             id="agro-drainage"
             value={drainageClass}
-            onChange={(e) => setDrainageClass(e.target.value)}
-          >
-            <option value="">— Pilih / belum diisi —</option>
-            {(["poor", "moderate", "well", "excessive", "unknown"] as const).map((v) => (
-              <option key={v} value={v}>
-                {drainageClassLabel(v)}
-              </option>
-            ))}
-          </select>
+            onChange={setDrainageClass}
+            options={[
+              { value: "", label: "— Belum diisi —" },
+              ...(["poor", "moderate", "well", "excessive", "unknown"] as const).map((v) => ({
+                value: v,
+                label: drainageClassLabel(v),
+              })),
+            ]}
+          />
         </div>
 
         <div className="field">
-          <label htmlFor="agro-irrigation">Ketersediaan Irigasi</label>
-          <select
+          <FieldLabel htmlFor="agro-irrigation" label="Ketersediaan Irigasi" />
+          <CustomSelect
             id="agro-irrigation"
             value={irrigation}
-            onChange={(e) => setIrrigation(e.target.value)}
-          >
-            <option value="">— Pilih / belum diisi —</option>
-            {(["irrigated", "partial_irrigation", "rainfed", "unknown"] as const).map((v) => (
-              <option key={v} value={v}>
-                {irrigationLabel(v)}
-              </option>
-            ))}
-          </select>
+            onChange={setIrrigation}
+            options={[
+              { value: "", label: "— Belum diisi —" },
+              ...(["irrigated", "partial_irrigation", "rainfed", "unknown"] as const).map((v) => ({
+                value: v,
+                label: irrigationLabel(v),
+              })),
+            ]}
+          />
         </div>
 
         <div className="field">
-          <label htmlFor="agro-ph">pH Tanah (3.0–10.0)</label>
+          <FieldLabel
+            htmlFor="agro-ph"
+            label="pH Tanah (3.0–10.0)"
+            tooltip="Umumnya tanah subur berada di kisaran 5,5 – 7,0."
+          />
           <input
             id="agro-ph"
             type="number"
@@ -883,11 +1114,14 @@ function FieldAgronomyForm({ fieldId }: { readonly fieldId: string }) {
             value={soilPh}
             onChange={(e) => setSoilPh(e.target.value)}
           />
-          <span className="hint">Umumnya tanah subur berada di kisaran 5,5 – 7,0.</span>
         </div>
 
         <div className="field">
-          <label htmlFor="agro-elev">Ketinggian Lokasi (mdpl)</label>
+          <FieldLabel
+            htmlFor="agro-elev"
+            label="Ketinggian Lokasi (mdpl)"
+            tooltip="Ketinggian lahan dalam meter di atas permukaan laut (mdpl)."
+          />
           <input
             id="agro-elev"
             type="number"
@@ -898,11 +1132,10 @@ function FieldAgronomyForm({ fieldId }: { readonly fieldId: string }) {
             value={elevationM}
             onChange={(e) => setElevationM(e.target.value)}
           />
-          <span className="hint">Meter di atas permukaan laut.</span>
         </div>
 
         <div className="field">
-          <label htmlFor="agro-water">Sumber Air Utama (opsional)</label>
+          <FieldLabel htmlFor="agro-water" label="Sumber Air Utama (opsional)" />
           <input
             id="agro-water"
             maxLength={200}
@@ -922,10 +1155,146 @@ function FieldAgronomyForm({ fieldId }: { readonly fieldId: string }) {
   );
 }
 
-function ringText(geometry: PolygonGeometry): string {
+function parseGoogleMapsLocation(raw: string): { lat: number; lon: number } | null {
+  const text = raw.trim();
+  if (text === "") return null;
+
+  const atMatch = /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/.exec(text);
+  const queryMatch = /[?&](?:q|ll)=(-?\d+(?:\.\d+)?)[,\s]+(-?\d+(?:\.\d+)?)/.exec(text);
+  const bangMatch = /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/.exec(text);
+  const plainMatch = /^(-?\d+(?:\.\d+)?)\s*[,\s]\s*(-?\d+(?:\.\d+)?)$/.exec(text);
+
+  const match = atMatch ?? queryMatch ?? bangMatch ?? plainMatch;
+  if (match?.[1] === undefined || match[2] === undefined) return null;
+
+  const lat = Number(match[1]);
+  const lon = Number(match[2]);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (lat < -90 || lat > 90 || lon < -180 || lon > 180) return null;
+  return { lat, lon };
+}
+
+function frameAndVerticesFromGeometry(geometry: PolygonGeometry): {
+  lat: string;
+  lon: string;
+  spanKm: string;
+  vertices: SketchPoint[];
+} {
   const ring = geometry.coordinates[0] ?? [];
   const corners = ring.length > 1 ? ring.slice(0, -1) : ring;
-  return corners.map(([lon, lat]) => `${String(lon)}, ${String(lat)}`).join("\n");
+  if (corners.length === 0) {
+    return { lat: "-6.3220", lon: "107.7520", spanKm: "1", vertices: [] };
+  }
+
+  const lons = corners.map(([lo]) => lo);
+  const lats = corners.map(([, la]) => la);
+  const minLon = Math.min(...lons);
+  const maxLon = Math.max(...lons);
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const centerLat = (minLat + maxLat) / 2;
+  const centerLon = (minLon + maxLon) / 2;
+
+  const latKm = (maxLat - minLat) * KM_PER_DEGREE;
+  const lonKm =
+    (maxLon - minLon) * KM_PER_DEGREE * Math.max(0.1, Math.cos((centerLat * Math.PI) / 180));
+  const rawSpan = Math.max(0.3, Math.max(latKm, lonKm) * 1.45);
+  const spanChoices = [0.3, 0.5, 1, 2, 5];
+  const chosenSpan =
+    spanChoices.find((choice) => choice >= rawSpan) ?? Math.min(50, Math.ceil(rawSpan)).toString();
+
+  const spanNum = Number(chosenSpan);
+  const fittedFrame = frameBounds(centerLat, centerLon, spanNum);
+  if (fittedFrame === null) {
+    return {
+      lat: centerLat.toFixed(5),
+      lon: centerLon.toFixed(5),
+      spanKm: "1",
+      vertices: [],
+    };
+  }
+
+  const vertices: SketchPoint[] = corners.map(([lo, la]) => ({
+    x: clamp01((lo - fittedFrame.left) / (fittedFrame.right - fittedFrame.left)),
+    y: clamp01((fittedFrame.top - la) / (fittedFrame.top - fittedFrame.bottom)),
+  }));
+
+  return {
+    lat: centerLat.toFixed(5),
+    lon: centerLon.toFixed(5),
+    spanKm: String(chosenSpan),
+    vertices,
+  };
+}
+
+function haversineMeters(a: readonly [number, number], b: readonly [number, number]): number {
+  const R = 6_371_000;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(b[1] - a[1]);
+  const dLon = toRad(b[0] - a[0]);
+  const lat1 = toRad(a[1]);
+  const lat2 = toRad(b[1]);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function estimatePolygonMetrics(geometry: PolygonGeometry): {
+  areaSqm: number;
+  areaHa: number;
+  perimeterM: number;
+} {
+  const ring = geometry.coordinates[0] ?? [];
+  if (ring.length < 4) return { areaSqm: 0, areaHa: 0, perimeterM: 0 };
+
+  let perimeterM = 0;
+  for (let i = 0; i < ring.length - 1; i += 1) {
+    const a = ring[i];
+    const b = ring[i + 1];
+    if (a !== undefined && b !== undefined) perimeterM += haversineMeters(a, b);
+  }
+
+  const avgLat =
+    ring.slice(0, -1).reduce((sum, [, la]) => sum + la, 0) / Math.max(1, ring.length - 1);
+  const mPerDegLat = 111_320;
+  const mPerDegLon = 111_320 * Math.cos((avgLat * Math.PI) / 180);
+
+  let shoelace = 0;
+  for (let i = 0; i < ring.length - 1; i += 1) {
+    const p1 = ring[i];
+    const p2 = ring[i + 1];
+    if (p1 === undefined || p2 === undefined) continue;
+    const x1 = p1[0] * mPerDegLon;
+    const y1 = p1[1] * mPerDegLat;
+    const x2 = p2[0] * mPerDegLon;
+    const y2 = p2[1] * mPerDegLat;
+    shoelace += x1 * y2 - x2 * y1;
+  }
+
+  const areaSqm = Math.abs(shoelace) / 2;
+  return { areaSqm, areaHa: areaSqm / 10_000, perimeterM };
+}
+
+function computeEdgeLabels(
+  vertices: readonly SketchPoint[],
+  geometry: PolygonGeometry,
+): readonly { x: number; y: number; label: string }[] {
+  const ring = geometry.coordinates[0] ?? [];
+  if (ring.length < 4) return [];
+  const labels: { x: number; y: number; label: string }[] = [];
+  for (let i = 0; i < vertices.length; i += 1) {
+    const v1 = vertices[i];
+    const v2 = vertices[(i + 1) % vertices.length];
+    const p1 = ring[i];
+    const p2 = ring[(i + 1) % vertices.length];
+    if (v1 === undefined || v2 === undefined || p1 === undefined || p2 === undefined) continue;
+    const meters = Math.round(haversineMeters(p1, p2));
+    labels.push({
+      x: (plot(v1.x) + plot(v2.x)) / 2,
+      y: (plot(v1.y) + plot(v2.y)) / 2 - 1.5,
+      label: meters >= 1000 ? `${(meters / 1000).toFixed(2)} km` : `${meters} m`,
+    });
+  }
+  return labels;
 }
 
 function countLabel(fields: readonly { farmId: string }[], farmId: string): string {

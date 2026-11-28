@@ -2,10 +2,12 @@ import type { ClimateDailyOutlook, ClimateOutlook } from "@agroclimate/contracts
 import { useEffect, useState } from "react";
 
 import { api } from "../api.js";
+import { CustomSelect } from "../components/CustomSelect.js";
 import { Link } from "../router.js";
 import {
   Empty,
   ErrorNotice,
+  FieldLabel,
   Loading,
   Notice,
   PageGuide,
@@ -102,12 +104,11 @@ export function ClimatePage() {
             <div className="panel-body stack">
               <div className="form-grid">
                 <div className="field">
-                  <label htmlFor="climate-field">Pilih Lahan</label>
-                  <select
+                  <FieldLabel htmlFor="climate-field" label="Pilih Lahan" />
+                  <CustomSelect
                     id="climate-field"
                     value={selected?.id ?? ""}
-                    onChange={(event) => {
-                      const nextId = event.target.value;
+                    onChange={(nextId) => {
                       setFieldId(nextId);
                       setRequest({
                         fieldId: nextId,
@@ -115,13 +116,11 @@ export function ClimatePage() {
                         model: model.trim(),
                       });
                     }}
-                  >
-                    {available.map((field) => (
-                      <option key={field.id} value={field.id}>
-                        {field.name} · {field.areaHa.toFixed(2)} ha
-                      </option>
-                    ))}
-                  </select>
+                    options={available.map((field) => ({
+                      value: field.id,
+                      label: `${field.name} · ${field.areaHa.toFixed(2)} ha`,
+                    }))}
+                  />
                 </div>
 
                 <div className="field">

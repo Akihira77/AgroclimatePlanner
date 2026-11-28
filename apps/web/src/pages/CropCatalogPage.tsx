@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { api } from "../api.js";
+import { DatePicker } from "../components/DatePicker.js";
 import { IconArrowRight } from "../icons.js";
 import { Link } from "../router.js";
 import {
@@ -368,12 +369,7 @@ function CycleProjection({
       </p>
       <div className="field" style={{ maxWidth: 260 }}>
         <label htmlFor={`cycle-${id}`}>Rencana tanggal {startLabel}</label>
-        <input
-          id={`cycle-${id}`}
-          type="date"
-          value={date}
-          onChange={(event) => setDate(event.target.value)}
-        />
+        <DatePicker id={`cycle-${id}`} value={date} onChange={setDate} />
       </div>
       {date === "" ? (
         <p className="muted">Pilih tanggal untuk melihat perkiraan jadwal.</p>

@@ -11,11 +11,14 @@ import type {
 import { useEffect, useState } from "react";
 
 import { ApiError, api } from "../api.js";
+import { CustomSelect } from "../components/CustomSelect.js";
+import { DatePicker } from "../components/DatePicker.js";
 import { IconCalendar, IconSparkles } from "../icons.js";
 import { Link } from "../router.js";
 import {
   Empty,
   ErrorNotice,
+  FieldLabel,
   Loading,
   Mono,
   Notice,
@@ -27,6 +30,7 @@ import {
   gradeLabel,
   irrigationLabel,
   monthLabel,
+  notifyDataChanged,
   plantingStatusLabel,
   plantingStatusTone,
   severityLabel,
@@ -211,6 +215,7 @@ export function PlanPage() {
 
       setSuitabilityRun(result);
       setTab("evaluation");
+      notifyDataChanged();
       state.reload();
     } catch (err) {
       setActionError(err);
@@ -275,76 +280,72 @@ export function PlanPage() {
         </div>
         <div className="panel-body form-grid">
           <div className="field">
-            <label htmlFor="plan-field">Pilih Lahan</label>
+            <FieldLabel htmlFor="plan-field" label="Pilih Lahan" />
             {fields.length === 0 ? (
               <p className="muted">
                 Belum ada lahan. <Link to="/lahan">Buat lahan</Link> terlebih dahulu.
               </p>
             ) : (
-              <select
+              <CustomSelect
                 id="plan-field"
                 value={field?.id ?? ""}
-                onChange={(event) => setFieldId(event.target.value)}
-              >
-                {fields.map((entry) => (
-                  <option key={entry.id} value={entry.id}>
-                    {entry.name} · {entry.areaHa.toFixed(2)} ha
-                  </option>
-                ))}
-              </select>
+                onChange={setFieldId}
+                options={fields.map((entry) => ({
+                  value: entry.id,
+                  label: `${entry.name} · ${entry.areaHa.toFixed(2)} ha`,
+                }))}
+              />
             )}
           </div>
 
           <div className="field">
-            <label htmlFor="plan-crop">Komoditas</label>
-            <select
+            <FieldLabel htmlFor="plan-crop" label="Komoditas" />
+            <CustomSelect
               id="plan-crop"
               value={crop?.slug ?? ""}
-              onChange={(event) => setCropSlug(event.target.value)}
-            >
-              {crops.map((entry) => (
-                <option key={entry.slug} value={entry.slug}>
-                  {entry.nameId}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="field">
-            <label htmlFor="plan-date">Rencana Tanggal Mulai Tanam</label>
-            <input
-              id="plan-date"
-              type="date"
-              value={date}
-              onChange={(event) => setDate(event.target.value)}
+              onChange={setCropSlug}
+              options={crops.map((entry) => ({
+                value: entry.slug,
+                label: entry.nameId,
+              }))}
             />
           </div>
 
           <div className="field">
-            <label htmlFor="plan-irrigation">Ketersediaan Pengairan</label>
-            <select
-              id="plan-irrigation"
-              value={irrigation}
-              onChange={(e) => setIrrigation(e.target.value as IrrigationAvailability)}
-            >
-              <option value="irrigated">{irrigationLabel("irrigated")}</option>
-              <option value="partial_irrigation">{irrigationLabel("partial_irrigation")}</option>
-              <option value="rainfed">{irrigationLabel("rainfed")}</option>
-              <option value="unknown">{irrigationLabel("unknown")}</option>
-            </select>
-            <span className="hint">Otomatis mengikuti profil agronomi lahan jika sudah diisi.</span>
+            <FieldLabel htmlFor="plan-date" label="Rencana Tanggal Mulai Tanam" />
+            <DatePicker id="plan-date" value={date} onChange={setDate} />
           </div>
 
           <div className="field">
-            <label htmlFor="plan-basis">Sumber Data Cuaca</label>
-            <select
+            <FieldLabel
+              htmlFor="plan-irrigation"
+              label="Ketersediaan Pengairan"
+              tooltip="Otomatis mengikuti profil agronomi lahan jika sudah diisi di Kebun & Lahan."
+            />
+            <CustomSelect
+              id="plan-irrigation"
+              value={irrigation}
+              onChange={(val) => setIrrigation(val as IrrigationAvailability)}
+              options={[
+                { value: "irrigated", label: irrigationLabel("irrigated") },
+                { value: "partial_irrigation", label: irrigationLabel("partial_irrigation") },
+                { value: "rainfed", label: irrigationLabel("rainfed") },
+                { value: "unknown", label: irrigationLabel("unknown") },
+              ]}
+            />
+          </div>
+
+          <div className="field">
+            <FieldLabel htmlFor="plan-basis" label="Sumber Data Cuaca" />
+            <CustomSelect
               id="plan-basis"
               value={basis}
-              onChange={(e) => setBasis(e.target.value as SingleValueEvaluationBasis)}
-            >
-              <option value="climatology">Pola iklim rata-rata (jangka panjang)</option>
-              <option value="daily">Prakiraan cuaca harian</option>
-            </select>
+              onChange={(val) => setBasis(val as SingleValueEvaluationBasis)}
+              options={[
+                { value: "climatology", label: "Pola iklim rata-rata (jangka panjang)" },
+                { value: "daily", label: "Prakiraan cuaca harian" },
+              ]}
+            />
           </div>
 
           <div className="form-actions">
@@ -472,21 +473,20 @@ export function PlanPage() {
           <section className="section">
             <div className="section-head">
               <h2>Kalender &amp; Peluang Tanam</h2>
-              <div className="row">
-                <label htmlFor="filter-verdict" className="muted">
-                  Saring status:
-                </label>
-                <select
+              <div className="row" style={{ minWidth: 230 }}>
+                <CustomSelect
                   id="filter-verdict"
+                  ariaLabel="Saring status kalender tanam"
                   value={verdictFilter}
-                  onChange={(e) => setVerdictFilter(e.target.value as "all" | SuitabilityVerdict)}
-                >
-                  <option value="all">Semua status</option>
-                  <option value="suitable">Sesuai</option>
-                  <option value="conditional">Sesuai bersyarat</option>
-                  <option value="unsuitable">Kurang sesuai</option>
-                  <option value="insufficient_data">Data belum cukup</option>
-                </select>
+                  onChange={(val) => setVerdictFilter(val as "all" | SuitabilityVerdict)}
+                  options={[
+                    { value: "all", label: "Semua status" },
+                    { value: "suitable", label: "Sesuai" },
+                    { value: "conditional", label: "Sesuai bersyarat" },
+                    { value: "unsuitable", label: "Kurang sesuai" },
+                    { value: "insufficient_data", label: "Data belum cukup" },
+                  ]}
+                />
               </div>
             </div>
 
@@ -510,9 +510,10 @@ export function PlanPage() {
             <div className="panel-body stack">
               <div className="form-grid">
                 <div className="field">
-                  <label htmlFor="briefing-question">
-                    Tanyakan sesuatu tentang rencana ini (opsional)
-                  </label>
+                  <FieldLabel
+                    htmlFor="briefing-question"
+                    label="Tanyakan sesuatu tentang rencana ini (opsional)"
+                  />
                   <input
                     id="briefing-question"
                     maxLength={500}
