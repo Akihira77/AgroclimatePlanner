@@ -133,9 +133,9 @@ export interface GuideTerm {
 
 function readGuideCollapsed(storageKey: string): boolean {
   try {
-    return window.localStorage.getItem(`agroclimate.guide.${storageKey}`) === "collapsed";
+    return window.localStorage.getItem(`agroclimate.guide.${storageKey}`) !== "expanded";
   } catch {
-    return false;
+    return true;
   }
 }
 
@@ -144,7 +144,7 @@ function writeGuideCollapsed(storageKey: string, collapsed: boolean): void {
     if (collapsed) {
       window.localStorage.setItem(`agroclimate.guide.${storageKey}`, "collapsed");
     } else {
-      window.localStorage.removeItem(`agroclimate.guide.${storageKey}`);
+      window.localStorage.setItem(`agroclimate.guide.${storageKey}`, "expanded");
     }
   } catch {
     // Ignore storage unavailability (private browsing or sandboxed contexts).
@@ -224,7 +224,7 @@ export function PageGuide({
           <div className="guide-step" key={step.title}>
             <span className="guide-step-num">{index + 1}</span>
             <div>
-              <strong>{step.title}</strong>
+              <strong>{step.title.replace(/^\d+\.\s*/, "")}</strong>
               <p>{step.detail}</p>
             </div>
           </div>

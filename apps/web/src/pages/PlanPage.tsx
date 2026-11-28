@@ -1142,17 +1142,17 @@ function PlanTimeline({
         <table className="table">
           <thead>
             <tr>
-              <th>Fase Pertumbuhan</th>
-              <th className="numeric">Hari ke-</th>
-              <th>Mulai</th>
-              <th>Selesai</th>
-              <th>Status Saat Ini</th>
+              <th className="col-text">Fase Pertumbuhan</th>
+              <th className="col-num">Hari ke-</th>
+              <th className="col-date">Mulai</th>
+              <th className="col-date">Selesai</th>
+              <th className="col-status">Status Saat Ini</th>
             </tr>
           </thead>
           <tbody>
             {cycle.stages.map((stage) => (
               <tr key={stage.stageId}>
-                <td>
+                <td className="col-text">
                   {stage.name.charAt(0).toUpperCase() + stage.name.slice(1)}
                   {stage.isCritical ? (
                     <>
@@ -1161,11 +1161,11 @@ function PlanTimeline({
                     </>
                   ) : null}
                 </td>
-                <td className="numeric nowrap">
+                <td className="col-num">
                   {stage.startDayOffset}–{stage.endDayOffset}
                 </td>
-                <td className="nowrap">{stage.startDate}</td>
-                <td className="nowrap">
+                <td className="col-date">{stage.startDate}</td>
+                <td className="col-date">
                   {stage.endDate}
                   {stage.clipped ? (
                     <>
@@ -1174,7 +1174,7 @@ function PlanTimeline({
                     </>
                   ) : null}
                 </td>
-                <td className="muted">{stageStatus(stage)}</td>
+                <td className="col-status muted">{stageStatus(stage)}</td>
               </tr>
             ))}
           </tbody>

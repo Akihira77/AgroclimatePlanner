@@ -863,7 +863,9 @@ export function HarvestBarChart({ items }: { items: Harvest[] }) {
 }
 
 /**
- * Grouped SVG bar charts for numeric field observations (rainfall, temperature, soil moisture).
+ * Grouped SVG trend charts for numeric field observations:
+ * - temperature: adaptive-domain line + shaded area + points
+ * - rainfall / soil_moisture: zero-based bar charts with Y-axis & summary tiles
  */
 export function ObservationTrendChart({ observations }: { observations: FieldObservation[] }) {
   const numericKinds = ["rainfall", "temperature", "soil_moisture"] as const;
@@ -888,14 +890,45 @@ export function ObservationTrendChart({ observations }: { observations: FieldObs
   return (
     <div className="obs-charts" aria-label="Grafik tren pengamatan lapangan">
       {groups.map(({ kind, points }) => {
-        const maxVal = Math.max(...points.map((p) => p.value ?? 0), 1);
+        const vals = points.map((p) => p.value ?? 0);
+        const latestVal = vals[vals.length - 1] ?? 0;
+        const avgVal = vals.reduce((s, v) => s + v, 0) / vals.length;
+        const totalVal = vals.reduce((s, v) => s + v, 0);
+        const maxObserved = Math.max(...vals);
+        const minObserved = Math.min(...vals);
         const unit = points[points.length - 1]?.unit ?? "";
-        const width = Math.max(280, points.length * 46 + 32);
-        const height = 148;
-        const bottom = 118;
-        const top = 22;
+        const isLine = kind === "temperature";
+
+        const domainMin = isLine ? Math.floor(minObserved - 2) : 0;
+        const domainMax = isLine
+          ? Math.max(domainMin + 4, Math.ceil(maxObserved + 2))
+          : Math.max(1, Math.ceil(maxObserved * 1.15));
+        const domainSpan = Math.max(1, domainMax - domainMin);
+        const midTick = Math.round((domainMin + domainMax) / 2);
+
+        const padLeft = 42;
+        const padRight = 18;
+        const width = Math.max(320, points.length * 52 + padLeft + padRight);
+        const height = 190;
+        const bottom = 152;
+        const top = 24;
         const plotH = bottom - top;
+        const plotW = width - padLeft - padRight;
         const color = colorMap[kind];
+
+        const yFor = (val: number) => bottom - ((val - domainMin) / domainSpan) * plotH;
+        const xFor = (idx: number) =>
+          points.length === 1
+            ? padLeft + plotW / 2
+            : padLeft + (idx / Math.max(1, points.length - 1)) * (plotW - 26) + 13;
+
+        const polylinePts = points
+          .map((pt, idx) => `${xFor(idx)},${yFor(pt.value ?? 0)}`)
+          .join(" ");
+        const areaPts =
+          points.length > 0
+            ? `${xFor(0)},${bottom} ${polylinePts} ${xFor(points.length - 1)},${bottom}`
+            : "";
 
         return (
           <div key={kind} className="visual-card">
@@ -907,6 +940,28 @@ export function ObservationTrendChart({ observations }: { observations: FieldObs
                 </p>
               </div>
             </div>
+
+            <div className="soil-gauges" style={{ marginBottom: "var(--space-2)" }}>
+              <div className="soil-gauge-tile">
+                <span className="soil-gauge-k">Terbaru</span>
+                <strong>
+                  {formatNumber(latestVal, 1)} {unit}
+                </strong>
+              </div>
+              <div className="soil-gauge-tile">
+                <span className="soil-gauge-k">{kind === "rainfall" ? "Total" : "Rata-rata"}</span>
+                <strong>
+                  {formatNumber(kind === "rainfall" ? totalVal : avgVal, 1)} {unit}
+                </strong>
+              </div>
+              <div className="soil-gauge-tile">
+                <span className="soil-gauge-k">Tertinggi</span>
+                <strong>
+                  {formatNumber(maxObserved, 1)} {unit}
+                </strong>
+              </div>
+            </div>
+
             <div className="chart-scroll">
               <svg
                 viewBox={`0 0 ${width} ${height}`}
@@ -914,44 +969,112 @@ export function ObservationTrendChart({ observations }: { observations: FieldObs
                 role="img"
                 aria-label={`Grafik ${observationKindLabel(kind)}`}
               >
-                <line
-                  x1="16"
-                  y1={bottom}
-                  x2={width - 16}
-                  y2={bottom}
-                  stroke="#c4d0c7"
-                  strokeWidth="1"
-                />
-                {points.map((pt, idx) => {
-                  const val = pt.value ?? 0;
-                  const x = 24 + idx * 44;
-                  const barH = Math.max(5, (val / maxVal) * plotH);
-                  const y = bottom - barH;
+                {[domainMin, midTick, domainMax].map((tick) => {
+                  const yPos = yFor(tick);
+                  const isBase = tick === domainMin;
                   return (
-                    <g key={pt.id}>
-                      <rect x={x} y={y} width="26" height={barH} rx="5" fill={color} />
+                    <g key={tick}>
+                      <line
+                        x1={padLeft}
+                        y1={yPos}
+                        x2={width - padRight}
+                        y2={yPos}
+                        stroke={isBase ? "#c4d0c7" : "#e5ebe6"}
+                        strokeDasharray={isBase ? undefined : "4 4"}
+                        strokeWidth="1"
+                      />
                       <text
-                        x={x + 13}
-                        y={y - 5}
-                        textAnchor="middle"
-                        fontSize="10"
-                        fontWeight="700"
-                        fill="#132219"
-                      >
-                        {formatNumber(val, 1)}
-                      </text>
-                      <text
-                        x={x + 13}
-                        y={bottom + 15}
-                        textAnchor="middle"
+                        x={padLeft - 6}
+                        y={yPos + 3.5}
+                        textAnchor="end"
                         fontSize="9.5"
                         fill="#4b5d52"
                       >
-                        {pt.observedAt.slice(5, 10)}
+                        {tick}
                       </text>
                     </g>
                   );
                 })}
+
+                {isLine ? (
+                  <>
+                    {points.length > 1 ? (
+                      <>
+                        <polygon points={areaPts} fill={color} opacity="0.14" />
+                        <polyline
+                          points={polylinePts}
+                          fill="none"
+                          stroke={color}
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </>
+                    ) : null}
+                    {points.map((pt, idx) => {
+                      const val = pt.value ?? 0;
+                      const cx = xFor(idx);
+                      const cy = yFor(val);
+                      return (
+                        <g key={pt.id}>
+                          <circle cx={cx} cy={cy} r="4.5" fill="#ffffff" stroke={color} strokeWidth="2.5" />
+                          <text
+                            x={cx}
+                            y={cy - 9}
+                            textAnchor="middle"
+                            fontSize="10"
+                            fontWeight="700"
+                            fill="#132219"
+                          >
+                            {formatNumber(val, 1)}
+                          </text>
+                          <text
+                            x={cx}
+                            y={bottom + 16}
+                            textAnchor="middle"
+                            fontSize="9.5"
+                            fill="#4b5d52"
+                          >
+                            {dayLabel(pt.observedAt.slice(0, 10))}
+                          </text>
+                        </g>
+                      );
+                    })}
+                  </>
+                ) : (
+                  points.map((pt, idx) => {
+                    const val = pt.value ?? 0;
+                    const slotW = plotW / Math.max(1, points.length);
+                    const barW = Math.min(30, Math.max(14, slotW - 14));
+                    const x = padLeft + idx * slotW + (slotW - barW) / 2;
+                    const y = yFor(val);
+                    const barH = Math.max(4, bottom - y);
+                    return (
+                      <g key={pt.id}>
+                        <rect x={x} y={bottom - barH} width={barW} height={barH} rx="5" fill={color} />
+                        <text
+                          x={x + barW / 2}
+                          y={bottom - barH - 6}
+                          textAnchor="middle"
+                          fontSize="10"
+                          fontWeight="700"
+                          fill="#132219"
+                        >
+                          {formatNumber(val, 1)}
+                        </text>
+                        <text
+                          x={x + barW / 2}
+                          y={bottom + 16}
+                          textAnchor="middle"
+                          fontSize="9.5"
+                          fill="#4b5d52"
+                        >
+                          {dayLabel(pt.observedAt.slice(0, 10))}
+                        </text>
+                      </g>
+                    );
+                  })
+                )}
               </svg>
             </div>
           </div>

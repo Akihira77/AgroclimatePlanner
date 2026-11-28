@@ -218,10 +218,10 @@ export function DashboardPage() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>Nama Kebun</th>
-                  <th>Wilayah</th>
-                  <th className="numeric">Jumlah Lahan</th>
-                  <th>Tanggal Dibuat</th>
+                  <th className="col-text">Nama Kebun</th>
+                  <th className="col-text">Wilayah</th>
+                  <th className="col-num">Jumlah Lahan</th>
+                  <th className="col-date">Tanggal Dibuat</th>
                 </tr>
               </thead>
               <tbody>
@@ -229,12 +229,12 @@ export function DashboardPage() {
                   const count = fields.filter((field) => field.farmId === farm.id).length;
                   return (
                     <tr key={farm.id}>
-                      <td>
+                      <td className="col-text">
                         <strong>{farm.name}</strong>
                       </td>
-                      <td className="muted">{farm.region ?? "Belum diisi"}</td>
-                      <td className="numeric">{count}</td>
-                      <td className="muted nowrap">{farm.createdAt.slice(0, 10)}</td>
+                      <td className="col-text muted">{farm.region ?? "Belum diisi"}</td>
+                      <td className="col-num">{count}</td>
+                      <td className="col-date muted">{farm.createdAt.slice(0, 10)}</td>
                     </tr>
                   );
                 })}

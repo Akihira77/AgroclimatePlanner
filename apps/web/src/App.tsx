@@ -145,9 +145,7 @@ function Shell({
   readonly onDeleteAccount: () => Promise<void>;
   readonly logoutError: unknown;
 }) {
-  const [accountOpen, setAccountOpen] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [passwordModalOpen, setPasswordModalOpen] = useState(false);
+  const [accountModalOpen, setAccountModalOpen] = useState(false);
   const [section, ...rest] = route.segments;
   const slug = rest[0];
   const current = section ?? "ringkasan";
@@ -210,58 +208,14 @@ function Shell({
             <button
               className="btn-sidebar"
               type="button"
-              aria-expanded={accountOpen}
-              onClick={() => {
-                setAccountOpen((open) => !open);
-                setConfirmDelete(false);
-              }}
+              aria-haspopup="dialog"
+              aria-expanded={accountModalOpen}
+              onClick={() => setAccountModalOpen(true)}
             >
               <IconSettings size={16} />
               <span>Kelola akun</span>
             </button>
           </div>
-
-          {accountOpen ? (
-            <div className="account-drawer">
-              <button
-                className="btn-sidebar"
-                type="button"
-                onClick={() => setPasswordModalOpen(true)}
-              >
-                Ubah kata sandi
-              </button>
-              <p>
-                Menghapus akun akan menonaktifkan akses Anda. Email tetap bisa didaftarkan ulang di
-                kemudian hari.
-              </p>
-              {!confirmDelete ? (
-                <button
-                  className="btn-sidebar btn-sidebar-danger"
-                  type="button"
-                  onClick={() => setConfirmDelete(true)}
-                >
-                  Hapus akun
-                </button>
-              ) : (
-                <div className="btn-row">
-                  <button
-                    className="btn-sidebar btn-sidebar-danger"
-                    type="button"
-                    onClick={() => void onDeleteAccount()}
-                  >
-                    Konfirmasi hapus
-                  </button>
-                  <button
-                    className="btn-sidebar"
-                    type="button"
-                    onClick={() => setConfirmDelete(false)}
-                  >
-                    Batal
-                  </button>
-                </div>
-              )}
-            </div>
-          ) : null}
         </div>
       </aside>
 
@@ -320,14 +274,29 @@ function Shell({
           <span>Cuaca</span>
         </Link>
       </nav>
-      {passwordModalOpen ? (
-        <ChangePasswordModal onClose={() => setPasswordModalOpen(false)} />
+      {accountModalOpen ? (
+        <AccountModal
+          userEmail={user.email}
+          onDeleteAccount={onDeleteAccount}
+          onClose={() => setAccountModalOpen(false)}
+        />
       ) : null}
     </div>
   );
 }
 
-function ChangePasswordModal({ onClose }: { readonly onClose: () => void }) {
+function AccountModal({
+  userEmail,
+  onDeleteAccount,
+  onClose,
+}: {
+  readonly userEmail: string;
+  readonly onDeleteAccount: () => Promise<void>;
+  readonly onClose: () => void;
+}) {
+  const [modalTab, setModalTab] = useState<"password" | "danger">("password");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -335,7 +304,15 @@ function ChangePasswordModal({ onClose }: { readonly onClose: () => void }) {
   const [error, setError] = useState<unknown>(null);
   const [success, setSuccess] = useState(false);
 
-  const submit = async (event: React.FormEvent) => {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  const submitPassword = async (event: React.FormEvent) => {
     event.preventDefault();
     setError(null);
     setSuccess(false);
@@ -363,81 +340,172 @@ function ChangePasswordModal({ onClose }: { readonly onClose: () => void }) {
     }
   };
 
+  const handleDelete = async () => {
+    setDeleting(true);
+    setError(null);
+    try {
+      await onDeleteAccount();
+    } catch (failure) {
+      setError(failure);
+      setDeleting(false);
+    }
+  };
+
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div
-        className="modal-card"
+        className="modal-card account-modal"
         role="dialog"
         aria-modal="true"
-        aria-labelledby="chg-pwd-title"
+        aria-labelledby="account-modal-title"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="spread">
-          <h2 id="chg-pwd-title">Ubah Kata Sandi</h2>
+        <div className="spread" style={{ gap: 10 }}>
+          <div>
+            <h2 id="account-modal-title" style={{ margin: 0 }}>
+              Kelola Akun
+            </h2>
+            <span className="muted" style={{ fontSize: "0.85rem" }}>
+              {userEmail}
+            </span>
+          </div>
           <button type="button" className="btn btn-quiet btn-sm" onClick={onClose}>
             Tutup
           </button>
         </div>
 
-        <form className="stack" onSubmit={submit}>
-          <div className="field">
-            <FieldLabel htmlFor="chg-current-pwd" label="Kata sandi saat ini" />
-            <input
-              id="chg-current-pwd"
-              type="password"
-              autoComplete="current-password"
-              required
-              value={currentPassword}
-              onChange={(e) => setCurrentPassword(e.target.value)}
-            />
-          </div>
+        <div className="modal-tabs" role="tablist" aria-label="Pengaturan Akun">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={modalTab === "password"}
+            className={`tab-btn${modalTab === "password" ? " is-active" : ""}`}
+            onClick={() => {
+              setModalTab("password");
+              setError(null);
+            }}
+          >
+            Ubah Kata Sandi
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={modalTab === "danger"}
+            className={`tab-btn${modalTab === "danger" ? " is-active" : ""}`}
+            onClick={() => {
+              setModalTab("danger");
+              setError(null);
+            }}
+          >
+            Zona Bahaya (Hapus Akun)
+          </button>
+        </div>
 
-          <div className="field">
-            <FieldLabel
-              htmlFor="chg-new-pwd"
-              label="Kata sandi baru"
-              tooltip="Minimal 12 karakter dan harus berbeda dari kata sandi saat ini."
-            />
-            <input
-              id="chg-new-pwd"
-              type="password"
-              autoComplete="new-password"
-              required
-              minLength={12}
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-            />
-          </div>
+        {modalTab === "password" ? (
+          <form className="stack" onSubmit={submitPassword}>
+            <div className="field">
+              <FieldLabel htmlFor="chg-current-pwd" label="Kata sandi saat ini" />
+              <input
+                id="chg-current-pwd"
+                type="password"
+                autoComplete="current-password"
+                required
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+              />
+            </div>
 
-          <div className="field">
-            <FieldLabel htmlFor="chg-confirm-pwd" label="Konfirmasi kata sandi baru" />
-            <input
-              id="chg-confirm-pwd"
-              type="password"
-              autoComplete="new-password"
-              required
-              minLength={12}
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-            />
-          </div>
+            <div className="field">
+              <FieldLabel
+                htmlFor="chg-new-pwd"
+                label="Kata sandi baru"
+                tooltip="Minimal 12 karakter dan harus berbeda dari kata sandi saat ini."
+              />
+              <input
+                id="chg-new-pwd"
+                type="password"
+                autoComplete="new-password"
+                required
+                minLength={12}
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+              />
+            </div>
 
-          {error !== null ? <ErrorNotice error={error} /> : null}
-          {success ? (
-            <Notice tone="success">
-              Kata sandi berhasil diperbarui. Sesi di perangkat lain telah dikeluarkan.
-            </Notice>
-          ) : null}
+            <div className="field">
+              <FieldLabel htmlFor="chg-confirm-pwd" label="Konfirmasi kata sandi baru" />
+              <input
+                id="chg-confirm-pwd"
+                type="password"
+                autoComplete="new-password"
+                required
+                minLength={12}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+              />
+            </div>
 
-          <div className="btn-row">
-            <button type="submit" className="btn btn-primary" disabled={busy}>
-              {busy ? "Menyimpan…" : "Simpan Kata Sandi"}
-            </button>
-            <button type="button" className="btn btn-quiet" onClick={onClose}>
-              Batal
-            </button>
+            {error !== null ? <ErrorNotice error={error} /> : null}
+            {success ? (
+              <Notice tone="success">
+                Kata sandi berhasil diperbarui. Sesi di perangkat lain telah dikeluarkan.
+              </Notice>
+            ) : null}
+
+            <div className="btn-row">
+              <button type="submit" className="btn btn-primary" disabled={busy}>
+                {busy ? "Menyimpan…" : "Simpan Kata Sandi"}
+              </button>
+              <button type="button" className="btn btn-quiet" onClick={onClose}>
+                Batal
+              </button>
+            </div>
+          </form>
+        ) : (
+          <div className="danger-zone-box">
+            <strong>Hapus Akun Permanen (Soft-Delete)</strong>
+            <p className="muted" style={{ margin: 0, fontSize: "0.9rem" }}>
+              Menghapus akun akan menonaktifkan sesi dan akses Anda ke seluruh kebun, lahan, serta
+              catatan tanam. Email tetap dapat didaftarkan ulang di kemudian hari.
+            </p>
+            {error !== null ? <ErrorNotice error={error} /> : null}
+            {!confirmDelete ? (
+              <div className="btn-row" style={{ marginTop: 6 }}>
+                <button
+                  type="button"
+                  className="btn btn-danger"
+                  onClick={() => setConfirmDelete(true)}
+                >
+                  Hapus akun
+                </button>
+              </div>
+            ) : (
+              <div className="stack" style={{ gap: 8, marginTop: 6 }}>
+                <strong style={{ color: "#b91c1c", fontSize: "0.88rem" }}>
+                  Yakin ingin menonaktifkan akun {userEmail}?
+                </strong>
+                <div className="btn-row">
+                  <button
+                    type="button"
+                    className="btn btn-danger"
+                    disabled={deleting}
+                    onClick={() => void handleDelete()}
+                  >
+                    {deleting ? "Menghapus…" : "Konfirmasi hapus"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-quiet"
+                    disabled={deleting}
+                    onClick={() => setConfirmDelete(false)}
+                  >
+                    Batal
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
-        </form>
+        )}
       </div>
     </div>
   );

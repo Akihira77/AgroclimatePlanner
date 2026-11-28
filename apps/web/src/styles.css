@@ -1083,6 +1083,92 @@ a {
   text-align: right;
 }
 
+.table th.col-text,
+.table td.col-text {
+  text-align: left;
+}
+
+.table th.col-num,
+.table td.col-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.table th.col-date,
+.table td.col-date {
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.table th.col-status,
+.table td.col-status {
+  text-align: left;
+  white-space: nowrap;
+}
+
+.table th.col-actions,
+.table td.col-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.table td.col-actions .btn-row,
+.table td.col-actions .action-bar {
+  justify-content: flex-end;
+}
+
+.table th.col-obs-time,
+.table td.col-obs-time {
+  width: 150px;
+}
+
+.table th.col-obs-kind,
+.table td.col-obs-kind {
+  width: 170px;
+}
+
+.table th.col-obs-val,
+.table td.col-obs-val {
+  width: 130px;
+}
+
+/* Segmented controls */
+.segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  width: fit-content;
+}
+
+.segmented-btn {
+  border: 0;
+  background: transparent;
+  color: var(--ink-muted);
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: calc(var(--radius) - 3px);
+  cursor: pointer;
+  transition: background 140ms, color 140ms, box-shadow 140ms;
+}
+
+.segmented-btn:hover {
+  color: var(--ink);
+}
+
+.segmented-btn.is-active {
+  background: var(--surface);
+  color: var(--accent-ink);
+  box-shadow: 0 1px 3px rgb(19 34 25 / 12%);
+}
+
 /* ---------- Tags ---------- */
 
 .tag {
@@ -1408,20 +1494,31 @@ a {
 
 .day-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
-  gap: 1px;
-  background: var(--line);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  overflow: hidden;
+  grid-template-columns: repeat(auto-fill, minmax(136px, 1fr));
+  gap: 10px;
+  background: transparent;
+  border: none;
+  overflow: visible;
 }
 
 .day-cell {
   background: var(--surface);
-  padding: var(--space-2) var(--space-3);
-  display: grid;
-  gap: 4px;
-  min-height: 82px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.day-cell[data-heavy="true"] {
+  border-color: var(--warn);
+  background: #fffbeb;
+}
+
+.day-cell[data-empty="true"] {
+  background: var(--surface-subtle);
+  border-style: dashed;
 }
 
 .day-cell .date {
@@ -2847,6 +2944,47 @@ a {
   display: none;
 }
 
+/* Account Modal & Visual Hierarchy */
+.account-modal {
+  max-width: 520px;
+  width: calc(100% - 32px);
+}
+
+.modal-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+
+.danger-zone-box {
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.tech-details {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-subtle);
+  padding: var(--space-2) var(--space-3);
+}
+
+.tech-details > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--ink-muted);
+  font-size: 0.9rem;
+}
+
+.content {
+  padding-bottom: 88px;
+}
+
 @media (max-width: 768px) {
   .sidebar .nav {
     display: none;
@@ -3129,12 +3267,69 @@ a {
   padding: var(--space-2);
 }
 
+/* Account Modal & Visual Hierarchy */
+.account-modal {
+  max-width: 520px;
+  width: calc(100% - 32px);
+}
+
+.modal-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+
+.danger-zone-box {
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  border-radius: var(--radius);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.tech-details {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-subtle);
+  padding: var(--space-2) var(--space-3);
+}
+
+.tech-details > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--ink-muted);
+  font-size: 0.9rem;
+}
+
+.content {
+  padding-bottom: 88px;
+}
+
 @media (max-width: 768px) {
+  .main {
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
   .stack > *,
   .section,
   .panel {
     min-width: 0;
     max-width: 100%;
+  }
+
+  .segmented {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+
+  .segmented-btn {
+    flex: 1 1 auto;
+    text-align: center;
   }
 
   .tabs {

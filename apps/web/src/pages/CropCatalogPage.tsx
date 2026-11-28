@@ -386,26 +386,26 @@ function CycleTable({ id, date }: { readonly id: string; readonly date: string }
           <table className="table table-cards">
             <thead>
               <tr>
-                <th>Fase</th>
-                <th className="numeric">Hari</th>
-                <th>Mulai</th>
-                <th>Selesai</th>
-                <th>Prioritas</th>
+                <th className="col-text">Fase</th>
+                <th className="col-num">Hari</th>
+                <th className="col-date">Mulai</th>
+                <th className="col-date">Selesai</th>
+                <th className="col-status">Prioritas</th>
               </tr>
             </thead>
             <tbody>
               {cycle.stages.map((stage) => (
                 <tr key={stage.stageId}>
-                  <td data-label="Fase">
+                  <td data-label="Fase" className="col-text">
                     {stage.name.charAt(0).toUpperCase() + stage.name.slice(1)}
                   </td>
-                  <td data-label="Hari" className="numeric nowrap">
+                  <td data-label="Hari" className="col-num">
                     {stage.startDayOffset}–{stage.endDayOffset}
                   </td>
-                  <td data-label="Mulai" className="nowrap">
+                  <td data-label="Mulai" className="col-date">
                     {stage.startDate}
                   </td>
-                  <td data-label="Selesai" className="nowrap">
+                  <td data-label="Selesai" className="col-date">
                     {stage.endDate}
                     {stage.clipped ? (
                       <>
@@ -414,7 +414,7 @@ function CycleTable({ id, date }: { readonly id: string; readonly date: string }
                       </>
                     ) : null}
                   </td>
-                  <td data-label="Prioritas">
+                  <td data-label="Prioritas" className="col-status">
                     {stage.isCritical ? <Tag tone="warn">Fase kritis</Tag> : "Normal"}
                   </td>
                 </tr>

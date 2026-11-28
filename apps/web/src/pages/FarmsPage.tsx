@@ -627,21 +627,21 @@ export function FarmsPage() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>Nama Lahan</th>
-                  <th className="numeric">Luas (ha)</th>
-                  <th>Tanggal Dibuat</th>
-                  <th />
+                  <th className="col-text">Nama Lahan</th>
+                  <th className="col-num">Luas (ha)</th>
+                  <th className="col-date">Tanggal Dibuat</th>
+                  <th className="col-actions">Aksi</th>
                 </tr>
               </thead>
               <tbody>
                 {selectedFields.map((field) => (
                   <tr key={field.id}>
-                    <td>
+                    <td className="col-text">
                       <strong>{field.name}</strong>
                     </td>
-                    <td className="numeric">{field.areaHa.toFixed(2)} ha</td>
-                    <td className="muted numeric">{field.createdAt.slice(0, 10)}</td>
-                    <td>
+                    <td className="col-num">{field.areaHa.toFixed(2)} ha</td>
+                    <td className="col-date muted">{field.createdAt.slice(0, 10)}</td>
+                    <td className="col-actions">
                       <div className="btn-row">
                         <button
                           type="button"

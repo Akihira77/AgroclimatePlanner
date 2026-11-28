@@ -480,12 +480,12 @@ export function ActivitiesPage() {
                   <table className="table table-cards">
                     <thead>
                       <tr>
-                        <th>Komoditas &amp; Lahan</th>
-                        <th>Tanggal Tanam</th>
-                        <th>Perkiraan Panen</th>
-                        <th className="numeric">Total Panen</th>
-                        <th>Status</th>
-                        <th>Aksi</th>
+                        <th className="col-text">Komoditas &amp; Lahan</th>
+                        <th className="col-date">Tanggal Tanam</th>
+                        <th className="col-date">Perkiraan Panen</th>
+                        <th className="col-num">Total Panen</th>
+                        <th className="col-status">Status</th>
+                        <th className="col-actions">Aksi</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -494,29 +494,29 @@ export function ActivitiesPage() {
                         const menuOpen = openActionMenuId === p.id;
                         return (
                           <tr key={p.id}>
-                            <td data-label="Komoditas & Lahan">
+                            <td data-label="Komoditas & Lahan" className="col-text">
                               <strong>{p.cropNameId}</strong>{" "}
                               <span className="muted">({p.cultivarName})</span>
                               <div className="muted" style={{ fontSize: "0.8rem" }}>
                                 {fieldName}
                               </div>
                             </td>
-                            <td data-label="Tanggal Tanam" className="nowrap">
+                            <td data-label="Tanggal Tanam" className="col-date">
                               {dayLabel(p.plantedAt)}
                             </td>
-                            <td data-label="Perkiraan Panen" className="nowrap muted">
+                            <td data-label="Perkiraan Panen" className="col-date muted">
                               {dayLabel(p.expectedHarvestEarliest)} –{" "}
                               {dayLabel(p.expectedHarvestLatest)}
                             </td>
-                            <td data-label="Total Panen" className="numeric nowrap">
+                            <td data-label="Total Panen" className="col-num">
                               {p.totalYieldKg.toLocaleString("id-ID")} kg
                             </td>
-                            <td data-label="Status" className="nowrap">
+                            <td data-label="Status" className="col-status">
                               <Tag tone={plantingStatusTone(p.status)}>
                                 {plantingStatusLabel(p.status)}
                               </Tag>
                             </td>
-                            <td data-label="Aksi">
+                            <td data-label="Aksi" className="col-actions">
                               <div className="action-bar">
                                 <button
                                   type="button"
@@ -703,17 +703,17 @@ export function ActivitiesPage() {
                         <table className="table">
                           <thead>
                             <tr>
-                              <th>Tanggal</th>
-                              <th className="numeric">Hasil (kg)</th>
-                              <th>Catatan</th>
+                              <th className="col-date">Tanggal</th>
+                              <th className="col-num">Hasil (kg)</th>
+                              <th className="col-text">Catatan</th>
                             </tr>
                           </thead>
                           <tbody>
                             {harvestState.items.map((h) => (
                               <tr key={h.id}>
-                                <td className="nowrap">{h.harvestedAt}</td>
-                                <td className="numeric">{h.yieldKg.toLocaleString("id-ID")}</td>
-                                <td className="muted">{h.notes ?? "—"}</td>
+                                <td className="col-date">{h.harvestedAt}</td>
+                                <td className="col-num">{h.yieldKg.toLocaleString("id-ID")}</td>
+                                <td className="col-text muted">{h.notes ?? "—"}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -834,23 +834,23 @@ export function ActivitiesPage() {
                 <table className="table">
                   <thead>
                     <tr>
-                      <th>Waktu</th>
-                      <th>Jenis</th>
-                      <th className="numeric">Hasil</th>
-                      <th>Alat / Catatan</th>
+                      <th className="col-date col-obs-time">Waktu</th>
+                      <th className="col-text col-obs-kind">Jenis</th>
+                      <th className="col-num col-obs-val">Hasil</th>
+                      <th className="col-text">Alat / Catatan</th>
                     </tr>
                   </thead>
                   <tbody>
                     {observations.map((obs) => (
                       <tr key={obs.id}>
-                        <td className="nowrap muted">
+                        <td className="col-date col-obs-time muted">
                           {obs.observedAt.slice(0, 16).replace("T", " ")}
                         </td>
-                        <td>{observationKindLabel(obs.kind)}</td>
-                        <td className="numeric">
+                        <td className="col-text col-obs-kind">{observationKindLabel(obs.kind)}</td>
+                        <td className="col-num col-obs-val">
                           {obs.value === null ? "—" : `${obs.value} ${obs.unit ?? ""}`}
                         </td>
-                        <td className="muted">{obs.method ?? "—"}</td>
+                        <td className="col-text muted">{obs.method ?? "—"}</td>
                       </tr>
                     ))}
                   </tbody>

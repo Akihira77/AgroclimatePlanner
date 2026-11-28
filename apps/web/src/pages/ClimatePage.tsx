@@ -388,7 +388,8 @@ function shortMonthLabel(isoMonth: string): string {
 
 function MonthlyRainfallChart({ outlook }: { readonly outlook: ClimateOutlook }) {
   const values = outlook.months.map((m) => m.valueMm).filter((v): v is number => v !== null);
-  const maxVal = Math.max(10, ...values);
+  const rawMax = Math.max(220, ...values);
+  const maxVal = Math.ceil(rawMax / 50) * 50;
   const totalMm = values.reduce((sum, v) => sum + v, 0);
   const avgMm = values.length > 0 ? totalMm / values.length : null;
   const wettest = outlook.months.reduce<(typeof outlook.months)[number] | null>(
@@ -397,12 +398,16 @@ function MonthlyRainfallChart({ outlook }: { readonly outlook: ClimateOutlook })
     null,
   );
 
-  const width = 640;
-  const height = 200;
-  const padBottom = 28;
-  const padTop = 26;
+  const width = 660;
+  const height = 240;
+  const padLeft = 44;
+  const padRight = 10;
+  const padBottom = 30;
+  const padTop = 28;
+  const plotWidth = width - padLeft - padRight;
   const plotHeight = height - padTop - padBottom;
-  const slotWidth = width / outlook.months.length;
+  const slotWidth = plotWidth / outlook.months.length;
+  const yTicks = [0, 100, 200, maxVal].filter((v, idx, arr) => v <= maxVal && arr.indexOf(v) === idx);
 
   return (
     <div className="chart-card">
@@ -446,26 +451,46 @@ function MonthlyRainfallChart({ outlook }: { readonly outlook: ClimateOutlook })
         role="img"
         aria-label="Grafik curah hujan bulanan 12 bulan"
       >
-        <line
-          x1="8"
-          y1={padTop + plotHeight / 2}
-          x2={width - 8}
-          y2={padTop + plotHeight / 2}
-          stroke="var(--line)"
-          strokeDasharray="4 4"
-          strokeWidth="1"
-        />
-        <line
-          x1="8"
-          y1={padTop + plotHeight}
-          x2={width - 8}
-          y2={padTop + plotHeight}
-          stroke="var(--line-strong)"
-          strokeWidth="1"
-        />
+        {yTicks.map((tick) => {
+          const yPos = padTop + plotHeight - (tick / maxVal) * plotHeight;
+          const isBaseline = tick === 0;
+          const isWet = tick === 200;
+          const isTrans = tick === 100;
+          return (
+            <g key={tick}>
+              <line
+                x1={padLeft}
+                y1={yPos}
+                x2={width - padRight}
+                y2={yPos}
+                stroke={isBaseline ? "var(--line-strong)" : isWet ? "#93c5fd" : "var(--line)"}
+                strokeDasharray={isBaseline ? undefined : "4 4"}
+                strokeWidth="1"
+              />
+              <text
+                x={padLeft - 6}
+                y={yPos + 3.5}
+                textAnchor="end"
+                fontSize="10"
+                fill="var(--ink-faint)"
+              >
+                {tick}
+              </text>
+              {isWet ? (
+                <text x={width - padRight} y={yPos - 4} textAnchor="end" fontSize="9.5" fill="#2563eb">
+                  Batas bulan basah (200 mm)
+                </text>
+              ) : isTrans ? (
+                <text x={width - padRight} y={yPos - 4} textAnchor="end" fontSize="9.5" fill="var(--ink-faint)">
+                  Batas peralihan (100 mm)
+                </text>
+              ) : null}
+            </g>
+          );
+        })}
         {outlook.months.map((m, idx) => {
-          const x = idx * slotWidth + 8;
-          const barWidth = Math.max(12, slotWidth - 16);
+          const x = padLeft + idx * slotWidth + 6;
+          const barWidth = Math.max(12, slotWidth - 12);
           const label = shortMonthLabel(m.month);
           if (m.valueMm === null) {
             return (
@@ -549,28 +574,16 @@ function DailySegments({ forecast }: { readonly forecast: ClimateDailyOutlook })
       {forecast.segments.map((segment) => {
         const present = segment.days.filter((day) => day.valueMm !== null).length;
         const stale = segment.days.filter((day) => day.availability === "stale").length;
-
-        return (
-          <div key={segment.band} className="stack-tight">
-            <div className="segment-head">
-              <h3>
-                {segment.band === "daily" ? "Harian (Hari 0–14)" : "Jangka Menengah (Hari 15–45)"} ·{" "}
-                <span className="muted">{dataClassLabel(segment.dataClass)}</span>
-              </h3>
-              <span className="muted numeric">
-                {present}/{segment.days.length} hari terisi
-                {stale > 0 ? ` · ${stale} perlu diperbarui` : ""}
-              </span>
-            </div>
-
-            <DailyRainfallChart segment={segment} />
-
-            <div className="day-grid">
-              {segment.days.map((day) => (
+        const cards = (
+          <div className="day-grid">
+            {segment.days.map((day) => {
+              const isHeavy = day.valueMm !== null && day.valueMm >= 20;
+              return (
                 <div
                   className="day-cell"
                   key={day.date}
                   data-empty={day.valueMm === null ? "true" : undefined}
+                  data-heavy={isHeavy ? "true" : undefined}
                   title={
                     day.availability === null
                       ? undefined
@@ -588,22 +601,49 @@ function DailySegments({ forecast }: { readonly forecast: ClimateDailyOutlook })
                         : missingReasonLabel(day.missingReason)}
                     </Tag>
                   ) : (
-                    <span className="row">
+                    <span className="row" style={{ gap: 4, flexWrap: "wrap" }}>
+                      {isHeavy ? <Tag tone="warn">Lebat</Tag> : null}
                       <Tag tone={day.availability === "stale" ? "warn" : "accent"}>
                         {availabilityLabel(day.availability ?? "fresh")}
                       </Tag>
                     </span>
                   )}
                 </div>
-              ))}
+              );
+            })}
+          </div>
+        );
+
+        return (
+          <div key={segment.band} className="stack-tight">
+            <div className="segment-head">
+              <h3>
+                {segment.band === "daily" ? "Harian (Hari 0–14)" : "Jangka Menengah (Hari 15–45)"} ·{" "}
+                <span className="muted">{dataClassLabel(segment.dataClass)}</span>
+              </h3>
+              <span className="muted numeric">
+                {present}/{segment.days.length} hari terisi
+                {stale > 0 ? ` · ${stale} perlu diperbarui` : ""}
+              </span>
             </div>
+
+            <DailyRainfallChart segment={segment} />
+
+            {segment.band === "daily" ? (
+              cards
+            ) : (
+              <details className="tech-details">
+                <summary>Lihat rincian {segment.days.length} hari jangka menengah</summary>
+                <div style={{ marginTop: "var(--space-2)" }}>{cards}</div>
+              </details>
+            )}
           </div>
         );
       })}
 
       <p className="faint">
-        Setiap kotak menampilkan perkiraan curah hujan harian beserta status pembaruannya. Hari yang
-        kosong menandakan data tidak tersedia, bukan berarti 0 mm.
+        Setiap kartu menampilkan perkiraan curah hujan harian beserta status pembaruannya. Hari
+        yang kosong menandakan data tidak tersedia, bukan berarti 0 mm.
       </p>
     </section>
   );
@@ -614,62 +654,175 @@ function DailyRainfallChart({
 }: {
   readonly segment: ClimateDailyOutlook["segments"][number];
 }) {
-  const values = segment.days.map((d) => d.valueMm).filter((v): v is number => v !== null);
-  const maxVal = Math.max(5, ...values);
-  const width = 640;
-  const height = 110;
-  const padBottom = 18;
-  const padTop = 8;
+  const validDays = segment.days.filter(
+    (d): d is typeof d & { readonly valueMm: number } => d.valueMm !== null,
+  );
+  const totalMm = validDays.reduce((sum, d) => sum + d.valueMm, 0);
+  const rainyDays = validDays.filter((d) => d.valueMm >= 1).length;
+  const peakDay = validDays.reduce<(typeof validDays)[number] | null>(
+    (best, cur) => (best === null || cur.valueMm > best.valueMm ? cur : best),
+    null,
+  );
+  const rawMax = Math.max(10, ...validDays.map((d) => d.valueMm));
+  const maxVal = Math.ceil(rawMax / 10) * 10;
+
+  const width = 660;
+  const height = 195;
+  const padLeft = 42;
+  const padRight = 10;
+  const padBottom = 30;
+  const padTop = 22;
+  const plotWidth = width - padLeft - padRight;
   const plotHeight = height - padTop - padBottom;
-  const slotWidth = width / Math.max(1, segment.days.length);
-  const fill = segment.dataClass === "climatology" ? "var(--warn)" : "var(--accent)";
+  const slotWidth = plotWidth / Math.max(1, segment.days.length);
+  const xStep = segment.days.length <= 16 ? 2 : 5;
+  const yTicks = [0, ...(maxVal >= 20 ? [20] : []), maxVal].filter(
+    (v, idx, arr) => arr.indexOf(v) === idx,
+  );
 
   return (
     <div className="chart-card">
-      <div className="spread" style={{ marginBottom: "4px", fontSize: "0.78rem" }}>
-        <span className="muted">Puncak harian: {millimetres(Math.round(maxVal))}</span>
-        <span className="muted">{segment.days.length} hari</span>
+      <div className="soil-gauges" style={{ marginBottom: "var(--space-2)" }}>
+        <div className="soil-gauge-tile">
+          <span className="soil-gauge-k">Total Perkiraan Hujan</span>
+          <strong>
+            {validDays.length > 0 ? millimetres(Math.round(totalMm)) : "Belum tersedia"}
+          </strong>
+        </div>
+        <div className="soil-gauge-tile">
+          <span className="soil-gauge-k">Puncak Harian</span>
+          <strong>
+            {peakDay !== null
+              ? `${dayLabel(peakDay.date)} (${millimetres(Math.round(peakDay.valueMm))})`
+              : "Belum tersedia"}
+          </strong>
+        </div>
+        <div className="soil-gauge-tile">
+          <span className="soil-gauge-k">Hari Hujan (≥1 mm)</span>
+          <strong>
+            {validDays.length > 0 ? `${rainyDays} dari ${validDays.length} hr` : "0 hr"}
+          </strong>
+        </div>
       </div>
+
+      <div className="chart-legend" aria-label="Legenda grafik harian">
+        <span className="legend-item">
+          <span className="legend-swatch" data-kind="forecast" /> Hujan ringan–sedang (&lt;20 mm)
+        </span>
+        <span className="legend-item">
+          <span className="legend-swatch" data-kind="climatology" /> Hujan lebat (≥20 mm)
+        </span>
+        <span className="legend-item">
+          <span className="legend-swatch" data-kind="missing" /> Data belum tersedia
+        </span>
+      </div>
+
       <svg
         className="chart-svg"
         viewBox={`0 0 ${width} ${height}`}
         role="img"
         aria-label={`Grafik curah hujan ${segment.band === "daily" ? "harian" : "jangka menengah"}`}
       >
-        <line
-          x1="2"
-          y1={padTop + plotHeight}
-          x2={width - 2}
-          y2={padTop + plotHeight}
-          stroke="var(--line-strong)"
-          strokeWidth="1"
-        />
+        {yTicks.map((tick) => {
+          const yPos = padTop + plotHeight - (tick / maxVal) * plotHeight;
+          const isZero = tick === 0;
+          const isHeavyLine = tick === 20;
+          return (
+            <g key={tick}>
+              <line
+                x1={padLeft}
+                y1={yPos}
+                x2={width - padRight}
+                y2={yPos}
+                stroke={isZero ? "var(--line-strong)" : isHeavyLine ? "var(--warn)" : "var(--line)"}
+                strokeDasharray={isZero ? undefined : "4 4"}
+                strokeWidth="1"
+              />
+              <text
+                x={padLeft - 6}
+                y={yPos + 3.5}
+                textAnchor="end"
+                fontSize="10"
+                fill="var(--ink-faint)"
+              >
+                {tick} mm
+              </text>
+            </g>
+          );
+        })}
+
         {segment.days.map((d, idx) => {
-          const x = idx * slotWidth + 2;
-          const barWidth = Math.max(3, slotWidth - 4);
+          const x = padLeft + idx * slotWidth + 2;
+          const barWidth = Math.max(4, slotWidth - 4);
+          const showX = idx % xStep === 0 || idx === segment.days.length - 1;
           if (d.valueMm === null) {
             return (
-              <rect
-                key={d.date}
-                x={x}
-                y={padTop}
-                width={barWidth}
-                height={plotHeight}
-                fill="var(--surface-muted)"
-                stroke="var(--line-strong)"
-                strokeDasharray="2 2"
-                rx={1}
-              >
-                <title>{`${dayLabel(d.date)}: data belum tersedia`}</title>
-              </rect>
+              <g key={d.date}>
+                <rect
+                  x={x}
+                  y={padTop}
+                  width={barWidth}
+                  height={plotHeight}
+                  fill="var(--surface-muted)"
+                  stroke="var(--line-strong)"
+                  strokeDasharray="2 2"
+                  rx={2}
+                >
+                  <title>{`${dayLabel(d.date)}: data belum tersedia`}</title>
+                </rect>
+                {showX ? (
+                  <text
+                    x={x + barWidth / 2}
+                    y={height - 8}
+                    textAnchor="middle"
+                    fontSize="10"
+                    fill="var(--ink-faint)"
+                  >
+                    {dayLabel(d.date)}
+                  </text>
+                ) : null}
+              </g>
             );
           }
           const barH = Math.max(2, (d.valueMm / maxVal) * plotHeight);
           const y = padTop + plotHeight - barH;
+          const isHeavy = d.valueMm >= 20;
+          const barFill = isHeavy
+            ? "var(--warn)"
+            : segment.dataClass === "climatology"
+              ? "#ca8a04"
+              : "var(--accent)";
+          const showValue =
+            d.valueMm >= 10 || (peakDay !== null && d.date === peakDay.date && d.valueMm > 0);
           return (
-            <rect key={d.date} x={x} y={y} width={barWidth} height={barH} fill={fill} rx={1}>
-              <title>{`${dayLabel(d.date)}: ${millimetres(d.valueMm)}`}</title>
-            </rect>
+            <g key={d.date}>
+              <rect x={x} y={y} width={barWidth} height={barH} fill={barFill} rx={2}>
+                <title>{`${dayLabel(d.date)}: ${millimetres(d.valueMm)}`}</title>
+              </rect>
+              {showValue ? (
+                <text
+                  x={x + barWidth / 2}
+                  y={y - 4}
+                  textAnchor="middle"
+                  fontSize="9.5"
+                  fontWeight="700"
+                  fill="var(--ink)"
+                >
+                  {Math.round(d.valueMm)}
+                </text>
+              ) : null}
+              {showX ? (
+                <text
+                  x={x + barWidth / 2}
+                  y={height - 8}
+                  textAnchor="middle"
+                  fontSize="10"
+                  fill="var(--ink-muted)"
+                >
+                  {dayLabel(d.date)}
+                </text>
+              ) : null}
+            </g>
           );
         })}
       </svg>
