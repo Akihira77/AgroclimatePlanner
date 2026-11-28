@@ -1,0 +1,1 @@
+export const AI_BRIEFING_PROVIDER = Symbol("AI_BRIEFING_PROVIDER");

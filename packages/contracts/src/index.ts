@@ -10,6 +10,7 @@ export * from "./weather.js";
 export * from "./climate.js";
 export * from "./crop.js";
 export * from "./agronomy.js";
+export * from "./briefing.js";
 export * from "./job.js";
 export * from "./grid.js";
 export * from "./cell-resolution.js";

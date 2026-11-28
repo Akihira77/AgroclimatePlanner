@@ -222,6 +222,8 @@ export type {
   PersistWindowInput,
   PlantingWindowListFilters,
 } from "./agronomy.js";
+export { findCachedAiBriefing, findLatestAiBriefing, persistAiBriefing } from "./briefings.js";
+export type { PersistAiBriefingInput } from "./briefings.js";
 
 export interface DatabaseOptions {
   /** `postgresql://…` connection string. Validated by `pg`, not by us. */

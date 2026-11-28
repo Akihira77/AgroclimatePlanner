@@ -1,5 +1,6 @@
 import "reflect-metadata";
 
+import type { AiBriefingProvider } from "@agroclimate/agronomy";
 import { NestFactory } from "@nestjs/core";
 import type { INestApplication } from "@nestjs/common";
 import type { GridRegistry } from "@agroclimate/contracts";
@@ -21,6 +22,8 @@ export interface CreateApplicationOptions {
   readonly createDatabaseClient?: DatabaseClientFactory;
   /** Test-only substitution for the grid registry; production omits it. */
   readonly gridRegistry?: GridRegistry;
+  /** Optional LLM briefing provider; falls back to deterministic template when absent. */
+  readonly briefingProvider?: AiBriefingProvider;
 }
 
 /**
@@ -55,6 +58,9 @@ export async function createApplication(
         options.createDatabaseClient ??
         ((connectionString) => createPrismaClient({ connectionString })),
       ...(options.gridRegistry === undefined ? {} : { gridRegistry: options.gridRegistry }),
+      ...(options.briefingProvider === undefined
+        ? {}
+        : { briefingProvider: options.briefingProvider }),
     }),
     // Errors are logged by the exception filter, which knows the request id.
     {

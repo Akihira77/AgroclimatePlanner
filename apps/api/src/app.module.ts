@@ -1,3 +1,4 @@
+import type { AiBriefingProvider } from "@agroclimate/agronomy";
 import type { DynamicModule } from "@nestjs/common";
 import { Module } from "@nestjs/common";
 
@@ -11,6 +12,7 @@ import { DatabaseModule } from "./database/database.module.js";
 import { AuthModule } from "./auth/auth.module.js";
 import { ActivityModule } from "./activity/activity.module.js";
 import { AgronomyModule } from "./agronomy/agronomy.module.js";
+import { BriefingModule } from "./briefing/briefing.module.js";
 import { ClimateModule } from "./climate/climate.module.js";
 import { CropModule } from "./crop/crop.module.js";
 import { FarmModule } from "./farm/farm.module.js";
@@ -27,6 +29,8 @@ export interface AppDependencies {
    * there is no second instance to drift from it.
    */
   readonly gridRegistry?: GridRegistry;
+  /** Optional LLM briefing provider; falls back to deterministic template when absent. */
+  readonly briefingProvider?: AiBriefingProvider;
 }
 
 /**
@@ -54,6 +58,7 @@ export class AppModule {
         CropModule,
         ActivityModule,
         AgronomyModule,
+        BriefingModule.register(deps.briefingProvider),
         HealthModule,
       ],
     };

@@ -51,7 +51,7 @@ export const SQUARE_JSON = JSON.stringify(SQUARE);
  * CHECK refuses, so a happy path has to supply an isolated registry rather than
  * edit the production one. Absent, the wiring is exactly production's.
  */
-export async function startHarness({ gridRegistry } = {}) {
+export async function startHarness({ gridRegistry, briefingProvider } = {}) {
   const owner = createPrismaClient({ connectionString: roleConnectionString("migration_owner") });
 
   const app = await createApplication({
@@ -61,6 +61,7 @@ export async function startHarness({ gridRegistry } = {}) {
     }),
     createDatabaseClient: (connectionString) => createPrismaClient({ connectionString }),
     ...(gridRegistry === undefined ? {} : { gridRegistry }),
+    ...(briefingProvider === undefined ? {} : { briefingProvider }),
   });
 
   await app.listen(0, "127.0.0.1");

@@ -28,3 +28,23 @@ export type {
   GeneratedPlantingWindow,
   PlantingWindowCandidate,
 } from "./windows.js";
+export {
+  BRIEFING_DERIVATION_VERSION,
+  BRIEFING_PROMPT_VERSION,
+  BriefingContextError,
+  BriefingGroundingError,
+  DETERMINISTIC_FALLBACK_MODEL_ID,
+  buildBriefingContext,
+  buildDeterministicBriefing,
+  buildEvidenceSegmentId,
+  generateGroundedBriefing,
+  validateGroundedBriefing,
+} from "./briefing.js";
+export type {
+  AiBriefingProvider,
+  BriefingContext,
+  BriefingSegmentSummary,
+  BriefingWindowSummary,
+  GenerateGroundedBriefingInput,
+  GeneratedBriefingResult,
+} from "./briefing.js";
