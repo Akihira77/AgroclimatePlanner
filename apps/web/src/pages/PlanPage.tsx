@@ -13,7 +13,11 @@ import { useEffect, useState } from "react";
 import { ApiError, api } from "../api.js";
 import { CustomSelect } from "../components/CustomSelect.js";
 import { DatePicker } from "../components/DatePicker.js";
-import { EvaluationVisualSummary, GrowthStageTimeline } from "../components/Visuals.js";
+import {
+  ConstraintCheckList,
+  EvaluationVisualSummary,
+  GrowthStageTimeline,
+} from "../components/Visuals.js";
 import { IconCalendar, IconSparkles } from "../icons.js";
 import { Link } from "../router.js";
 import {
@@ -334,7 +338,11 @@ export function PlanPage() {
           </div>
 
           <div className="field">
-            <FieldLabel htmlFor="plan-basis" label="Sumber Data Cuaca" />
+            <FieldLabel
+              htmlFor="plan-basis"
+              label="Sumber Data Cuaca"
+              tooltip="Pola iklim rata-rata menghasilkan status maksimal 'Sesuai bersyarat'; pilih 'Prakiraan cuaca harian' jika seluruh data syarat terpenuhi untuk status 'Sesuai'."
+            />
             <CustomSelect
               id="plan-basis"
               value={basis}
@@ -430,7 +438,8 @@ export function PlanPage() {
                             {w.mixedEvidence ? <Tag tone="warn">Sumber data campuran</Tag> : null}
                           </div>
                         </div>
-                        <div className="panel-body stack-tight">
+                        <div className="panel-body stack">
+                          <ConstraintCheckList items={w.constraintsEvaluated} />
                           {w.explanations.length > 0 ? (
                             <ul className="stack-tight">
                               {w.explanations.map((exp, idx) => (

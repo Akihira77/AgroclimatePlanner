@@ -539,6 +539,141 @@ export function EvaluationVisualSummary({ run }: { run: SuitabilityRunWithWindow
   );
 }
 
+function metricTitle(dimension: string, unit: string | null): string {
+  const u = unit?.trim().toLowerCase() ?? "";
+  if (dimension === "soil" && u === "ph") return "Keasaman Tanah (pH)";
+  if (dimension === "climate" && (u === "°c" || u === "c" || u === "celsius")) {
+    return "Suhu Udara";
+  }
+  if (dimension === "water" && u === "mm") return "Kebutuhan Air / Hujan";
+  if (dimension === "water" && u === "cm") return "Tinggi Genangan Air";
+  return dimensionLabel(dimension);
+}
+
+function formatThresholdText(item: Record<string, unknown>): string | null {
+  const comparator = typeof item["comparator"] === "string" ? item["comparator"] : null;
+  const unit = typeof item["unit"] === "string" ? item["unit"] : "";
+  const lower = typeof item["thresholdLower"] === "number" ? item["thresholdLower"] : null;
+  const upper = typeof item["thresholdUpper"] === "number" ? item["thresholdUpper"] : null;
+  const count = typeof item["thresholdCount"] === "number" ? item["thresholdCount"] : null;
+  const suffix = unit ? ` ${unit}` : "";
+
+  if (comparator === "range" && lower !== null && upper !== null) {
+    return `${formatNumber(lower, 1)} – ${formatNumber(upper, 1)}${suffix}`;
+  }
+  if (comparator === "min" && lower !== null) {
+    return `Minimal ${formatNumber(lower, 1)}${suffix}`;
+  }
+  if (comparator === "max" && upper !== null) {
+    return `Maksimal ${formatNumber(upper, 1)}${suffix}`;
+  }
+  if (comparator === "count" && count !== null) {
+    return `Maksimal ${formatNumber(count, 0)} kejadian`;
+  }
+  return null;
+}
+
+function sourceLabel(source: unknown): string | null {
+  switch (source) {
+    case "field_profile":
+      return "Profil tanah lahan";
+    case "field_observation":
+      return "Pengamatan lapangan";
+    case "request":
+      return "Input evaluasi";
+    default:
+      return null;
+  }
+}
+
+function missingHint(dimension: string, unit: string | null): string {
+  const u = unit?.trim().toLowerCase() ?? "";
+  if (dimension === "soil" && u === "ph") {
+    return "Lengkapi nilai pH tanah di menu Kebun & Lahan → Detail.";
+  }
+  if (dimension === "climate" && (u === "°c" || u === "c" || u === "celsius")) {
+    return "Catat suhu lapangan di menu Aktivitas & Panen → Pengamatan Lapangan.";
+  }
+  if (dimension === "water") {
+    return "Data curah hujan / tinggi air belum tercatat untuk periode ini.";
+  }
+  return "Data pengukuran belum tersedia pada lahan ini.";
+}
+
+/**
+ * Farmer-friendly comparison of crop requirements against observed field conditions.
+ */
+export function ConstraintCheckList({ items }: { items: readonly Record<string, unknown>[] }) {
+  if (items.length === 0) return null;
+
+  return (
+    <div className="check-section" aria-label="Perbandingan syarat tanaman dan kondisi lahan">
+      <div className="check-section-title">Syarat Tanaman vs Kondisi Lahan Anda</div>
+      <div className="check-grid">
+        {items.map((item, idx) => {
+          const id =
+            typeof item["constraintId"] === "string" ? item["constraintId"] : `constraint-${idx}`;
+          const dimension = typeof item["dimension"] === "string" ? item["dimension"] : "climate";
+          const outcome =
+            typeof item["outcome"] === "string" ? item["outcome"] : "insufficient_data";
+          const unit = typeof item["unit"] === "string" ? item["unit"] : null;
+          const observed =
+            typeof item["observed"] === "number" && Number.isFinite(item["observed"])
+              ? item["observed"]
+              : null;
+          const ideal = formatThresholdText(item);
+          const src = sourceLabel(item["source"]);
+
+          const statusTone =
+            outcome === "satisfied" ? "accent" : outcome === "violated" ? "danger" : "warn";
+          const statusText =
+            outcome === "satisfied"
+              ? "Cocok"
+              : outcome === "violated"
+                ? "Di luar batas"
+                : "Data belum ada";
+          const cardClass =
+            outcome === "satisfied"
+              ? "check-card-ok"
+              : outcome === "violated"
+                ? "check-card-danger"
+                : "check-card-warn";
+
+          return (
+            <div key={id} className={`check-card ${cardClass}`}>
+              <div className="spread">
+                <strong>{metricTitle(dimension, unit)}</strong>
+                <Tag tone={statusTone}>{statusText}</Tag>
+              </div>
+              <div className="check-values">
+                <div>
+                  <span className="muted">Kondisi lahan: </span>
+                  <strong>
+                    {observed !== null
+                      ? `${formatNumber(observed, 1)}${unit ? ` ${unit}` : ""}`
+                      : "Belum tercatat"}
+                  </strong>
+                </div>
+                {ideal !== null ? (
+                  <div>
+                    <span className="muted">Syarat ideal: </span>
+                    <span>{ideal}</span>
+                  </div>
+                ) : null}
+              </div>
+              {src !== null ? (
+                <div className="check-hint">Sumber: {src}</div>
+              ) : outcome === "insufficient_data" ? (
+                <div className="check-hint">{missingHint(dimension, unit)}</div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /**
  * Vertical SVG bar chart comparing harvest yields (kg) across recorded harvests.
  */

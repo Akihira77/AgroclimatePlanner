@@ -342,16 +342,51 @@ export function dimensionLabel(dimension: string): string {
 }
 
 export function dimensionStateLabel(state: string): string {
-  return state === "known" ? "Tersedia" : "Belum lengkap";
+  switch (state) {
+    case "known":
+      return "Tersedia";
+    case "not_applicable":
+      return "Tidak disyaratkan";
+    default:
+      return "Belum lengkap";
+  }
 }
 
 export function translateEvaluationDetail(detail: string): string {
+  const text = detail.trim();
+  if (
+    /^the critical stage rests on climatology, which cannot support a suitable verdict$/i.test(text)
+  ) {
+    return "Evaluasi ini memakai rata-rata iklim historis (bukan prakiraan cuaca jangka pendek), sehingga status maksimal adalah Sesuai bersyarat.";
+  }
+
+  const hardViolated =
+    /^a hard (climate|water|soil|timing|risk) constraint was observed and violated$/i.exec(text);
+  if (hardViolated?.[1] !== undefined) {
+    return `Syarat wajib pada aspek ${dimensionLabel(hardViolated[1].toLowerCase())} tidak terpenuhi oleh kondisi lahan saat ini.`;
+  }
+
+  const hardMissing =
+    /^a hard (climate|water|soil|timing|risk) constraint has no observation$/i.exec(text);
+  if (hardMissing?.[1] !== undefined) {
+    return `Syarat wajib pada aspek ${dimensionLabel(hardMissing[1].toLowerCase())} belum memiliki data pengukuran.`;
+  }
+
+  const hardGate = /^the profile hard-gates (climate|water|soil|timing|risk) and .*$/i.exec(text);
+  if (hardGate?.[1] !== undefined) {
+    return `Syarat wajib pada aspek ${dimensionLabel(hardGate[1].toLowerCase())} belum dapat dinilai karena datanya belum tersedia.`;
+  }
+
+  const softViolated =
+    /^(\d+) soft (climate|water|soil|timing|risk) constraint\(s\) were violated$/i.exec(text);
+  if (softViolated?.[1] !== undefined && softViolated[2] !== undefined) {
+    return `Ada ${softViolated[1]} anjuran pada aspek ${dimensionLabel(softViolated[2].toLowerCase())} yang berada di luar batas ideal.`;
+  }
+
   const match =
-    /^(climate|water|soil|timing|risk) is judged by the rulebook but was not observed$/i.exec(
-      detail.trim(),
-    );
+    /^(climate|water|soil|timing|risk) is judged by the rulebook but was not observed$/i.exec(text);
   if (match?.[1] !== undefined) {
-    return `Aspek ${dimensionLabel(match[1].toLowerCase())} diperlukan dalam penilaian, tetapi datanya belum tersedia pada evaluasi ini.`;
+    return `Data pada aspek ${dimensionLabel(match[1].toLowerCase())} belum tersedia untuk dinilai pada evaluasi ini.`;
   }
   return detail;
 }

@@ -2492,7 +2492,8 @@ a {
   font-weight: 700;
 }
 
-.verdict-ok {
+.verdict-ok,
+.verdict-accent {
   background: #ecfdf3;
   border-color: #a7f3d0;
 }
@@ -2589,4 +2590,57 @@ a {
   .obs-charts {
     grid-template-columns: 1fr;
   }
+}
+
+.check-section {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.check-section-title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.check-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: var(--space-2);
+}
+
+.check-card {
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  background: var(--surface-subtle);
+  display: grid;
+  gap: 6px;
+}
+
+.check-card-ok {
+  border-left-color: #16a34a;
+  background: #f3faf6;
+}
+
+.check-card-warn {
+  border-left-color: #d97706;
+  background: #fffbeb;
+}
+
+.check-card-danger {
+  border-left-color: #dc2626;
+  background: #fef2f2;
+}
+
+.check-values {
+  display: grid;
+  gap: 2px;
+  font-size: 0.86rem;
+}
+
+.check-hint {
+  font-size: 0.78rem;
+  color: var(--ink-muted);
 }

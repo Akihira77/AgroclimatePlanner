@@ -32,6 +32,71 @@ import { DATABASE_CLIENT } from "../tokens.js";
 export const AGRONOMY_ENGINE_VERSION = "0.1.0";
 export const AGRONOMY_DERIVATION_VERSION = "1";
 
+type ObservationSourceKind = "request" | "field_profile" | "field_observation";
+
+interface ResolvedConstraintObservations {
+  readonly observations: ReadonlyMap<string, number | null>;
+  readonly sources: ReadonlyMap<string, ObservationSourceKind>;
+}
+
+/**
+ * Resolves constraint observations per candidate without overriding explicit
+ * caller inputs (including explicit `null`). Only fills omitted constraints
+ * from verified field agronomy profile (`soilPh`) or latest matching field
+ * observations (`temperature` in °C). Leaves water/rainfall constraints `null`
+ * rather than fabricating totals from single-day readings.
+ */
+export function resolveConstraintObservations(
+  constraints: readonly Constraint[],
+  explicitObservations: Readonly<Record<string, number | null>>,
+  source: {
+    readonly soilPh: number | null;
+    readonly observationsUsed: readonly {
+      readonly kind: string;
+      readonly value: number;
+      readonly unit: string;
+    }[];
+  },
+): ResolvedConstraintObservations {
+  const observations = new Map<string, number | null>();
+  const sources = new Map<string, ObservationSourceKind>();
+
+  const latestTemp = source.observationsUsed.find((obs) => {
+    if (obs.kind !== "temperature") return false;
+    const unit = obs.unit.trim().toLowerCase();
+    return unit === "°c" || unit === "c" || unit === "celsius";
+  });
+
+  for (const constraint of constraints) {
+    if (Object.prototype.hasOwnProperty.call(explicitObservations, constraint.id)) {
+      observations.set(constraint.id, explicitObservations[constraint.id] ?? null);
+      sources.set(constraint.id, "request");
+      continue;
+    }
+
+    const unit = (constraint.unit ?? "").trim().toLowerCase();
+    if (constraint.dimension === "soil" && unit === "ph" && source.soilPh !== null) {
+      observations.set(constraint.id, source.soilPh);
+      sources.set(constraint.id, "field_profile");
+      continue;
+    }
+
+    if (
+      constraint.dimension === "climate" &&
+      (unit === "°c" || unit === "c" || unit === "celsius") &&
+      latestTemp !== undefined
+    ) {
+      observations.set(constraint.id, latestTemp.value);
+      sources.set(constraint.id, "field_observation");
+      continue;
+    }
+
+    observations.set(constraint.id, null);
+  }
+
+  return { observations, sources };
+}
+
 export class AgronomyResourceNotFoundError extends Error {
   readonly code: "field_not_found" | "profile_not_found" | "profile_not_published";
 
@@ -105,18 +170,24 @@ export class AgronomyService {
 
       const constraints = profile.constraints as unknown as readonly Constraint[];
       const stages = profile.growthStages as unknown as readonly GrowthStage[];
+      const constraintById = new Map(constraints.map((c) => [c.id, c]));
 
+      const candidateSourceMaps = new Map<string, ReadonlyMap<string, ObservationSourceKind>>();
       const generated = generatePlantingWindows({
         constraints,
         stages,
         durationDays: cultivar.durationDaysTypical,
-        candidates: request.candidates.map((c) => ({
-          startDate: c.startDate,
-          observations: new Map(Object.entries(c.observations)),
-          primaryBasis: c.primaryBasis,
-          evidenceSegments: c.evidenceSegments,
-          missingRanges: c.missingRanges,
-        })),
+        candidates: request.candidates.map((c) => {
+          const resolved = resolveConstraintObservations(constraints, c.observations, source);
+          candidateSourceMaps.set(c.startDate, resolved.sources);
+          return {
+            startDate: c.startDate,
+            observations: resolved.observations,
+            primaryBasis: c.primaryBasis,
+            evidenceSegments: c.evidenceSegments,
+            missingRanges: c.missingRanges,
+          };
+        }),
       });
 
       const top = generated[0];
@@ -179,13 +250,24 @@ export class AgronomyService {
             ...(r.dimension === undefined ? {} : { dimension: r.dimension }),
             detail: r.detail,
           })),
-          constraintsEvaluated: w.assessment.evaluations.map((e) => ({
-            constraintId: e.constraintId,
-            dimension: e.dimension,
-            grade: e.grade,
-            severity: e.severity,
-            outcome: e.outcome,
-          })),
+          constraintsEvaluated: w.assessment.evaluations.map((e) => {
+            const c = constraintById.get(e.constraintId);
+            const sourceMap = candidateSourceMaps.get(w.windowStart);
+            return {
+              constraintId: e.constraintId,
+              dimension: e.dimension,
+              grade: e.grade,
+              severity: e.severity,
+              outcome: e.outcome,
+              observed: e.observed,
+              unit: c?.unit ?? null,
+              comparator: c?.comparator ?? null,
+              thresholdLower: c?.thresholdLower ?? null,
+              thresholdUpper: c?.thresholdUpper ?? null,
+              thresholdCount: c?.thresholdCount ?? null,
+              source: sourceMap?.get(e.constraintId) ?? null,
+            };
+          }),
           missingInputs: w.assessment.dimensionCoverage
             .filter((d) => d.state === "unknown")
             .map((d) => ({ dimension: d.dimension })),

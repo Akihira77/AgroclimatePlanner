@@ -288,4 +288,87 @@ describe("agronomy evaluation & planting-window HTTP lifecycle", () => {
     assert.equal(bobWindows.response.status, 200);
     assert.deepEqual(bobWindows.body.data, []);
   });
+
+  it("auto-resolves soilPh from the field agronomy profile when observations are omitted", async () => {
+    const soilProfileRows = await harness.owner.$queryRawUnsafe(
+      `SELECT cpv.id::text AS profile_version_id,
+              c.duration_days_typical::int AS duration_days,
+              con.id::text AS constraint_id
+         FROM app.crop_profile_versions cpv
+         JOIN app.cultivars c ON c.id = cpv.cultivar_id
+         JOIN app.constraints con ON con.profile_version_id = cpv.id
+        WHERE cpv.status = 'published'
+          AND con.dimension = 'soil'
+          AND lower(con.unit) = 'ph'
+        LIMIT 1`,
+    );
+    if (soilProfileRows.length === 0) return;
+
+    const soilProfile = soilProfileRows[0];
+    const farmRes = await call(alice, "POST", "/v1/farms", {
+      body: { name: "Kebun Auto Resolve" },
+    });
+    assert.equal(farmRes.response.status, 201);
+
+    const fieldRes = await call(alice, "POST", "/v1/fields", {
+      body: {
+        farmId: farmRes.body.data.id,
+        name: "Petak Soil pH",
+        geometry: JSON.parse(SQUARE_JSON),
+      },
+    });
+    assert.equal(fieldRes.response.status, 201);
+    const autoFieldId = fieldRes.body.data.id;
+
+    const patchAgro = await call(alice, "PATCH", `/v1/fields/${autoFieldId}/agronomy`, {
+      body: { soilPh: 6.4, irrigationAvailability: "irrigated" },
+    });
+    assert.equal(patchAgro.response.status, 200);
+
+    const startDate = "2026-12-01";
+    const endDateObj = new Date(Date.parse(`${startDate}T00:00:00Z`));
+    endDateObj.setUTCDate(endDateObj.getUTCDate() + soilProfile.duration_days - 1);
+    const endDate = endDateObj.toISOString().slice(0, 10);
+
+    const evalAuto = await call(alice, "POST", `/v1/fields/${autoFieldId}/evaluate`, {
+      body: {
+        profileVersionId: soilProfile.profile_version_id,
+        inputRefs,
+        candidates: [
+          {
+            startDate,
+            observations: {},
+            primaryBasis: "daily",
+            evidenceSegments: [
+              {
+                startDate,
+                endDate,
+                evaluationBasis: "daily",
+                evidenceClass: "weather_forecast",
+                coveragePercent: 100,
+                provenance: {
+                  kind: "forecast",
+                  forecastRunIds: [soilProfile.profile_version_id],
+                  ingestionRunIds: [autoFieldId],
+                  initializedAt: "2026-11-28T00:00:00Z",
+                },
+              },
+            ],
+            missingRanges: [],
+          },
+        ],
+      },
+    });
+    assert.equal(evalAuto.response.status, 201);
+
+    const soilCov = evalAuto.body.data.dimensionCoverage.find((d) => d.dimension === "soil");
+    assert.equal(soilCov?.state, "known");
+
+    const soilEval = evalAuto.body.data.plantingWindows[0].constraintsEvaluated.find(
+      (c) => c.constraintId === soilProfile.constraint_id,
+    );
+    assert.equal(soilEval?.observed, 6.4);
+    assert.equal(soilEval?.source, "field_profile");
+    assert.equal(soilEval?.outcome, "satisfied");
+  });
 });
