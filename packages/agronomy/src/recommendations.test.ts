@@ -136,4 +136,49 @@ describe("recommendCropsForField", () => {
     expect(result.rankings.every((r) => r.verdict === "insufficient_data")).toBe(true);
     expect(result.matrix[0]!.cells.every((c) => c.rainfallMm === null)).toBe(true);
   });
+
+  it("changes bestStartMonth across horizonMonths=3 vs 6 when a later month matches ideal rainfall", () => {
+    // First 5 months are very wet (350 mm/mo -> >950 mm for starts 0..2, above Jagung's 500-800 mm),
+    // while months 5..8 are 200 mm/mo (~620 mm cycle, inside Jagung's ideal 500-800 mm).
+    const shapedMonths = MONTHS_12.map((m, idx) => ({
+      ...m,
+      valueMm: idx < 5 ? 350 : 200,
+      dataClass: "seasonal_forecast",
+    }));
+
+    const r3 = recommendCropsForField({
+      field: {
+        fieldId: "f1",
+        fieldName: "Petak Uji",
+        elevationM: 200,
+        soilPh: 6.2,
+        drainageClass: "moderate",
+        irrigationAvailability: "rainfed",
+        latestTempC: 26,
+      },
+      outlookMonths: shapedMonths,
+      crops: [CROPS[0]!],
+      horizonMonths: 3,
+    });
+
+    const r6 = recommendCropsForField({
+      field: {
+        fieldId: "f1",
+        fieldName: "Petak Uji",
+        elevationM: 200,
+        soilPh: 6.2,
+        drainageClass: "moderate",
+        irrigationAvailability: "rainfed",
+        latestTempC: 26,
+      },
+      outlookMonths: shapedMonths,
+      crops: [CROPS[0]!],
+      horizonMonths: 6,
+    });
+
+    expect(r3.rankings[0]!.verdict).toBe("conditional");
+    expect(r6.rankings[0]!.verdict).toBe("suitable");
+    expect(r6.rankings[0]!.bestStartMonth).toBe(shapedMonths[5]!.month);
+    expect(r3.rankings[0]!.bestStartMonth).not.toBe(r6.rankings[0]!.bestStartMonth);
+  });
 });

@@ -497,72 +497,104 @@ export function PlanPage() {
 
               <section className="section">
                 <div className="section-head">
-                  <h2>Peringkat Komoditas ({recommendations.horizonMonths} Bulan ke Depan)</h2>
+                  <h2>
+                    Peringkat Komoditas (
+                    {recommendations.months[0] !== undefined &&
+                    recommendations.months[recommendations.horizonMonths - 1] !== undefined
+                      ? `${monthLabel(recommendations.months[0])} – ${monthLabel(recommendations.months[recommendations.horizonMonths - 1]!)} · `
+                      : ""}
+                    {recommendations.horizonMonths} Bulan)
+                  </h2>
                   <span className="muted">{recommendations.rankings.length} komoditas dievaluasi</span>
                 </div>
                 <div className="recommendation-grid">
-                  {recommendations.rankings.map((item) => (
-                    <article className="panel recommendation-card" key={item.profileVersionId}>
-                      <div className="panel-body stack" style={{ gap: "var(--space-2)" }}>
-                        <div className="spread" style={{ gap: 10, alignItems: "flex-start" }}>
-                          <div className="row" style={{ gap: 10, alignItems: "center" }}>
-                            <CropIllustration slug={item.cropSlug} size={42} />
-                            <div>
-                              <h3 style={{ margin: 0 }}>{item.cropNameId}</h3>
-                              <span className="faint" style={{ fontSize: "0.84rem" }}>
-                                {item.cultivarName} · ~{item.durationDaysTypical} hr
-                              </span>
+                  {recommendations.rankings.map((item) => {
+                    const matrixRow = recommendations.matrix.find(
+                      (r) => r.profileVersionId === item.profileVersionId,
+                    );
+                    const horizonCells =
+                      matrixRow?.cells.slice(0, recommendations.horizonMonths) ?? [];
+                    const viableCount = horizonCells.filter(
+                      (c) => c.verdict === "suitable" || c.verdict === "conditional",
+                    ).length;
+
+                    return (
+                      <article className="panel recommendation-card" key={item.profileVersionId}>
+                        <div className="panel-body stack" style={{ gap: "var(--space-2)" }}>
+                          <div className="recommendation-card-head">
+                            <div className="row" style={{ gap: 10, alignItems: "center" }}>
+                              <CropIllustration slug={item.cropSlug} size={42} />
+                              <div>
+                                <h3 style={{ margin: 0 }}>{item.cropNameId}</h3>
+                                <span className="faint" style={{ fontSize: "0.84rem" }}>
+                                  {item.cultivarName} · ~{item.durationDaysTypical} hr
+                                </span>
+                              </div>
                             </div>
+                            <Tag tone={suitabilityTone(item.verdict)}>
+                              {suitabilityLabel(item.verdict)}
+                            </Tag>
                           </div>
-                          <Tag tone={suitabilityTone(item.verdict)}>
-                            {suitabilityLabel(item.verdict)}
-                          </Tag>
-                        </div>
 
-                        <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
-                          {item.bestStartMonth !== null ? (
-                            <Tag tone="accent">Terbaik: {monthLabel(item.bestStartMonth)}</Tag>
-                          ) : null}
-                          <Tag>{item.evidenceBadge}</Tag>
-                        </div>
+                          <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+                            {item.bestStartMonth !== null ? (
+                              <Tag tone="accent">Terbaik: {monthLabel(item.bestStartMonth)}</Tag>
+                            ) : null}
+                            <Tag>
+                              {viableCount}/{recommendations.horizonMonths} bln layak
+                            </Tag>
+                            <Tag>{item.evidenceBadge}</Tag>
+                          </div>
 
-                        <p className="muted" style={{ margin: 0, fontSize: "0.9rem" }}>
-                          {item.summaryId}
-                        </p>
+                          <p className="muted" style={{ margin: 0, fontSize: "0.9rem" }}>
+                            {item.summaryId}
+                          </p>
 
-                        <div>
-                          <button
-                            type="button"
-                            className="btn btn-quiet btn-sm"
-                            onClick={() => {
-                              setCropSlug(item.cropSlug);
-                              if (item.bestStartMonth !== null) {
-                                setDate(item.bestStartMonth);
-                              }
-                              setTab("evaluation");
-                            }}
-                          >
-                            Simulasikan di Uji Manual
-                          </button>
+                          <div className="recommendation-card-foot">
+                            <button
+                              type="button"
+                              className="btn btn-quiet btn-sm"
+                              onClick={() => {
+                                setCropSlug(item.cropSlug);
+                                if (item.bestStartMonth !== null) {
+                                  setDate(item.bestStartMonth);
+                                }
+                                setTab("evaluation");
+                              }}
+                            >
+                              Simulasikan di Uji Manual
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    </article>
-                  ))}
+                      </article>
+                    );
+                  })}
                 </div>
               </section>
 
               <section className="section">
                 <div className="section-head">
                   <h2>Peta Jendela Tanam 12 Bulan</h2>
-                  <span className="muted">Klik atau arahkan kursor ke sel untuk melihat alasan</span>
+                  <span className="muted">
+                    Kolom terang menandai rentang {recommendations.horizonMonths} bulan aktif · klik sel untuk alasan
+                  </span>
                 </div>
                 <div className="panel window-matrix-wrap">
                   <table className="window-matrix">
                     <thead>
                       <tr>
                         <th>Komoditas</th>
-                        {recommendations.months.map((m) => (
-                          <th key={m}>{m.slice(5, 7)}/{m.slice(2, 4)}</th>
+                        {recommendations.months.map((m, idx) => (
+                          <th
+                            key={m}
+                            className={
+                              idx < recommendations.horizonMonths
+                                ? "is-in-horizon"
+                                : "is-outside-horizon"
+                            }
+                          >
+                            {m.slice(5, 7)}/{m.slice(2, 4)}
+                          </th>
                         ))}
                       </tr>
                     </thead>
@@ -575,8 +607,15 @@ export function PlanPage() {
                               {row.cultivarName}
                             </div>
                           </td>
-                          {row.cells.map((cell) => (
-                            <td key={cell.month}>
+                          {row.cells.map((cell, idx) => (
+                            <td
+                              key={cell.month}
+                              className={
+                                idx < recommendations.horizonMonths
+                                  ? "is-in-horizon"
+                                  : "is-outside-horizon"
+                              }
+                            >
                               <button
                                 type="button"
                                 className="matrix-cell"

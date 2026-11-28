@@ -3256,7 +3256,48 @@ a {
 }
 
 .recommendation-card {
+  display: flex;
+  flex-direction: column;
   height: 100%;
+}
+
+.recommendation-card > .panel-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  height: 100%;
+}
+
+.recommendation-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.recommendation-card-head > .tag {
+  flex-shrink: 0;
+}
+
+.recommendation-card-foot {
+  margin-top: auto;
+  padding-top: var(--space-2);
+  display: flex;
+  justify-content: flex-start;
+}
+
+.window-matrix th.is-in-horizon {
+  background: #edf7f1;
+  color: var(--accent-ink);
+}
+
+.window-matrix td.is-in-horizon {
+  background: #f8fcf9;
+}
+
+.window-matrix th.is-outside-horizon,
+.window-matrix td.is-outside-horizon {
+  opacity: 0.48;
 }
 
 .window-matrix-wrap {

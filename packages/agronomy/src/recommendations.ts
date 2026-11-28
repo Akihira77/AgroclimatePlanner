@@ -265,7 +265,7 @@ function evaluateCropAtMonth(
       }
     } else if (
       waterMmRule.thresholdUpper !== null &&
-      rain.rainfallMm > waterMmRule.thresholdUpper * 1.25
+      rain.rainfallMm > waterMmRule.thresholdUpper
     ) {
       softWarn = true;
       notes.push(`Curah hujan tinggi (~${rain.rainfallMm} mm); perhatikan drainase lahan.`);
@@ -354,11 +354,36 @@ export function recommendCropsForField(input: {
       cells,
     });
 
+    const waterMmRule = crop.constraints.find(
+      (c) => c.dimension === "water" && (c.unit ?? "").toLowerCase() === "mm",
+    );
+    const idealMidMm =
+      waterMmRule !== undefined &&
+      waterMmRule.thresholdLower !== null &&
+      waterMmRule.thresholdUpper !== null
+        ? (waterMmRule.thresholdLower + waterMmRule.thresholdUpper) / 2
+        : null;
+
     const horizonCells = cells.slice(0, input.horizonMonths);
     const bestCell = [...horizonCells].sort((a, b) => {
       const rankDiff = VERDICT_RANK[a.verdict] - VERDICT_RANK[b.verdict];
       if (rankDiff !== 0) return rankDiff;
-      return (b.rainfallMm ?? -1) - (a.rainfallMm ?? -1);
+      if (idealMidMm !== null && waterMmRule !== undefined) {
+        const aInRange =
+          a.rainfallMm !== null &&
+          (waterMmRule.thresholdLower === null || a.rainfallMm >= waterMmRule.thresholdLower) &&
+          (waterMmRule.thresholdUpper === null || a.rainfallMm <= waterMmRule.thresholdUpper);
+        const bInRange =
+          b.rainfallMm !== null &&
+          (waterMmRule.thresholdLower === null || b.rainfallMm >= waterMmRule.thresholdLower) &&
+          (waterMmRule.thresholdUpper === null || b.rainfallMm <= waterMmRule.thresholdUpper);
+        if (aInRange !== bInRange) return aInRange ? -1 : 1;
+        if (a.rainfallMm !== null && b.rainfallMm !== null) {
+          const distDiff = Math.abs(a.rainfallMm - idealMidMm) - Math.abs(b.rainfallMm - idealMidMm);
+          if (distDiff !== 0) return distDiff;
+        }
+      }
+      return a.month.localeCompare(b.month);
     })[0];
 
     const verdict: SuitabilityVerdict = bestCell?.verdict ?? "insufficient_data";
