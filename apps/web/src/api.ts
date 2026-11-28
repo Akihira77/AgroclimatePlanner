@@ -10,6 +10,8 @@ import type {
   CsrfTokenResponse,
   Farm,
   Field,
+  FieldAgronomyProfile,
+  FieldAgronomyUpdateRequest,
   FieldEvaluateRequest,
   FieldObservation,
   FieldObservationCreateRequest,
@@ -234,6 +236,11 @@ export const api = {
     forgetCsrfToken();
   },
 
+  async deleteAccount(): Promise<void> {
+    await request<void>("/auth/account", { method: "DELETE" });
+    forgetCsrfToken();
+  },
+
   async me(): Promise<RegisteredUser> {
     const body = await request<{ data: RegisteredUser }>("/auth/me");
     return body.data;
@@ -288,6 +295,27 @@ export const api = {
 
   async deleteField(fieldId: string): Promise<void> {
     await request<void>(`/fields/${encodeURIComponent(fieldId)}`, { method: "DELETE" });
+  },
+
+  async getFieldAgronomy(fieldId: string): Promise<FieldAgronomyProfile> {
+    const body = await request<{ data: FieldAgronomyProfile }>(
+      `/fields/${encodeURIComponent(fieldId)}/agronomy`,
+    );
+    return body.data;
+  },
+
+  async updateFieldAgronomy(
+    fieldId: string,
+    payload: FieldAgronomyUpdateRequest,
+  ): Promise<FieldAgronomyProfile> {
+    const body = await request<{ data: FieldAgronomyProfile }>(
+      `/fields/${encodeURIComponent(fieldId)}/agronomy`,
+      {
+        method: "PATCH",
+        body: payload,
+      },
+    );
+    return body.data;
   },
 
   async listCrops(): Promise<CropList> {

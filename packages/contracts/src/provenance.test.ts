@@ -200,4 +200,28 @@ describe("FieldSnapshot", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("enforces closed soilType and drainageClass vocabularies (OPEN-21)", () => {
+    expect(
+      fieldSnapshotPayloadSchema.safeParse({
+        ...snapshotPayload,
+        soilType: "peat",
+        drainageClass: "poor",
+      }).success,
+    ).toBe(true);
+
+    expect(
+      fieldSnapshotPayloadSchema.safeParse({
+        ...snapshotPayload,
+        soilType: "moon_dust",
+      }).success,
+    ).toBe(false);
+
+    expect(
+      fieldSnapshotPayloadSchema.safeParse({
+        ...snapshotPayload,
+        drainageClass: "swamp",
+      }).success,
+    ).toBe(false);
+  });
 });

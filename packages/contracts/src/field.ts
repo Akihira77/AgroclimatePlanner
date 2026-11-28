@@ -1,6 +1,12 @@
 import { z } from "zod";
 
-import { isoInstantSchema, opaqueIdSchema } from "./enums.js";
+import {
+  drainageClassSchema,
+  irrigationAvailabilitySchema,
+  isoInstantSchema,
+  opaqueIdSchema,
+  soilTypeSchema,
+} from "./enums.js";
 import { polygonGeometrySchema } from "./geometry.js";
 import { pageMetaSchema } from "./page.js";
 import { envelopeSchema } from "./response.js";
@@ -87,3 +93,34 @@ export type FieldListQuery = z.infer<typeof fieldListQuerySchema>;
 
 export const fieldEnvelopeSchema = envelopeSchema(fieldSchema);
 export const fieldListEnvelopeSchema = envelopeSchema(z.array(fieldSchema), pageMetaSchema);
+
+export const fieldAgronomyProfileSchema = z.strictObject({
+  fieldId: opaqueIdSchema,
+  elevationM: z.number().min(-500).max(6000).nullable(),
+  soilType: soilTypeSchema.nullable(),
+  soilPh: z.number().min(3.0).max(10.0).nullable(),
+  drainageClass: drainageClassSchema.nullable(),
+  irrigationAvailability: irrigationAvailabilitySchema.nullable(),
+  waterSource: z.string().nullable(),
+  croppingHistoryNotes: z.string().nullable(),
+  updatedAt: isoInstantSchema,
+});
+export type FieldAgronomyProfile = z.infer<typeof fieldAgronomyProfileSchema>;
+
+export const fieldAgronomyUpdateSchema = z
+  .strictObject({
+    elevationM: z.number().finite().min(-500).max(6000).nullable(),
+    soilType: soilTypeSchema.nullable(),
+    soilPh: z.number().finite().min(3.0).max(10.0).nullable(),
+    drainageClass: drainageClassSchema.nullable(),
+    irrigationAvailability: irrigationAvailabilitySchema.nullable(),
+    waterSource: z.string().trim().min(1).max(200).nullable(),
+    croppingHistoryNotes: z.string().trim().min(1).max(2000).nullable(),
+  })
+  .partial()
+  .refine((value) => Object.keys(value).length > 0, {
+    message: "at least one agronomic field must be provided",
+  });
+export type FieldAgronomyUpdateRequest = z.infer<typeof fieldAgronomyUpdateSchema>;
+
+export const fieldAgronomyEnvelopeSchema = envelopeSchema(fieldAgronomyProfileSchema);

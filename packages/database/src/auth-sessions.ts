@@ -140,15 +140,18 @@ export async function resolveSession(
          SET last_seen_at = ev.at,
              expires_at   = LEAST(ev.at + INTERVAL '30 days', s.absolute_expires_at)
         FROM candidate c, evaluation ev
-       WHERE s.id = c.id
-         AND c.revoked_at IS NULL
-         AND c.expires_at > ev.at
-         AND c.absolute_expires_at > ev.at
-         AND c.last_seen_at <= ev.at - INTERVAL '5 minutes'
+        WHERE s.id = c.id
+          AND c.revoked_at IS NULL
+          AND c.expires_at > ev.at
+          AND c.absolute_expires_at > ev.at
+          AND c.last_seen_at <= ev.at - INTERVAL '5 minutes'
+          AND EXISTS (
+            SELECT 1 FROM app.users u2 WHERE u2.id = c.user_id AND u2.deleted_at IS NULL
+          )
       RETURNING s.id, s.expires_at, s.absolute_expires_at
     )
     SELECT CASE
-             WHEN c.revoked_at IS NOT NULL THEN 'revoked'
+             WHEN c.revoked_at IS NOT NULL OR u.deleted_at IS NOT NULL THEN 'revoked'
              WHEN c.expires_at <= ev.at OR c.absolute_expires_at <= ev.at THEN 'expired'
              ELSE 'active'
            END AS outcome,

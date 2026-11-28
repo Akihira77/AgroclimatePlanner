@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  fieldAgronomyUpdateSchema,
   fieldCreateSchema,
   fieldListQuerySchema,
   fieldSchema,
@@ -230,5 +231,25 @@ describe("fieldSchema", () => {
     ]) {
       expect(fieldSchema.safeParse({ ...field, ...extra }).success).toBe(false);
     }
+  });
+});
+
+describe("fieldAgronomyUpdateSchema (OPEN-21)", () => {
+  it("accepts valid agronomic properties and nullable clears, rejects empty or out-of-range", () => {
+    expect(
+      fieldAgronomyUpdateSchema.safeParse({
+        soilType: "volcanic",
+        drainageClass: "well",
+        soilPh: 6.2,
+        elevationM: 450,
+        irrigationAvailability: "partial_irrigation",
+      }).success,
+    ).toBe(true);
+
+    expect(fieldAgronomyUpdateSchema.safeParse({ soilType: null }).success).toBe(true);
+    expect(fieldAgronomyUpdateSchema.safeParse({}).success).toBe(false);
+    expect(fieldAgronomyUpdateSchema.safeParse({ soilType: "granite" }).success).toBe(false);
+    expect(fieldAgronomyUpdateSchema.safeParse({ soilPh: 12 }).success).toBe(false);
+    expect(fieldAgronomyUpdateSchema.safeParse({ elevationM: 7000 }).success).toBe(false);
   });
 });

@@ -17,6 +17,7 @@ export {
   findAuthUserByEmail,
   insertRegisteredUser,
   isEmailUniqueViolation,
+  softDeleteAccount,
 } from "./auth-registration.js";
 export type { AuthUserRecord, RegisteredUser } from "./auth-registration.js";
 export { insertSession, resolveSession, revokeSession } from "./auth-sessions.js";
@@ -58,11 +59,13 @@ export {
   createField,
   FieldGeometryError,
   findField,
+  findFieldAgronomyProfile,
   listAllFields,
   listFields,
   selectFieldAnchor,
   softDeleteField,
   updateField,
+  updateFieldAgronomyProfile,
 } from "./fields.js";
 export type {
   Field,

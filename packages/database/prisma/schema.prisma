@@ -46,14 +46,17 @@ datasource db {
 // are ordinary columns would let the client write values the database rejects.
 
 model User {
-  id           String   @id @default(dbgenerated("uuidv7()")) @db.Uuid
-  email        String   @unique
-  passwordHash String   @map("password_hash")
-  locale       String   @default("id")
-  timezone     String   @default("Asia/Jakarta")
-  role         String   @default("owner")
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id           String    @id @default(dbgenerated("uuidv7()")) @db.Uuid
+  // users_email_key is a partial unique index (WHERE deleted_at IS NULL) in SQL.
+  email        String
+  passwordHash String    @map("password_hash")
+  locale       String    @default("id")
+  timezone     String    @default("Asia/Jakarta")
+  role         String    @default("owner")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz(6)
+  anonymizedAt DateTime? @map("anonymized_at") @db.Timestamptz(6)
   farms        Farm[]
   sessions     Session[]
 

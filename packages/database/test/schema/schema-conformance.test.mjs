@@ -233,6 +233,32 @@ describe("settled decisions (D26 / OPEN-09 & OPEN-21)", () => {
       ["fields_irrigation_availability_check", "plantings_status_check"],
     );
   });
+
+  test("OPEN-21 soil_type & drainage_class CHECKs, OPEN-17 no POINT, and OPEN-04 partial users_email_key exist", async () => {
+    const { rows: checks } = await owner.query(
+      `select conname, pg_get_constraintdef(c.oid) as def
+         from pg_constraint c
+         join pg_namespace n on n.oid = c.connamespace
+        where n.nspname = 'app'
+          and c.contype = 'c'
+          and c.conname in ('fields_soil_type_check', 'fields_drainage_class_check', 'fields_geom_type_check', 'users_anonymized_requires_deleted_check')
+        order by conname`,
+    );
+    assert.equal(checks.length, 4);
+    const geomCheck = checks.find((c) => c.conname === "fields_geom_type_check");
+    assert.ok(geomCheck && !geomCheck.def.includes("POINT"), "OPEN-17 disallows POINT in v1");
+
+    const { rows: idx } = await owner.query(
+      `select i.indisunique, pg_get_expr(i.indpred, i.indrelid) as pred
+         from pg_index i
+         join pg_class c on c.oid = i.indexrelid
+         join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname = 'app' and c.relname = 'users_email_key'`,
+    );
+    assert.equal(idx.length, 1);
+    assert.equal(idx[0].indisunique, true);
+    assert.ok((idx[0].pred ?? "").includes("deleted_at IS NULL"));
+  });
 });
 
 describe("weather_records live key", () => {

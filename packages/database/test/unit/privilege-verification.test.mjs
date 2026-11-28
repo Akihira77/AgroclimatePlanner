@@ -127,7 +127,7 @@ describe("session table assertion", () => {
 
 describe("app.users column grant assertion", () => {
   const APPROVED = {
-    select_columns: ["id", "email", "password_hash", "role", "locale", "timezone"],
+    select_columns: ["id", "email", "password_hash", "role", "locale", "timezone", "deleted_at"],
     insert_columns: ["email", "password_hash"],
     update_columns: [],
   };
@@ -136,7 +136,7 @@ describe("app.users column grant assertion", () => {
     const log = recorder();
     checkAuthUserColumnGrants(log.check, {
       ...APPROVED,
-      select_columns: ["timezone", "id", "role", "email", "locale", "password_hash"],
+      select_columns: ["timezone", "id", "role", "email", "locale", "password_hash", "deleted_at"],
     });
 
     assert.deepEqual(
@@ -145,7 +145,7 @@ describe("app.users column grant assertion", () => {
     );
   });
 
-  it("fails when a seventh column is readable, even though the six are present", () => {
+  it("fails when an eighth column is readable, even though the seven are present", () => {
     const log = recorder();
     checkAuthUserColumnGrants(log.check, {
       ...APPROVED,
@@ -154,7 +154,7 @@ describe("app.users column grant assertion", () => {
 
     assert.deepEqual(
       log.calls.filter((call) => call.passed === false).map((call) => call.label),
-      ["app_auth SELECTs exactly the six approved columns of app.users"],
+      ["app_auth SELECTs exactly the seven approved columns of app.users"],
     );
     assert.match(log.calls[0].detail, /created_at/);
   });

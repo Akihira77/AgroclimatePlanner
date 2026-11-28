@@ -71,6 +71,30 @@ export const irrigationAvailabilitySchema = z.enum([
 export type IrrigationAvailability = z.infer<typeof irrigationAvailabilitySchema>;
 
 /**
+ * Closed soil-type vocabulary (`OPEN-21`). `null` means unknown/not yet supplied;
+ * `"unknown"` means explicitly recorded as unknown.
+ */
+export const soilTypeSchema = z.enum([
+  "clay",
+  "loam",
+  "sandy",
+  "clay_loam",
+  "sandy_loam",
+  "silt_loam",
+  "peat",
+  "alluvial",
+  "volcanic",
+  "unknown",
+]);
+export type SoilType = z.infer<typeof soilTypeSchema>;
+
+/**
+ * Closed drainage-class vocabulary (`OPEN-21`).
+ */
+export const drainageClassSchema = z.enum(["poor", "moderate", "well", "excessive", "unknown"]);
+export type DrainageClass = z.infer<typeof drainageClassSchema>;
+
+/**
  * ISO 8601 calendar date, interpreted in Asia/Jakarta wherever a date appears.
  * Calendar validity is checked, not just shape: `2026-02-31` and `2026-13-01`
  * are rejected, `2024-02-29` is accepted.

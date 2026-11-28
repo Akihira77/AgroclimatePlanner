@@ -9,6 +9,7 @@ import {
   resolveSession,
   resolveSessionCsrfToken,
   revokeSession,
+  softDeleteAccount,
 } from "@agroclimate/database";
 
 import { AUTH_DATABASE_CLIENT, PASSWORD_HASHER } from "../tokens.js";
@@ -168,6 +169,13 @@ export class AuthService {
    */
   async logout(token: string): Promise<void> {
     await this.withDatabaseErrors(() => revokeSession(this.client, hashSessionToken(token)));
+  }
+
+  /**
+   * Soft-deletes the authenticated account and revokes all active sessions (`OPEN-04`).
+   */
+  async deleteAccount(userId: string): Promise<boolean> {
+    return this.withDatabaseErrors(() => softDeleteAccount(this.client, userId));
   }
 
   private async verify(storedHash: string | null, password: string): Promise<boolean> {

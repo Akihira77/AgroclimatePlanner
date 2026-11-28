@@ -1,11 +1,11 @@
 # ADR-008 — Explicit Grid Cell Selection Semantics
 
-- Status: **Proposed** — prepared 2026-11-24 for owner approval. **Not accepted.**
-  Nothing in this ADR is implemented; every decision below is a recommendation with its
-  evidence and its status.
-- Date: 2026-11-24
-- Deciders: project owner (**Akihira77**); analysis prepared by the orchestrator. Owner
-  approval has not been given.
+- Status: **Accepted** — accepted 2026-11-28 by project owner (**Akihira77**).
+  `nearest-centre` cell selection and `unvalidatedGridRegistry` (`ecmwf_ifs025`) are
+  implemented; `ecmwf_ifs025` remains `unvalidated` and barred from validated production
+  claims until grade A+B multi-coordinate evidence completes (`OPEN-18`).
+- Date: 2026-11-24 (accepted 2026-11-28)
+- Deciders: project owner (**Akihira77**); analysis prepared by the orchestrator.
 - Depends on: `ADR-001` D8 (a fixed, documented rounding rule **per model**);
   `ADR-007` D1–D3 (registry identity, hash-as-pin, resolution result); the `OPEN-18`
   owner decision of 2026-11-21 (generic resolver approved; a re-grid is a new `model`

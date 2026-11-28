@@ -373,6 +373,8 @@ All routes below require a valid session cookie (`AuthGuard`); state-changing `P
 | `POST /v1/fields/:fieldId/observations`, `GET /v1/fields/:fieldId/observations` | `ActivityController` | Record and list local field observations (`rainfall`, `soil_moisture`, `temperature`, `note`). |
 | `POST /v1/fields/:fieldId/evaluate`, `GET /v1/fields/:fieldId/suitability`, `GET /v1/planting-windows` | `AgronomyController` | Run deterministic suitability + window generation with atomic supersession, read latest field suitability, and filter active planting windows. |
 | `POST /v1/fields/:fieldId/briefing`, `GET /v1/fields/:fieldId/briefing` | `BriefingController` | Generate/cache or read latest `OPEN-11` structured `ClimateBriefing` grounded in `evidenceSegmentIds` with deterministic fallback. |
+| `GET /v1/fields/:fieldId/agronomy`, `PATCH /v1/fields/:fieldId/agronomy` | `FieldController` | Read and update closed-vocabulary agronomic field properties (`OPEN-21`: `soilType`, `drainageClass`, `irrigationAvailability`, `soilPh`, `elevationM`, `waterSource`, `croppingHistoryNotes`). |
+| `DELETE /v1/auth/account` | `AuthController` | Soft-delete the authenticated account (`OPEN-04`), revoke live sessions, and clear session cookie. |
 
 ## 10. Keeping this page true
 

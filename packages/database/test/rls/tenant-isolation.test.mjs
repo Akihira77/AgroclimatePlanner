@@ -57,7 +57,7 @@ async function createTenant(label) {
 
   const { rows: field } = await owner.query(
     `insert into app.fields (user_id, farm_id, name, geom)
-     values ($1, $2, $3, public.ST_SetSRID(public.ST_MakePoint(106.7, -6.2), 4326))
+     values ($1, $2, $3, public.ST_SetSRID(public.ST_GeomFromText('POLYGON((106.7 -6.2, 106.8 -6.2, 106.8 -6.1, 106.7 -6.1, 106.7 -6.2))'), 4326))
      returning id`,
     [userId, farm[0].id, `field ${label}`],
   );
@@ -378,7 +378,7 @@ describe("tenant scope", () => {
         "cross-tenant farm reference",
         `insert into app.fields (user_id, farm_id, name, geom)
          values ($1, $2, 'cross tenant',
-                 public.ST_SetSRID(public.ST_MakePoint(106.7, -6.2), 4326))`,
+                 public.ST_SetSRID(public.ST_GeomFromText('POLYGON((106.7 -6.2, 106.8 -6.2, 106.8 -6.1, 106.7 -6.1, 106.7 -6.2))'), 4326))`,
         [fixtures.tenantA, fixtures.farmB],
         "23503",
       );

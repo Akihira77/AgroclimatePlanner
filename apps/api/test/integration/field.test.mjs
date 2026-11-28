@@ -722,16 +722,26 @@ describe("stored geometry outside the public contract", () => {
     assert.equal(await fieldCount(corrupt), before, "nothing was written");
   });
 
-  it("refuses a stored POINT or MULTIPOLYGON instead of labelling it Polygon", async () => {
-    for (const [label, geometry] of Object.entries({
-      point: { type: "Point", coordinates: [106.8, -6.2] },
-      multipolygon: { type: "MultiPolygon", coordinates: [SQUARE.coordinates] },
-    })) {
-      const seeded = await seedStored(corrupt, label, geometry);
-      const { response, body } = await call(corrupt, "GET", `/v1/fields/${seeded.fieldId}`);
-      assert.equal(response.status, 500, label);
-      assert.equal(body.error.code, "INTERNAL_ERROR", label);
-    }
+  it("refuses a POINT at the database CHECK (OPEN-17) and refuses a stored MULTIPOLYGON", async () => {
+    const pointFarm = await createFarm(corrupt, "point check farm");
+    await assert.rejects(
+      harness.owner.$queryRawUnsafe(
+        `INSERT INTO app.fields (farm_id, user_id, name, geom)
+         VALUES ($1::uuid, $2::uuid, 'point', ST_GeomFromGeoJSON($3::text))`,
+        pointFarm.id,
+        corrupt.id,
+        JSON.stringify({ type: "Point", coordinates: [106.8, -6.2] }),
+      ),
+      (error) => String(error.message).includes("fields_geom_type_check"),
+    );
+
+    const seeded = await seedStored(corrupt, "multipolygon", {
+      type: "MultiPolygon",
+      coordinates: [SQUARE.coordinates],
+    });
+    const { response, body } = await call(corrupt, "GET", `/v1/fields/${seeded.fieldId}`);
+    assert.equal(response.status, 500, "multipolygon");
+    assert.equal(body.error.code, "INTERNAL_ERROR", "multipolygon");
   });
 
   it("fails the collection rather than omitting or rewriting a bad row", async () => {
@@ -798,5 +808,37 @@ describe("tenant isolation and the Farm deletion rule", () => {
       body.data.some((field) => field.name === "Alice only"),
       false,
     );
+  });
+
+  it("reads and updates closed-vocabulary agronomy profile (OPEN-21) with RLS isolation", async () => {
+    const farm = await createFarm(alice, "Agronomy farm");
+    const field = await createField(alice, farm.id, "Agronomy field");
+
+    const initial = await call(alice, "GET", `/v1/fields/${field.id}/agronomy`);
+    assert.equal(initial.response.status, 200);
+    assert.equal(initial.body.data.soilType, null);
+
+    const bad = await call(alice, "PATCH", `/v1/fields/${field.id}/agronomy`, {
+      body: { soilType: "moon_dust" },
+    });
+    assert.equal(bad.response.status, 400);
+
+    const updated = await call(alice, "PATCH", `/v1/fields/${field.id}/agronomy`, {
+      body: {
+        soilType: "volcanic",
+        drainageClass: "well",
+        soilPh: 6.3,
+        elevationM: 420,
+        irrigationAvailability: "partial_irrigation",
+        waterSource: "Irigasi teknis desa",
+      },
+    });
+    assert.equal(updated.response.status, 200);
+    assert.equal(updated.body.data.soilType, "volcanic");
+    assert.equal(updated.body.data.drainageClass, "well");
+    assert.equal(updated.body.data.irrigationAvailability, "partial_irrigation");
+
+    const bobGet = await call(bob, "GET", `/v1/fields/${field.id}/agronomy`);
+    assert.equal(bobGet.response.status, 404);
   });
 });

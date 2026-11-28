@@ -166,8 +166,8 @@ export function checkAuthUserColumnGrants(check, held) {
   const update = held.update_columns ?? [];
 
   check(
-    "app_auth SELECTs exactly the six approved columns of app.users",
-    sameSet(select, ["email", "id", "locale", "password_hash", "role", "timezone"]),
+    "app_auth SELECTs exactly the seven approved columns of app.users",
+    sameSet(select, ["deleted_at", "email", "id", "locale", "password_hash", "role", "timezone"]),
     JSON.stringify([...select].sort()),
   );
   check(

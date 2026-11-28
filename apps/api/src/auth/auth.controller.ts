@@ -10,6 +10,7 @@ import {
   Body,
   ConflictException,
   Controller,
+  Delete,
   Get,
   HttpCode,
   Inject,
@@ -176,6 +177,23 @@ export class AuthController {
       await this.auth.logout(token);
     }
 
+    clearSessionCookie(response);
+  }
+
+  /**
+   * Soft-deletes the current account (`OPEN-04`) and revokes all active sessions.
+   */
+  @Delete("account")
+  @HttpCode(204)
+  @UseGuards(AuthGuard)
+  async deleteAccount(
+    @Req() request: AuthenticatedRequest,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<void> {
+    const context = request.auth;
+    if (context === undefined) throw unauthenticated();
+
+    await this.auth.deleteAccount(context.user.id);
     clearSessionCookie(response);
   }
 }

@@ -30,6 +30,14 @@
  * and the area is wrong rather than rejected. `polygonJson` refuses a `crs` member
  * before it reaches SQL, and the parser's own 4326 is what the column verifies.
  */
+import type {
+  DrainageClass,
+  FieldAgronomyProfile,
+  FieldAgronomyUpdateRequest,
+  IrrigationAvailability,
+  SoilType,
+} from "@agroclimate/contracts";
+
 import { Prisma } from "./generated/prisma/client.js";
 
 import type { TenantTransaction } from "./tenant.js";
@@ -415,4 +423,99 @@ function asDate(value: Date | string): Date {
 /** The sort order is a whitelisted constant, never caller text. */
 function rawOrder(sort: FieldSort): Prisma.Sql {
   return Prisma.raw(FIELD_ORDER[sort]);
+}
+
+interface RawFieldAgronomyProfile {
+  readonly id: string;
+  readonly elevation_m: string | number | null;
+  readonly soil_type: SoilType | null;
+  readonly soil_ph: string | number | null;
+  readonly drainage_class: DrainageClass | null;
+  readonly irrigation_availability: IrrigationAvailability | null;
+  readonly water_source: string | null;
+  readonly cropping_history_notes: string | null;
+  readonly updated_at: Date | string;
+}
+
+function toAgronomyProfile(row: RawFieldAgronomyProfile): FieldAgronomyProfile {
+  return {
+    fieldId: row.id,
+    elevationM: row.elevation_m === null ? null : Number(row.elevation_m),
+    soilType: row.soil_type,
+    soilPh: row.soil_ph === null ? null : Number(row.soil_ph),
+    drainageClass: row.drainage_class,
+    irrigationAvailability: row.irrigation_availability,
+    waterSource: row.water_source,
+    croppingHistoryNotes: row.cropping_history_notes,
+    updatedAt: asDate(row.updated_at).toISOString(),
+  };
+}
+
+export async function findFieldAgronomyProfile(
+  tx: TenantTransaction,
+  fieldId: string,
+): Promise<FieldAgronomyProfile | null> {
+  const rows = await tx.$queryRaw<RawFieldAgronomyProfile[]>`
+    SELECT id::text AS id,
+           elevation_m,
+           soil_type,
+           soil_ph,
+           drainage_class,
+           irrigation_availability,
+           water_source,
+           cropping_history_notes,
+           updated_at
+      FROM app.fields
+     WHERE id = ${fieldId}::uuid
+       AND user_id = NULLIF(current_setting('app.user_id', true), '')::uuid
+       AND deleted_at IS NULL
+  `;
+  const row = rows[0];
+  return row === undefined ? null : toAgronomyProfile(row);
+}
+
+export async function updateFieldAgronomyProfile(
+  tx: TenantTransaction,
+  fieldId: string,
+  input: FieldAgronomyUpdateRequest,
+): Promise<FieldAgronomyProfile | null> {
+  const rows = await tx.$queryRaw<RawFieldAgronomyProfile[]>`
+    UPDATE app.fields
+       SET elevation_m = CASE WHEN ${input.elevationM !== undefined}::boolean
+                              THEN ${input.elevationM ?? null}::numeric
+                              ELSE elevation_m END,
+           soil_type = CASE WHEN ${input.soilType !== undefined}::boolean
+                            THEN ${input.soilType ?? null}::text
+                            ELSE soil_type END,
+           soil_ph = CASE WHEN ${input.soilPh !== undefined}::boolean
+                          THEN ${input.soilPh ?? null}::numeric
+                          ELSE soil_ph END,
+           drainage_class = CASE WHEN ${input.drainageClass !== undefined}::boolean
+                                 THEN ${input.drainageClass ?? null}::text
+                                 ELSE drainage_class END,
+           irrigation_availability = CASE WHEN ${input.irrigationAvailability !== undefined}::boolean
+                                          THEN ${input.irrigationAvailability ?? null}::text
+                                          ELSE irrigation_availability END,
+           water_source = CASE WHEN ${input.waterSource !== undefined}::boolean
+                               THEN ${input.waterSource ?? null}::text
+                               ELSE water_source END,
+           cropping_history_notes = CASE WHEN ${input.croppingHistoryNotes !== undefined}::boolean
+                                         THEN ${input.croppingHistoryNotes ?? null}::text
+                                         ELSE cropping_history_notes END,
+           updated_at = now()
+     WHERE id = ${fieldId}::uuid
+       AND user_id = NULLIF(current_setting('app.user_id', true), '')::uuid
+       AND deleted_at IS NULL
+    RETURNING id::text AS id,
+              elevation_m,
+              soil_type,
+              soil_ph,
+              drainage_class,
+              irrigation_availability,
+              water_source,
+              cropping_history_notes,
+              updated_at
+  `;
+  const row = rows[0];
+  return row === undefined ? null : toAgronomyProfile(row);
 }

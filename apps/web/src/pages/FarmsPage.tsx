@@ -1,9 +1,23 @@
-import type { PolygonGeometry } from "@agroclimate/contracts";
-import { useState } from "react";
+import type {
+  DrainageClass,
+  IrrigationAvailability,
+  PolygonGeometry,
+  SoilType,
+} from "@agroclimate/contracts";
+import { useEffect, useState } from "react";
 
 import { api } from "../api.js";
 import { Link } from "../router.js";
-import { ErrorNotice, Empty, Loading, Mono, Tag } from "../ui.js";
+import {
+  ErrorNotice,
+  Empty,
+  Loading,
+  Mono,
+  Tag,
+  drainageClassLabel,
+  irrigationLabel,
+  soilTypeLabel,
+} from "../ui.js";
 import { useAsync } from "../useAsync.js";
 
 /**
@@ -394,6 +408,7 @@ export function FarmsPage() {
                     Lihat iklim
                   </Link>
                 </div>
+                <FieldAgronomyForm fieldId={detailField.id} />
               </div>
             </div>
           );
@@ -601,6 +616,178 @@ export function FarmsPage() {
         ) : null}
       </section>
     </div>
+  );
+}
+
+function FieldAgronomyForm({ fieldId }: { readonly fieldId: string }) {
+  const [soilType, setSoilType] = useState<string>("");
+  const [drainageClass, setDrainageClass] = useState<string>("");
+  const [irrigation, setIrrigation] = useState<string>("");
+  const [soilPh, setSoilPh] = useState<string>("");
+  const [elevationM, setElevationM] = useState<string>("");
+  const [waterSource, setWaterSource] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [savedNotice, setSavedNotice] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    setSavedNotice(false);
+    setError(null);
+    api.getFieldAgronomy(fieldId).then(
+      (profile) => {
+        if (!alive) return;
+        setSoilType(profile.soilType ?? "");
+        setDrainageClass(profile.drainageClass ?? "");
+        setIrrigation(profile.irrigationAvailability ?? "");
+        setSoilPh(profile.soilPh === null ? "" : String(profile.soilPh));
+        setElevationM(profile.elevationM === null ? "" : String(profile.elevationM));
+        setWaterSource(profile.waterSource ?? "");
+        setLoading(false);
+      },
+      (err: unknown) => {
+        if (!alive) return;
+        setError(err);
+        setLoading(false);
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [fieldId]);
+
+  if (loading) return <Loading label="Memuat profil agronomi lahan…" />;
+
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setSaving(true);
+    setSavedNotice(false);
+    setError(null);
+    try {
+      await api.updateFieldAgronomy(fieldId, {
+        soilType: soilType === "" ? null : (soilType as SoilType),
+        drainageClass: drainageClass === "" ? null : (drainageClass as DrainageClass),
+        irrigationAvailability: irrigation === "" ? null : (irrigation as IrrigationAvailability),
+        soilPh: soilPh.trim() === "" ? null : Number(soilPh),
+        elevationM: elevationM.trim() === "" ? null : Number(elevationM),
+        waterSource: waterSource.trim() === "" ? null : waterSource.trim(),
+      });
+      setSavedNotice(true);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form className="stack" onSubmit={save}>
+      <h4>Profil agronomi lahan (OPEN-21)</h4>
+      {error !== null ? <ErrorNotice error={error} /> : null}
+      {savedNotice ? <p className="muted">Profil agronomi tersimpan.</p> : null}
+      <div className="form-grid">
+        <div className="field">
+          <label htmlFor="agro-soil">Jenis tanah</label>
+          <select id="agro-soil" value={soilType} onChange={(e) => setSoilType(e.target.value)}>
+            <option value="">Belum diisi (null)</option>
+            {(
+              [
+                "clay",
+                "loam",
+                "sandy",
+                "clay_loam",
+                "sandy_loam",
+                "silt_loam",
+                "peat",
+                "alluvial",
+                "volcanic",
+                "unknown",
+              ] as const
+            ).map((v) => (
+              <option key={v} value={v}>
+                {soilTypeLabel(v)}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field">
+          <label htmlFor="agro-drainage">Kelas drainase</label>
+          <select
+            id="agro-drainage"
+            value={drainageClass}
+            onChange={(e) => setDrainageClass(e.target.value)}
+          >
+            <option value="">Belum diisi (null)</option>
+            {(["poor", "moderate", "well", "excessive", "unknown"] as const).map((v) => (
+              <option key={v} value={v}>
+                {drainageClassLabel(v)}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field">
+          <label htmlFor="agro-irrigation">Ketersediaan irigasi</label>
+          <select
+            id="agro-irrigation"
+            value={irrigation}
+            onChange={(e) => setIrrigation(e.target.value)}
+          >
+            <option value="">Belum diisi (null)</option>
+            {(["irrigated", "partial_irrigation", "rainfed", "unknown"] as const).map((v) => (
+              <option key={v} value={v}>
+                {irrigationLabel(v)}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field">
+          <label htmlFor="agro-ph">pH tanah (3.0–10.0)</label>
+          <input
+            id="agro-ph"
+            type="number"
+            step="0.1"
+            min="3"
+            max="10"
+            value={soilPh}
+            onChange={(e) => setSoilPh(e.target.value)}
+          />
+        </div>
+
+        <div className="field">
+          <label htmlFor="agro-elev">Elevasi (m dpl)</label>
+          <input
+            id="agro-elev"
+            type="number"
+            step="1"
+            min="-500"
+            max="6000"
+            value={elevationM}
+            onChange={(e) => setElevationM(e.target.value)}
+          />
+        </div>
+
+        <div className="field">
+          <label htmlFor="agro-water">Sumber air (opsional)</label>
+          <input
+            id="agro-water"
+            maxLength={200}
+            value={waterSource}
+            onChange={(e) => setWaterSource(e.target.value)}
+          />
+        </div>
+
+        <div className="form-actions">
+          <button type="submit" className="btn btn-primary" disabled={saving}>
+            Simpan profil agronomi
+          </button>
+        </div>
+      </div>
+    </form>
   );
 }
 

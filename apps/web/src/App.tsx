@@ -65,6 +65,17 @@ export function App() {
     }
   };
 
+  const deleteAccount = async () => {
+    setLogoutError(null);
+    try {
+      await api.deleteAccount();
+      setSession({ state: "anonymous" });
+      navigate("/");
+    } catch (error) {
+      setLogoutError(error);
+    }
+  };
+
   if (session.state === "loading") {
     return (
       <div className="auth-shell">
@@ -99,7 +110,15 @@ export function App() {
     );
   }
 
-  return <Shell user={session.user} route={route} onLogout={logout} logoutError={logoutError} />;
+  return (
+    <Shell
+      user={session.user}
+      route={route}
+      onLogout={logout}
+      onDeleteAccount={deleteAccount}
+      logoutError={logoutError}
+    />
+  );
 }
 
 function isStatus(error: unknown, status: number): boolean {
@@ -112,13 +131,16 @@ function Shell({
   user,
   route,
   onLogout,
+  onDeleteAccount,
   logoutError,
 }: {
   readonly user: RegisteredUser;
   readonly route: ReturnType<typeof useRoute>;
   readonly onLogout: () => void;
+  readonly onDeleteAccount: () => Promise<void>;
   readonly logoutError: unknown;
 }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [section, ...rest] = route.segments;
   const slug = rest[0];
   const current = section ?? "ringkasan";
@@ -154,9 +176,37 @@ function Shell({
 
         <div className="sidebar-foot">
           <span className="email">{user.email}</span>
-          <button className="btn btn-quiet" type="button" onClick={onLogout}>
-            Keluar
-          </button>
+          <div className="btn-row">
+            <button className="btn btn-quiet" type="button" onClick={onLogout}>
+              Keluar
+            </button>
+            {!confirmDelete ? (
+              <button
+                className="btn btn-danger"
+                type="button"
+                onClick={() => setConfirmDelete(true)}
+              >
+                Hapus akun
+              </button>
+            ) : (
+              <>
+                <button
+                  className="btn btn-danger"
+                  type="button"
+                  onClick={() => void onDeleteAccount()}
+                >
+                  Konfirmasi hapus
+                </button>
+                <button
+                  className="btn btn-quiet"
+                  type="button"
+                  onClick={() => setConfirmDelete(false)}
+                >
+                  Batal
+                </button>
+              </>
+            )}
+          </div>
         </div>
       </aside>
 

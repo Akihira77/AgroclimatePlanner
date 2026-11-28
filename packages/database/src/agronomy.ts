@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type {
   DataInputRef,
   DimensionCoverageEntry,
+  DrainageClass,
   EvaluationBasis,
   EvidenceGrade,
   EvidenceSegment,
@@ -12,6 +13,7 @@ import type {
   PlantingWindow,
   ResolvedCell,
   SingleValueEvaluationBasis,
+  SoilType,
   SuitabilityRunWithWindows,
   SuitabilityVerdict,
   UnreproducibleReason,
@@ -35,9 +37,9 @@ export interface FieldSnapshotSource {
   readonly geometryHash: string;
   readonly areaHa: number;
   readonly elevationM: number | null;
-  readonly soilType: string | null;
+  readonly soilType: SoilType | null;
   readonly soilPh: number | null;
-  readonly drainageClass: string | null;
+  readonly drainageClass: DrainageClass | null;
   readonly irrigationAvailability: IrrigationAvailability | null;
   readonly irrigationSource: string | null;
   readonly resolvedCells: readonly ResolvedCell[];
@@ -98,9 +100,9 @@ interface RawFieldSource {
   readonly ewkb: Uint8Array;
   readonly area_ha: number;
   readonly elevation_m: string | number | null;
-  readonly soil_type: string | null;
+  readonly soil_type: SoilType | null;
   readonly soil_ph: string | number | null;
-  readonly drainage_class: string | null;
+  readonly drainage_class: DrainageClass | null;
   readonly irrigation_availability: IrrigationAvailability | null;
   readonly water_source: string | null;
 }

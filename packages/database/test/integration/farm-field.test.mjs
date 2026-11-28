@@ -584,21 +584,17 @@ describe("geometry and generated area", () => {
     );
   });
 
-  it("refuses to serve a point row written outside this layer", async () => {
+  it("refuses a POINT row at the database constraint (OPEN-17)", async () => {
     const userId = await createUser("geom-raw-point");
     const farm = await farmFor(userId, "Titik mentah");
-    const { rows } = await owner.query(
-      `INSERT INTO app.fields (user_id, farm_id, name, geom)
-       VALUES ($1::uuid, $2::uuid, 'Titik', public.ST_SetSRID(public.ST_MakePoint(106.8, -6.2), 4326))
-       RETURNING id::text AS id`,
-      [userId, farm.id],
-    );
-
-    // `OPEN-17` made visible: the column stores it, the API cannot represent it, and
-    // returning it as a `PolygonGeometry` would be a lie the type system cannot catch.
-    await assert.rejects(
-      () => scope.withTenant(userId, (tx) => findField(tx, rows[0].id)),
-      /not a GeoJSON Polygon/,
+    await rejectsWithSqlState(
+      () =>
+        owner.query(
+          `INSERT INTO app.fields (user_id, farm_id, name, geom)
+           VALUES ($1::uuid, $2::uuid, 'Titik', public.ST_SetSRID(public.ST_MakePoint(106.8, -6.2), 4326))`,
+          [userId, farm.id],
+        ),
+      "23514",
     );
   });
 });

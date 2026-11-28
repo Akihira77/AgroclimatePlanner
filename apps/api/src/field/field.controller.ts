@@ -3,6 +3,8 @@ import type {
   CellResolutionRequest,
   Envelope,
   Field,
+  FieldAgronomyProfile,
+  FieldAgronomyUpdateRequest,
   FieldCreateRequest,
   FieldId,
   FieldListQuery,
@@ -11,6 +13,7 @@ import type {
 } from "@agroclimate/contracts";
 import {
   cellResolutionRequestSchema,
+  fieldAgronomyUpdateSchema,
   fieldCreateSchema,
   fieldIdSchema,
   fieldListQuerySchema,
@@ -126,6 +129,31 @@ export class FieldController {
     const resolution = await this.fields.resolveCell(authenticatedUserId(request), fieldId, body);
     if (resolution === null) throw fieldNotFound();
     return { data: resolution };
+  }
+
+  @Get(":fieldId/agronomy")
+  async getAgronomy(
+    @Req() request: AuthenticatedRequest,
+    @Param("fieldId", new ZodValidationPipe(fieldIdSchema)) fieldId: FieldId,
+  ): Promise<Envelope<FieldAgronomyProfile>> {
+    const profile = await this.fields.getAgronomyProfile(authenticatedUserId(request), fieldId);
+    if (profile === null) throw fieldNotFound();
+    return { data: profile };
+  }
+
+  @Patch(":fieldId/agronomy")
+  async updateAgronomy(
+    @Req() request: AuthenticatedRequest,
+    @Param("fieldId", new ZodValidationPipe(fieldIdSchema)) fieldId: FieldId,
+    @Body(new ZodValidationPipe(fieldAgronomyUpdateSchema)) body: FieldAgronomyUpdateRequest,
+  ): Promise<Envelope<FieldAgronomyProfile>> {
+    const profile = await this.fields.updateAgronomyProfile(
+      authenticatedUserId(request),
+      fieldId,
+      body,
+    );
+    if (profile === null) throw fieldNotFound();
+    return { data: profile };
   }
 
   /** `204`; the row is soft-deleted, never removed. Farm deletion still refuses while a field is live. */

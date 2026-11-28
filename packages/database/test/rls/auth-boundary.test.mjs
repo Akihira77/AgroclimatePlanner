@@ -541,4 +541,21 @@ describe("other roles on app.sessions", () => {
       assert.equal(rows[0].granted, false, `app_system unexpectedly holds ${privilege}`);
     }
   });
+
+  it("OPEN-04 account deletion and anonymization functions are strictly role-scoped", async () => {
+    await deniedCode(
+      api,
+      "select app.soft_delete_account($1::uuid)",
+      [fixtures.primaryUserId],
+      "42501",
+    );
+    await deniedCode(
+      system,
+      "select app.soft_delete_account($1::uuid)",
+      [fixtures.primaryUserId],
+      "42501",
+    );
+    await deniedCode(auth, "select app.anonymize_expired_deleted_users(30)", [], "42501");
+    await deniedCode(api, "select app.anonymize_expired_deleted_users(30)", [], "42501");
+  });
 });

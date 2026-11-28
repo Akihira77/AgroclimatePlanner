@@ -3,6 +3,8 @@ import type {
   CellResolution,
   CellResolutionRequest,
   Field as FieldResource,
+  FieldAgronomyProfile,
+  FieldAgronomyUpdateRequest,
   FieldCreateRequest,
   FieldListQuery,
   FieldUpdateRequest,
@@ -22,11 +24,13 @@ import {
   createField,
   createTenantScope,
   findField,
+  findFieldAgronomyProfile,
   listAllFields,
   listFields,
   selectFieldAnchor,
   softDeleteField,
   updateField,
+  updateFieldAgronomyProfile,
   upsertCell,
 } from "@agroclimate/database";
 
@@ -123,6 +127,18 @@ export class FieldService {
   /** `false` from another tenant, an already-deleted field, and a missing one alike. */
   async remove(userId: string, fieldId: string): Promise<boolean> {
     return this.scope.withTenant(userId, (tx) => softDeleteField(tx, fieldId));
+  }
+
+  async getAgronomyProfile(userId: string, fieldId: string): Promise<FieldAgronomyProfile | null> {
+    return this.scope.withTenant(userId, (tx) => findFieldAgronomyProfile(tx, fieldId));
+  }
+
+  async updateAgronomyProfile(
+    userId: string,
+    fieldId: string,
+    input: FieldAgronomyUpdateRequest,
+  ): Promise<FieldAgronomyProfile | null> {
+    return this.scope.withTenant(userId, (tx) => updateFieldAgronomyProfile(tx, fieldId, input));
   }
 
   /**

@@ -161,8 +161,8 @@ Roadmap mempertahankan pembagian fase utama proyek.
 |---|---|---|---|
 | 0 | Research & Data Validation | `VERIFIED` | Data sources and agronomic references |
 | 1 | Product Requirements & Architecture | `VERIFIED` | Product and technical contracts |
-| 2 | Monorepo & Database Foundation | `PARTIAL`* | Secure application foundation (`OPEN-04` deletion, `OPEN-28` signed context open) |
-| 3 | Domain Model & Core Administration | `PARTIAL` | Identity, farms, fields, crop catalog, plantings/harvests/observations (`OPEN-17` point fields, `OPEN-21` soil/drainage closed vocabularies open) |
+| 2 | Monorepo & Database Foundation | `PARTIAL`* | Secure application foundation (`OPEN-04` settled & shipped; `OPEN-28` signed context deferred) |
+| 3 | Domain Model & Core Administration | `VERIFIED` | Identity + account deletion (`OPEN-04`), farms, polygon fields (`OPEN-17`), closed agronomic vocabularies (`OPEN-21`), crop catalog, plantings/harvests/observations (`OPEN-09`) |
 | 4 | Weather Data Ingestion | `PARTIAL` | Normalized weather ingestion & `ADR-008` grid selection (`OPEN-02` BMKG, `OPEN-03` Open-Meteo commercial plan, `OPEN-18` grade A+B production validation open) |
 | 5 | Climate Data Foundation | `PARTIAL` | Rolling 12-month climate outlook (`OPEN-05` raw payload retention, `OPEN-27` post-ingestion worker fan-out deferred) |
 | 6 | Agronomic Suitability & Planting Window Engine | `VERIFIED` | Explainable deterministic suitability, stage alignment, window generator, and atomic supersession persistence |

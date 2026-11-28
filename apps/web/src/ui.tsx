@@ -232,3 +232,47 @@ export function observationKindLabel(kind: string): string {
       return kind;
   }
 }
+
+export function soilTypeLabel(value: string): string {
+  switch (value) {
+    case "clay":
+      return "Liat (clay)";
+    case "loam":
+      return "Lempung (loam)";
+    case "sandy":
+      return "Berpasir (sandy)";
+    case "clay_loam":
+      return "Lempung berliat";
+    case "sandy_loam":
+      return "Lempung berpasir";
+    case "silt_loam":
+      return "Lempung berdebu";
+    case "peat":
+      return "Gambut (peat)";
+    case "alluvial":
+      return "Aluvial";
+    case "volcanic":
+      return "Vulkanik";
+    case "unknown":
+      return "Belum diketahui";
+    default:
+      return value;
+  }
+}
+
+export function drainageClassLabel(value: string): string {
+  switch (value) {
+    case "poor":
+      return "Buruk / tergenang";
+    case "moderate":
+      return "Sedang";
+    case "well":
+      return "Baik";
+    case "excessive":
+      return "Berlebih / cepat kering";
+    case "unknown":
+      return "Belum diketahui";
+    default:
+      return value;
+  }
+}

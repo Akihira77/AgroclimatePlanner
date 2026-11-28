@@ -95,10 +95,22 @@ export async function findAuthUserByEmail(
            timezone
       FROM app.users
      WHERE email = ${email}
+       AND deleted_at IS NULL
      LIMIT 1
   `;
 
   return rows[0] ?? null;
+}
+
+/**
+ * Soft-deletes an account (`OPEN-04`) and revokes all of its live sessions via
+ * the narrow `SECURITY DEFINER` function granted to `app_auth`.
+ */
+export async function softDeleteAccount(client: PrismaClient, userId: string): Promise<boolean> {
+  const rows = await client.$queryRaw<{ deleted: boolean }[]>`
+    SELECT app.soft_delete_account(${userId}::uuid) AS deleted
+  `;
+  return rows[0]?.deleted === true;
 }
 
 /**

@@ -1,11 +1,13 @@
 import { z } from "zod";
 import {
+  drainageClassSchema,
   irrigationAvailabilitySchema,
   isoDateSchema,
   isoInstantSchema,
   missingReasonSchema,
   opaqueIdSchema,
   singleValueEvaluationBasisSchema,
+  soilTypeSchema,
   weatherDataClassSchema,
 } from "./enums.js";
 
@@ -134,9 +136,9 @@ export const fieldSnapshotPayloadSchema = z.strictObject({
   geometryHash: opaqueIdSchema,
   areaHa: z.number().positive(),
   elevationM: z.number().nullable(),
-  soilType: z.string().nullable(),
+  soilType: soilTypeSchema.nullable(),
   soilPh: z.number().nullable(),
-  drainageClass: z.string().nullable(),
+  drainageClass: drainageClassSchema.nullable(),
   irrigationAvailability: irrigationAvailabilitySchema,
   irrigationSource: z.string().nullable(),
   extractionPolicy: z.enum(["centroid", "area_weighted"]),
