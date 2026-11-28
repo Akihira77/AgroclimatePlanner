@@ -161,9 +161,23 @@ function VersionDetail({
   if (state.data === null) return null;
 
   const profile = state.data;
+  const dimensions = ["climate", "water", "soil", "timing", "risk"] as const;
+  const presentDimensions = new Set(profile.constraints.map((c) => c.dimension));
 
   return (
     <div className="panel-body stack">
+      <section className="stack-tight">
+        <h4>Cakupan dimensi rulebook</h4>
+        <div className="row">
+          {dimensions.map((dim) => (
+            <Tag key={dim} tone={presentDimensions.has(dim) ? "accent" : "warn"}>
+              {dim}:{" "}
+              {presentDimensions.has(dim) ? "tersedia" : "data tidak cukup (insufficient_data)"}
+            </Tag>
+          ))}
+        </div>
+      </section>
+
       <section>
         <h4>Tahap pertumbuhan</h4>
         {profile.growthStages.length === 0 ? (
@@ -300,13 +314,15 @@ function CycleProjection({
         Tanggal {startLabel}. Tahap diletakkan pada durasi khas kultivar; panen tampil sebagai
         rentang karena durasinya rentang.
       </p>
-      <label htmlFor={`cycle-${id}`}>Tanggal {startLabel}</label>
-      <input
-        id={`cycle-${id}`}
-        type="date"
-        value={date}
-        onChange={(event) => setDate(event.target.value)}
-      />
+      <div className="field">
+        <label htmlFor={`cycle-${id}`}>Tanggal {startLabel}</label>
+        <input
+          id={`cycle-${id}`}
+          type="date"
+          value={date}
+          onChange={(event) => setDate(event.target.value)}
+        />
+      </div>
       {date === "" ? (
         <p className="muted">Pilih tanggal untuk melihat proyeksi.</p>
       ) : (

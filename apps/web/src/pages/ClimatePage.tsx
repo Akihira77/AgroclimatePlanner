@@ -63,9 +63,11 @@ export function ClimatePage() {
           langsung. Keduanya menampilkan kelas data tiap nilai.
         </p>
         <Notice tone="warn">
-          Grid produksi belum divalidasi (<Mono>OPEN-18</Mono>). Pasangan{" "}
-          <Mono>{`${SYNTHETIC_PROVIDER}/${SYNTHETIC_MODEL}`}</Mono> adalah grid sintetis untuk
-          pengujian; provider nyata akan menjawab <Mono>GRID_NOT_FOUND</Mono>.
+          <span>
+            Grid produksi belum divalidasi (<Mono>OPEN-18</Mono>). Pasangan{" "}
+            <Mono>{`${SYNTHETIC_PROVIDER}/${SYNTHETIC_MODEL}`}</Mono> adalah grid sintetis untuk
+            pengujian; provider nyata akan menjawab <Mono>GRID_NOT_FOUND</Mono>.
+          </span>
         </Notice>
       </div>
 
@@ -187,6 +189,8 @@ function MonthlyTable({ outlook }: { readonly outlook: ClimateOutlook }) {
         </span>
       </div>
 
+      <MonthlyRainfallChart outlook={outlook} />
+
       <div className="month-list">
         {outlook.months.map((month) => (
           <div className="month-row" key={month.month}>
@@ -233,6 +237,91 @@ function MonthlyTable({ outlook }: { readonly outlook: ClimateOutlook }) {
   );
 }
 
+function MonthlyRainfallChart({ outlook }: { readonly outlook: ClimateOutlook }) {
+  const values = outlook.months.map((m) => m.valueMm).filter((v): v is number => v !== null);
+  const maxVal = Math.max(10, ...values);
+  const width = 640;
+  const height = 180;
+  const padBottom = 28;
+  const padTop = 16;
+  const plotHeight = height - padTop - padBottom;
+  const slotWidth = width / outlook.months.length;
+
+  return (
+    <div className="chart-card">
+      <div className="chart-legend" aria-label="Legenda grafik bulanan">
+        <span className="legend-item">
+          <span className="legend-swatch" data-kind="forecast" /> Prakiraan musiman
+        </span>
+        <span className="legend-item">
+          <span className="legend-swatch" data-kind="climatology" /> Normal iklim (historis)
+        </span>
+        <span className="legend-item">
+          <span className="legend-swatch" data-kind="missing" /> Data kosong (bukan nol)
+        </span>
+      </div>
+      <svg
+        className="chart-svg"
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label="Grafik curah hujan bulanan 12 bulan"
+      >
+        {outlook.months.map((m, idx) => {
+          const x = idx * slotWidth + 8;
+          const barWidth = Math.max(12, slotWidth - 16);
+          const label = m.month.slice(5, 7);
+          if (m.valueMm === null) {
+            return (
+              <g key={m.month}>
+                <rect
+                  x={x}
+                  y={padTop}
+                  width={barWidth}
+                  height={plotHeight}
+                  fill="var(--surface-muted)"
+                  stroke="var(--line-strong)"
+                  strokeDasharray="3 3"
+                  rx={2}
+                >
+                  <title>{`${monthLabel(m.month)}: data kosong`}</title>
+                </rect>
+                <text
+                  x={x + barWidth / 2}
+                  y={height - 8}
+                  textAnchor="middle"
+                  fontSize="11"
+                  fill="var(--ink-faint)"
+                >
+                  {label}
+                </text>
+              </g>
+            );
+          }
+          const barH = Math.max(2, (m.valueMm / maxVal) * plotHeight);
+          const y = padTop + plotHeight - barH;
+          const fill = m.dataClass === "climatology" ? "var(--warn)" : "var(--accent)";
+          return (
+            <g key={m.month}>
+              <rect x={x} y={y} width={barWidth} height={barH} fill={fill} rx={2}>
+                <title>{`${monthLabel(m.month)}: ${millimetres(m.valueMm)} (${dataClassLabel(m.dataClass ?? "")})`}</title>
+              </rect>
+              <text
+                x={x + barWidth / 2}
+                y={height - 8}
+                textAnchor="middle"
+                fontSize="11"
+                fill="var(--ink-muted)"
+              >
+                {label}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
 function DailyView({ request }: { readonly request: ReadRequest }) {
   const state = useAsync(`forecast:${request.fieldId}:${request.provider}:${request.model}`, () =>
     api.forecast(request.fieldId, request.provider, request.model),
@@ -266,6 +355,8 @@ function DailySegments({ forecast }: { readonly forecast: ClimateDailyOutlook })
                 {stale > 0 ? ` · ${stale} basi` : ""}
               </span>
             </div>
+
+            <DailyRainfallChart segment={segment} />
 
             <div className="day-grid">
               {segment.days.map((day) => (
@@ -309,5 +400,61 @@ function DailySegments({ forecast }: { readonly forecast: ClimateDailyOutlook })
         bisa memuat lebih dari satu run. Hari tanpa baris bukan nol.
       </p>
     </section>
+  );
+}
+
+function DailyRainfallChart({
+  segment,
+}: {
+  readonly segment: ClimateDailyOutlook["segments"][number];
+}) {
+  const values = segment.days.map((d) => d.valueMm).filter((v): v is number => v !== null);
+  const maxVal = Math.max(5, ...values);
+  const width = 640;
+  const height = 110;
+  const padBottom = 18;
+  const padTop = 8;
+  const plotHeight = height - padTop - padBottom;
+  const slotWidth = width / Math.max(1, segment.days.length);
+  const fill = segment.dataClass === "climatology" ? "var(--warn)" : "var(--accent)";
+
+  return (
+    <div className="chart-card">
+      <svg
+        className="chart-svg"
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label={`Grafik curah hujan ${segment.band === "daily" ? "harian" : "subseasonal"}`}
+      >
+        {segment.days.map((d, idx) => {
+          const x = idx * slotWidth + 2;
+          const barWidth = Math.max(3, slotWidth - 4);
+          if (d.valueMm === null) {
+            return (
+              <rect
+                key={d.date}
+                x={x}
+                y={padTop}
+                width={barWidth}
+                height={plotHeight}
+                fill="var(--surface-muted)"
+                stroke="var(--line-strong)"
+                strokeDasharray="2 2"
+                rx={1}
+              >
+                <title>{`${dayLabel(d.date)}: data kosong`}</title>
+              </rect>
+            );
+          }
+          const barH = Math.max(2, (d.valueMm / maxVal) * plotHeight);
+          const y = padTop + plotHeight - barH;
+          return (
+            <rect key={d.date} x={x} y={y} width={barWidth} height={barH} fill={fill} rx={1}>
+              <title>{`${dayLabel(d.date)}: ${millimetres(d.valueMm)}`}</title>
+            </rect>
+          );
+        })}
+      </svg>
+    </div>
   );
 }

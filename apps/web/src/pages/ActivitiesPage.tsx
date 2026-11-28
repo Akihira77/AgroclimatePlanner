@@ -1,0 +1,674 @@
+import type {
+  CropDetail,
+  FieldObservationKind,
+  Harvest,
+  HarvestListMeta,
+  Planting,
+  PlantingCycleStart,
+  PlantingStatus,
+} from "@agroclimate/contracts";
+import { useEffect, useState } from "react";
+
+import { api } from "../api.js";
+import { Link } from "../router.js";
+import {
+  Empty,
+  ErrorNotice,
+  Loading,
+  Tag,
+  observationKindLabel,
+  plantingStatusLabel,
+  plantingStatusTone,
+} from "../ui.js";
+import { useAsync } from "../useAsync.js";
+
+function todayJakarta(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta" }).format(new Date());
+}
+
+const DEFAULT_UNITS: Record<Exclude<FieldObservationKind, "note">, string> = {
+  rainfall: "mm",
+  soil_moisture: "%",
+  temperature: "°C",
+};
+
+/**
+ * Phase 7.7: planting records, multi-harvest tracking, and local field observations.
+ */
+export function ActivitiesPage() {
+  const state = useAsync("activities-root", async () => {
+    const [fields, catalog, plantings] = await Promise.all([
+      api.listFields(),
+      api.listCrops(),
+      api.listPlantings(),
+    ]);
+    return { fields, crops: catalog.crops, plantings };
+  });
+
+  const [selectedFieldId, setSelectedFieldId] = useState("");
+  const [selectedCropSlug, setSelectedCropSlug] = useState("");
+  const [cropDetail, setCropDetail] = useState<CropDetail | null>(null);
+  const [selectedCultivarId, setSelectedCultivarId] = useState("");
+  const [plantedAt, setPlantedAt] = useState(todayJakarta);
+  const [cycleStartUsed, setCycleStartUsed] = useState<PlantingCycleStart>("transplant");
+  const [areaPlantedHa, setAreaPlantedHa] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<unknown>(null);
+
+  const [activeHarvestPlanting, setActiveHarvestPlanting] = useState<Planting | null>(null);
+  const [harvestState, setHarvestState] = useState<{
+    items: Harvest[];
+    meta: HarvestListMeta;
+  } | null>(null);
+  const [harvestedAt, setHarvestedAt] = useState(todayJakarta);
+  const [yieldKg, setYieldKg] = useState("");
+  const [harvestNotes, setHarvestNotes] = useState("");
+
+  const [observations, setObservations] = useState<Awaited<
+    ReturnType<typeof api.listFieldObservations>
+  > | null>(null);
+  const [obsKind, setObsKind] = useState<FieldObservationKind>("rainfall");
+  const [obsValue, setObsValue] = useState("");
+  const [obsUnit, setObsUnit] = useState("mm");
+  const [obsMethod, setObsMethod] = useState("");
+
+  const fields = state.data?.fields ?? [];
+  const crops = state.data?.crops ?? [];
+  const plantings = state.data?.plantings ?? [];
+
+  const activeField = fields.find((f) => f.id === selectedFieldId) ?? fields[0];
+  const activeCrop = crops.find((c) => c.slug === selectedCropSlug) ?? crops[0];
+
+  useEffect(() => {
+    if (activeField !== undefined && areaPlantedHa === "") {
+      setAreaPlantedHa(activeField.areaHa.toFixed(2));
+    }
+  }, [activeField, areaPlantedHa]);
+
+  useEffect(() => {
+    if (activeCrop === undefined) return;
+    let alive = true;
+    api.cropDetail(activeCrop.slug).then(
+      (detail) => {
+        if (!alive) return;
+        setCropDetail(detail);
+        const firstCultivar = detail.cultivars[0];
+        if (firstCultivar !== undefined) {
+          setSelectedCultivarId(firstCultivar.id);
+          setCycleStartUsed(firstCultivar.cycleStart);
+        }
+      },
+      () => {
+        if (alive) setCropDetail(null);
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [activeCrop]);
+
+  useEffect(() => {
+    if (activeField === undefined) {
+      setObservations(null);
+      return;
+    }
+    let alive = true;
+    api.listFieldObservations(activeField.id).then(
+      (rows) => {
+        if (alive) setObservations(rows);
+      },
+      () => {
+        if (alive) setObservations([]);
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [activeField]);
+
+  const loadHarvests = async (planting: Planting) => {
+    setActiveHarvestPlanting(planting);
+    setActionError(null);
+    try {
+      const result = await api.listHarvests(planting.id);
+      setHarvestState({ items: result.data, meta: result.meta });
+    } catch (failure) {
+      setActionError(failure);
+    }
+  };
+
+  if (state.data === null) {
+    if (state.loading) return <Loading />;
+    return state.error === null ? null : <ErrorNotice error={state.error} />;
+  }
+
+  if (fields.length === 0) {
+    return (
+      <Empty>
+        Belum ada lahan. <Link to="/lahan">Buat kebun dan lahan</Link> lebih dulu untuk mencatat
+        penanaman dan observasi lapangan.
+      </Empty>
+    );
+  }
+
+  const cultivars = cropDetail?.cultivars ?? [];
+  const selectedCultivar = cultivars.find((c) => c.id === selectedCultivarId) ?? cultivars[0];
+
+  const submitPlanting = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (activeField === undefined || selectedCultivar === undefined) return;
+    const area = Number(areaPlantedHa);
+    if (!Number.isFinite(area) || area <= 0) {
+      setActionError(new Error("Luas tanam harus lebih besar dari 0 ha."));
+      return;
+    }
+    setBusy(true);
+    setActionError(null);
+    try {
+      await api.createPlanting({
+        fieldId: activeField.id,
+        cultivarId: selectedCultivar.id,
+        plantedAt,
+        cycleStartUsed,
+        areaPlantedHa: area,
+      });
+      state.reload();
+    } catch (failure) {
+      setActionError(failure);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const transitionStatus = async (plantingId: string, nextStatus: PlantingStatus) => {
+    setBusy(true);
+    setActionError(null);
+    try {
+      await api.updatePlantingStatus(plantingId, nextStatus);
+      state.reload();
+      if (activeHarvestPlanting?.id === plantingId) {
+        setActiveHarvestPlanting((prev) =>
+          prev === null ? null : { ...prev, status: nextStatus },
+        );
+      }
+    } catch (failure) {
+      setActionError(failure);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitHarvest = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (activeHarvestPlanting === null) return;
+    const kg = Number(yieldKg);
+    if (!Number.isFinite(kg) || kg < 0) {
+      setActionError(new Error("Hasil panen (kg) harus berupa angka >= 0."));
+      return;
+    }
+    setBusy(true);
+    setActionError(null);
+    try {
+      await api.createHarvest(activeHarvestPlanting.id, {
+        harvestedAt,
+        yieldKg: kg,
+        notes: harvestNotes.trim() === "" ? null : harvestNotes.trim(),
+      });
+      setYieldKg("");
+      setHarvestNotes("");
+      const updated = await api.listHarvests(activeHarvestPlanting.id);
+      setHarvestState({ items: updated.data, meta: updated.meta });
+      state.reload();
+    } catch (failure) {
+      setActionError(failure);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const submitObservation = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (activeField === undefined) return;
+    setBusy(true);
+    setActionError(null);
+    try {
+      if (obsKind === "note") {
+        await api.createFieldObservation(activeField.id, {
+          kind: "note",
+          observedAt: new Date().toISOString(),
+          method: obsMethod.trim() === "" ? "Catatan lapangan" : obsMethod.trim(),
+        });
+      } else {
+        const numeric = Number(obsValue);
+        if (!Number.isFinite(numeric)) {
+          throw new Error("Nilai pengukuran harus berupa angka yang sah.");
+        }
+        await api.createFieldObservation(activeField.id, {
+          kind: obsKind,
+          value: numeric,
+          unit: obsUnit.trim() === "" ? DEFAULT_UNITS[obsKind] : obsUnit.trim(),
+          observedAt: new Date().toISOString(),
+          method: obsMethod.trim() === "" ? null : obsMethod.trim(),
+        });
+      }
+      setObsValue("");
+      setObsMethod("");
+      const refreshed = await api.listFieldObservations(activeField.id);
+      setObservations(refreshed);
+    } catch (failure) {
+      setActionError(failure);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="stack">
+      <p className="lede">
+        Catat penanaman aktual, hasil panen per siklus, dan observasi cuaca/tanah langsung dari
+        lapangan.
+      </p>
+
+      {actionError !== null ? <ErrorNotice error={actionError} /> : null}
+
+      <section className="section">
+        <h2>Catat penanaman baru</h2>
+        <form className="panel" onSubmit={submitPlanting}>
+          <div className="panel-body form-grid">
+            <div className="field">
+              <label htmlFor="act-field">Lahan</label>
+              <select
+                id="act-field"
+                value={activeField?.id ?? ""}
+                onChange={(e) => {
+                  setSelectedFieldId(e.target.value);
+                  const found = fields.find((f) => f.id === e.target.value);
+                  if (found !== undefined) setAreaPlantedHa(found.areaHa.toFixed(2));
+                }}
+              >
+                {fields.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name} · {f.areaHa.toFixed(2)} ha
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="field">
+              <label htmlFor="act-crop">Komoditas</label>
+              <select
+                id="act-crop"
+                value={activeCrop?.slug ?? ""}
+                onChange={(e) => setSelectedCropSlug(e.target.value)}
+              >
+                {crops.map((c) => (
+                  <option key={c.slug} value={c.slug}>
+                    {c.nameId}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="field">
+              <label htmlFor="act-cultivar">Kultivar</label>
+              <select
+                id="act-cultivar"
+                value={selectedCultivar?.id ?? ""}
+                onChange={(e) => {
+                  setSelectedCultivarId(e.target.value);
+                  const found = cultivars.find((c) => c.id === e.target.value);
+                  if (found !== undefined) setCycleStartUsed(found.cycleStart);
+                }}
+              >
+                {cultivars.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} ({c.durationDaysTypical} hr)
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="field">
+              <label htmlFor="act-planted-at">Tanggal tanam</label>
+              <input
+                id="act-planted-at"
+                type="date"
+                required
+                value={plantedAt}
+                onChange={(e) => setPlantedAt(e.target.value)}
+              />
+            </div>
+
+            <div className="field">
+              <label htmlFor="act-cycle-start">Metode mulai</label>
+              <select
+                id="act-cycle-start"
+                value={cycleStartUsed}
+                onChange={(e) =>
+                  setCycleStartUsed(e.target.value === "sowing" ? "sowing" : "transplant")
+                }
+              >
+                <option value="transplant">Pindah tanam</option>
+                <option value="sowing">Tanam benih</option>
+              </select>
+            </div>
+
+            <div className="field">
+              <label htmlFor="act-area">Luas tanam (ha)</label>
+              <input
+                id="act-area"
+                type="number"
+                step="any"
+                min="0.01"
+                required
+                value={areaPlantedHa}
+                onChange={(e) => setAreaPlantedHa(e.target.value)}
+              />
+            </div>
+
+            <div className="form-actions">
+              <button
+                className="btn btn-primary"
+                type="submit"
+                disabled={busy || selectedCultivar === undefined}
+              >
+                Simpan penanaman
+              </button>
+            </div>
+          </div>
+        </form>
+      </section>
+
+      <section className="section">
+        <div className="section-head">
+          <h2>Daftar penanaman</h2>
+          <Tag>{plantings.length} catatan</Tag>
+        </div>
+
+        {plantings.length === 0 ? (
+          <Empty>Belum ada catatan penanaman.</Empty>
+        ) : (
+          <div className="panel table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Komoditas &amp; Kultivar</th>
+                  <th>Lahan</th>
+                  <th>Tanggal tanam</th>
+                  <th>Perkiraan panen</th>
+                  <th className="numeric">Total panen</th>
+                  <th>Status</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {plantings.map((p) => {
+                  const fieldName = fields.find((f) => f.id === p.fieldId)?.name ?? p.fieldId;
+                  return (
+                    <tr key={p.id}>
+                      <td>
+                        <strong>{p.cropNameId}</strong>
+                        <div className="muted">{p.cultivarName}</div>
+                      </td>
+                      <td>{fieldName}</td>
+                      <td className="numeric">{p.plantedAt}</td>
+                      <td className="numeric muted">
+                        {p.expectedHarvestEarliest} – {p.expectedHarvestLatest}
+                      </td>
+                      <td className="numeric">{p.totalYieldKg.toLocaleString("id-ID")} kg</td>
+                      <td>
+                        <Tag tone={plantingStatusTone(p.status)}>
+                          {plantingStatusLabel(p.status)}
+                        </Tag>
+                      </td>
+                      <td>
+                        <div className="btn-row">
+                          <button
+                            type="button"
+                            className="btn btn-quiet"
+                            disabled={busy}
+                            onClick={() => void loadHarvests(p)}
+                          >
+                            Panen
+                          </button>
+                          {p.status === "active" ? (
+                            <>
+                              <button
+                                type="button"
+                                className="btn btn-quiet"
+                                disabled={busy}
+                                onClick={() => void transitionStatus(p.id, "harvested")}
+                              >
+                                Tandai dipanen
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-danger"
+                                disabled={busy}
+                                onClick={() => void transitionStatus(p.id, "failed")}
+                              >
+                                Gagal
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-danger"
+                                disabled={busy}
+                                onClick={() => void transitionStatus(p.id, "abandoned")}
+                              >
+                                Tinggalkan
+                              </button>
+                            </>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {activeHarvestPlanting !== null ? (
+        <section className="section">
+          <div className="panel">
+            <div className="panel-head">
+              <h3>
+                Catatan panen · {activeHarvestPlanting.cropNameId} (
+                {activeHarvestPlanting.cultivarName})
+              </h3>
+              <Tag tone="accent">
+                Total: {(harvestState?.meta.totalYieldKg ?? 0).toLocaleString("id-ID")} kg
+              </Tag>
+            </div>
+            <div className="panel-body stack">
+              <form className="form-grid" onSubmit={submitHarvest}>
+                <div className="field">
+                  <label htmlFor="harv-date">Tanggal panen</label>
+                  <input
+                    id="harv-date"
+                    type="date"
+                    required
+                    value={harvestedAt}
+                    onChange={(e) => setHarvestedAt(e.target.value)}
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="harv-kg">Hasil (kg)</label>
+                  <input
+                    id="harv-kg"
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    required
+                    value={yieldKg}
+                    onChange={(e) => setYieldKg(e.target.value)}
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="harv-notes">Catatan (opsional)</label>
+                  <input
+                    id="harv-notes"
+                    maxLength={200}
+                    value={harvestNotes}
+                    onChange={(e) => setHarvestNotes(e.target.value)}
+                  />
+                </div>
+                <div className="form-actions">
+                  <button className="btn btn-primary" type="submit" disabled={busy}>
+                    Catat panen
+                  </button>
+                  <button
+                    className="btn btn-quiet"
+                    type="button"
+                    onClick={() => {
+                      setActiveHarvestPlanting(null);
+                      setHarvestState(null);
+                    }}
+                  >
+                    Tutup
+                  </button>
+                </div>
+              </form>
+
+              {harvestState === null ? (
+                <Loading label="Memuat daftar panen…" />
+              ) : harvestState.items.length === 0 ? (
+                <p className="muted">Belum ada catatan panen untuk penanaman ini.</p>
+              ) : (
+                <div className="table-wrap">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Tanggal</th>
+                        <th className="numeric">Hasil (kg)</th>
+                        <th>Catatan</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {harvestState.items.map((h) => (
+                        <tr key={h.id}>
+                          <td className="numeric">{h.harvestedAt}</td>
+                          <td className="numeric">{h.yieldKg.toLocaleString("id-ID")}</td>
+                          <td className="muted">{h.notes ?? "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      <section className="section">
+        <div className="section-head">
+          <h2>Observasi lapangan · {activeField?.name}</h2>
+          <Tag>{observations?.length ?? 0} observasi</Tag>
+        </div>
+
+        <form className="panel" onSubmit={submitObservation}>
+          <div className="panel-body form-grid">
+            <div className="field">
+              <label htmlFor="obs-kind">Jenis observasi</label>
+              <select
+                id="obs-kind"
+                value={obsKind}
+                onChange={(e) => {
+                  const next = e.target.value as FieldObservationKind;
+                  setObsKind(next);
+                  if (next !== "note") setObsUnit(DEFAULT_UNITS[next]);
+                }}
+              >
+                <option value="rainfall">Curah hujan</option>
+                <option value="soil_moisture">Kelembapan tanah</option>
+                <option value="temperature">Suhu</option>
+                <option value="note">Catatan lapangan</option>
+              </select>
+            </div>
+
+            {obsKind !== "note" ? (
+              <>
+                <div className="field">
+                  <label htmlFor="obs-val">Nilai</label>
+                  <input
+                    id="obs-val"
+                    type="number"
+                    step="0.1"
+                    required
+                    value={obsValue}
+                    onChange={(e) => setObsValue(e.target.value)}
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="obs-unit">Satuan</label>
+                  <input
+                    id="obs-unit"
+                    required
+                    maxLength={32}
+                    value={obsUnit}
+                    onChange={(e) => setObsUnit(e.target.value)}
+                  />
+                </div>
+              </>
+            ) : null}
+
+            <div className="field">
+              <label htmlFor="obs-method">
+                {obsKind === "note" ? "Isi catatan" : "Metode / alat (opsional)"}
+              </label>
+              <input
+                id="obs-method"
+                required={obsKind === "note"}
+                maxLength={200}
+                value={obsMethod}
+                onChange={(e) => setObsMethod(e.target.value)}
+              />
+            </div>
+
+            <div className="form-actions">
+              <button className="btn btn-primary" type="submit" disabled={busy}>
+                Simpan observasi
+              </button>
+            </div>
+          </div>
+        </form>
+
+        {observations === null ? (
+          <Loading label="Memuat observasi…" />
+        ) : observations.length === 0 ? (
+          <Empty>Belum ada observasi untuk lahan ini.</Empty>
+        ) : (
+          <div className="panel table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Waktu</th>
+                  <th>Jenis</th>
+                  <th className="numeric">Nilai</th>
+                  <th>Metode / catatan</th>
+                </tr>
+              </thead>
+              <tbody>
+                {observations.map((obs) => (
+                  <tr key={obs.id}>
+                    <td className="numeric muted">
+                      {obs.observedAt.slice(0, 16).replace("T", " ")}
+                    </td>
+                    <td>{observationKindLabel(obs.kind)}</td>
+                    <td className="numeric">
+                      {obs.value === null ? "—" : `${obs.value} ${obs.unit ?? ""}`}
+                    </td>
+                    <td className="muted">{obs.method ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}

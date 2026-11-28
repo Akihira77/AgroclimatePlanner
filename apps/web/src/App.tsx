@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 import { api, onSessionLost } from "./api.js";
 import { Link, navigate, useRoute } from "./router.js";
+import { ActivitiesPage } from "./pages/ActivitiesPage.js";
 import { AuthPage } from "./pages/AuthPage.js";
 import { ClimatePage } from "./pages/ClimatePage.js";
 import { CropCatalogPage } from "./pages/CropCatalogPage.js";
@@ -143,6 +144,9 @@ function Shell({
           <Link to="/rencana" className={navClass(current === "rencana")}>
             Rencana
           </Link>
+          <Link to="/aktivitas" className={navClass(current === "aktivitas")}>
+            Aktivitas
+          </Link>
           <Link to="/iklim" className={navClass(current === "iklim")}>
             Iklim
           </Link>
@@ -168,6 +172,8 @@ function Shell({
           {logoutError !== null ? <ErrorNotice error={logoutError} /> : null}
           {current === "rencana" ? (
             <PlanPage />
+          ) : current === "aktivitas" ? (
+            <ActivitiesPage />
           ) : current === "lahan" ? (
             <FarmsPage />
           ) : current === "katalog" ? (
@@ -196,7 +202,9 @@ function sectionTitle(section: string): string {
     case "iklim":
       return "Horizon iklim";
     case "rencana":
-      return "Rencana siklus tanam";
+      return "Rencana & evaluasi tanam";
+    case "aktivitas":
+      return "Catatan aktivitas lapangan";
     default:
       return "Ringkasan";
   }
@@ -207,5 +215,6 @@ function headline(section: string): string {
   if (section === "lahan") return "Lahan";
   if (section === "iklim") return "Iklim";
   if (section === "rencana") return "Rencana";
+  if (section === "aktivitas") return "Aktivitas";
   return "Ringkasan";
 }

@@ -9,15 +9,21 @@ import { useAsync } from "../useAsync.js";
  */
 export function DashboardPage() {
   const state = useAsync("dashboard", async () => {
-    const [farms, fields] = await Promise.all([api.listFarms(), api.listFields()]);
-    return { farms, fields };
+    const [farms, fields, plantings, windows] = await Promise.all([
+      api.listFarms(),
+      api.listFields(),
+      api.listPlantings(),
+      api.listPlantingWindows(),
+    ]);
+    return { farms, fields, plantings, windows };
   });
 
   if (state.loading) return <Loading />;
   if (state.error !== null) return <ErrorNotice error={state.error} />;
   if (state.data === null) return null;
 
-  const { farms, fields } = state.data;
+  const { farms, fields, plantings, windows } = state.data;
+  const activePlantings = plantings.filter((p) => p.status === "active").length;
   const newest = [...farms].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 4);
 
   return (
@@ -32,12 +38,12 @@ export function DashboardPage() {
           <span className="label">Lahan dengan geometri</span>
         </div>
         <div className="stat">
-          <span className="value">0–45</span>
-          <span className="label">Hari horizon harian</span>
+          <span className="value">{activePlantings}</span>
+          <span className="label">Penanaman aktif</span>
         </div>
         <div className="stat">
-          <span className="value">1–12</span>
-          <span className="label">Bulan horizon bulanan</span>
+          <span className="value">{windows.length}</span>
+          <span className="label">Jendela tanam aktif</span>
         </div>
       </div>
 
@@ -83,6 +89,30 @@ export function DashboardPage() {
       <section className="section">
         <h2>Langkah berikutnya</h2>
         <div className="card-stack">
+          <div className="card spread">
+            <div>
+              <h3>Catat penanaman &amp; observasi</h3>
+              <p className="muted">
+                Kelola siklus tanam aktual, hasil panen, dan pengamatan curah hujan atau tanah.
+              </p>
+            </div>
+            <Link className="btn btn-quiet" to="/aktivitas">
+              Buka aktivitas
+            </Link>
+          </div>
+
+          <div className="card spread">
+            <div>
+              <h3>Evaluasi &amp; briefing AI</h3>
+              <p className="muted">
+                Jalankan evaluasi kesesuaian lahan, lihat kalender tanam, dan buat briefing AI.
+              </p>
+            </div>
+            <Link className="btn btn-quiet" to="/rencana">
+              Buka rencana
+            </Link>
+          </div>
+
           <div className="card spread">
             <div>
               <h3>Baca horizon iklim</h3>

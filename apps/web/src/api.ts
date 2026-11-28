@@ -1,15 +1,30 @@
 import type {
+  AiBriefing,
+  BriefingGenerateRequest,
   ClimateDailyOutlook,
   ClimateOutlook,
   CropCycle,
   CropDetail,
   CropList,
   CropProfileVersion,
-  Field,
-  Farm,
-  PageMeta,
-  RegisteredUser,
   CsrfTokenResponse,
+  Farm,
+  Field,
+  FieldEvaluateRequest,
+  FieldObservation,
+  FieldObservationCreateRequest,
+  Harvest,
+  HarvestCreateRequest,
+  HarvestListMeta,
+  PageMeta,
+  Planting,
+  PlantingCreateRequest,
+  PlantingListQuery,
+  PlantingStatus,
+  PlantingWindow,
+  PlantingWindowListQuery,
+  RegisteredUser,
+  SuitabilityRunWithWindows,
 } from "@agroclimate/contracts";
 
 /**
@@ -317,6 +332,122 @@ export const api = {
     );
     return body.data;
   },
+
+  async listPlantings(filters: PlantingListQuery = {}): Promise<Planting[]> {
+    const body = await request<{ data: Planting[] }>(
+      `/plantings${query({ fieldId: filters.fieldId, status: filters.status })}`,
+    );
+    return body.data;
+  },
+
+  async createPlanting(payload: PlantingCreateRequest): Promise<Planting> {
+    const body = await request<{ data: Planting }>("/plantings", {
+      method: "POST",
+      body: payload,
+    });
+    return body.data;
+  },
+
+  async updatePlantingStatus(plantingId: string, status: PlantingStatus): Promise<Planting> {
+    const body = await request<{ data: Planting }>(`/plantings/${encodeURIComponent(plantingId)}`, {
+      method: "PATCH",
+      body: { status },
+    });
+    return body.data;
+  },
+
+  async listHarvests(plantingId: string): Promise<{ data: Harvest[]; meta: HarvestListMeta }> {
+    return request<{ data: Harvest[]; meta: HarvestListMeta }>(
+      `/plantings/${encodeURIComponent(plantingId)}/harvests`,
+    );
+  },
+
+  async createHarvest(plantingId: string, payload: HarvestCreateRequest): Promise<Harvest> {
+    const body = await request<{ data: Harvest }>(
+      `/plantings/${encodeURIComponent(plantingId)}/harvests`,
+      {
+        method: "POST",
+        body: payload,
+      },
+    );
+    return body.data;
+  },
+
+  async listFieldObservations(fieldId: string): Promise<FieldObservation[]> {
+    const body = await request<{ data: FieldObservation[] }>(
+      `/fields/${encodeURIComponent(fieldId)}/observations`,
+    );
+    return body.data;
+  },
+
+  async createFieldObservation(
+    fieldId: string,
+    payload: FieldObservationCreateRequest,
+  ): Promise<FieldObservation> {
+    const body = await request<{ data: FieldObservation }>(
+      `/fields/${encodeURIComponent(fieldId)}/observations`,
+      {
+        method: "POST",
+        body: payload,
+      },
+    );
+    return body.data;
+  },
+
+  async evaluateField(
+    fieldId: string,
+    payload: FieldEvaluateRequest,
+  ): Promise<SuitabilityRunWithWindows> {
+    const body = await request<{ data: SuitabilityRunWithWindows }>(
+      `/fields/${encodeURIComponent(fieldId)}/evaluate`,
+      {
+        method: "POST",
+        body: payload,
+      },
+    );
+    return body.data;
+  },
+
+  async getLatestSuitability(fieldId: string): Promise<SuitabilityRunWithWindows> {
+    const body = await request<{ data: SuitabilityRunWithWindows }>(
+      `/fields/${encodeURIComponent(fieldId)}/suitability`,
+    );
+    return body.data;
+  },
+
+  async listPlantingWindows(filters: PlantingWindowListQuery = {}): Promise<PlantingWindow[]> {
+    const body = await request<{ data: PlantingWindow[] }>(
+      `/planting-windows${query({
+        fieldId: filters.fieldId,
+        cropId: filters.cropId,
+        suitability: filters.suitability,
+        from: filters.from,
+        to: filters.to,
+      })}`,
+    );
+    return body.data;
+  },
+
+  async generateBriefing(
+    fieldId: string,
+    payload: Partial<BriefingGenerateRequest> = {},
+  ): Promise<AiBriefing> {
+    const body = await request<{ data: AiBriefing }>(
+      `/fields/${encodeURIComponent(fieldId)}/briefing`,
+      {
+        method: "POST",
+        body: payload,
+      },
+    );
+    return body.data;
+  },
+
+  async getLatestBriefing(fieldId: string): Promise<AiBriefing> {
+    const body = await request<{ data: AiBriefing }>(
+      `/fields/${encodeURIComponent(fieldId)}/briefing`,
+    );
+    return body.data;
+  },
 };
 
 /** Human wording for the codes the UI can actually meet. */
@@ -335,6 +466,12 @@ export function describeError(error: unknown): string {
       return "Komoditas tidak ada di katalog.";
     case "PROFILE_NOT_FOUND":
       return "Versi profil tidak ditemukan.";
+    case "NOT_FOUND":
+      return "Data yang diminta tidak ditemukan.";
+    case "INVALID_TRANSITION":
+      return "Perubahan status penanaman tidak diizinkan.";
+    case "INVALID_DATE":
+      return "Tanggal tidak valid (mis. panen sebelum tanggal tanam atau pengamatan di masa depan).";
     case "UNAUTHENTICATED":
       return "Sesi berakhir. Masuk kembali.";
     case "CONFLICT":

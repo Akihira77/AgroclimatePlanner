@@ -145,3 +145,90 @@ export function missingReasonLabel(reason: string): string {
       return reason;
   }
 }
+
+export function suitabilityLabel(verdict: string): string {
+  switch (verdict) {
+    case "suitable":
+      return "Sesuai";
+    case "conditional":
+      return "Bersyarat";
+    case "unsuitable":
+      return "Tidak sesuai";
+    case "insufficient_data":
+      return "Data tidak cukup";
+    default:
+      return verdict;
+  }
+}
+
+export function suitabilityTone(verdict: string): Tone {
+  switch (verdict) {
+    case "suitable":
+      return "accent";
+    case "conditional":
+      return "warn";
+    case "unsuitable":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
+export function plantingStatusLabel(status: string): string {
+  switch (status) {
+    case "active":
+      return "Aktif";
+    case "harvested":
+      return "Dipanen";
+    case "failed":
+      return "Gagal";
+    case "abandoned":
+      return "Ditinggalkan";
+    default:
+      return status;
+  }
+}
+
+export function plantingStatusTone(status: string): Tone {
+  switch (status) {
+    case "active":
+      return "accent";
+    case "harvested":
+      return "neutral";
+    case "failed":
+    case "abandoned":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
+export function irrigationLabel(value: string): string {
+  switch (value) {
+    case "irrigated":
+      return "Beririgasi penuh";
+    case "partial_irrigation":
+      return "Irigasi parsial";
+    case "rainfed":
+      return "Tadah hujan";
+    case "unknown":
+      return "Belum diketahui";
+    default:
+      return value;
+  }
+}
+
+export function observationKindLabel(kind: string): string {
+  switch (kind) {
+    case "rainfall":
+      return "Curah hujan";
+    case "soil_moisture":
+      return "Kelembapan tanah";
+    case "temperature":
+      return "Suhu";
+    case "note":
+      return "Catatan lapangan";
+    default:
+      return kind;
+  }
+}

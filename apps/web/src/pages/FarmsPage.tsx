@@ -2,6 +2,7 @@ import type { PolygonGeometry } from "@agroclimate/contracts";
 import { useState } from "react";
 
 import { api } from "../api.js";
+import { Link } from "../router.js";
 import { ErrorNotice, Empty, Loading, Mono, Tag } from "../ui.js";
 import { useAsync } from "../useAsync.js";
 
@@ -24,6 +25,7 @@ export function FarmsPage() {
   });
 
   const [selectedFarmId, setSelectedFarmId] = useState<string | null>(null);
+  const [detailFieldId, setDetailFieldId] = useState<string | null>(null);
   const [editingFarmId, setEditingFarmId] = useState<string | null>(null);
   const [editingFieldId, setEditingFieldId] = useState<string | null>(null);
   const [farmName, setFarmName] = useState("");
@@ -296,7 +298,7 @@ export function FarmsPage() {
         ) : selectedFields.length === 0 ? (
           <Empty>Belum ada lahan di kebun ini.</Empty>
         ) : (
-          <div className="panel">
+          <div className="panel table-wrap">
             <table className="table">
               <thead>
                 <tr>
@@ -318,6 +320,16 @@ export function FarmsPage() {
                     </td>
                     <td>
                       <div className="btn-row">
+                        <button
+                          type="button"
+                          className="btn btn-quiet"
+                          aria-pressed={detailFieldId === field.id}
+                          onClick={() =>
+                            setDetailFieldId(detailFieldId === field.id ? null : field.id)
+                          }
+                        >
+                          Detail
+                        </button>
                         <button
                           type="button"
                           className="btn btn-quiet"
@@ -346,6 +358,46 @@ export function FarmsPage() {
             </table>
           </div>
         )}
+
+        {(() => {
+          const detailField = selectedFields.find((f) => f.id === detailFieldId);
+          if (detailField === undefined) return null;
+          const ring = detailField.geometry.coordinates[0] ?? [];
+          const lons = ring.map(([lo]) => lo);
+          const lats = ring.map(([, la]) => la);
+          return (
+            <div className="panel">
+              <div className="panel-head">
+                <h3>Detail lahan · {detailField.name}</h3>
+                <Tag tone="accent">{detailField.areaHa.toFixed(2)} ha</Tag>
+              </div>
+              <div className="panel-body stack">
+                <p className="muted">
+                  ID lengkap: <Mono>{detailField.id}</Mono> · Titik sudut:{" "}
+                  {Math.max(0, ring.length - 1)} · Rentang bujur{" "}
+                  {lons.length > 0
+                    ? `${Math.min(...lons).toFixed(4)}..${Math.max(...lons).toFixed(4)}`
+                    : "—"}{" "}
+                  · Rentang lintang{" "}
+                  {lats.length > 0
+                    ? `${Math.min(...lats).toFixed(4)}..${Math.max(...lats).toFixed(4)}`
+                    : "—"}
+                </p>
+                <div className="btn-row">
+                  <Link className="btn btn-quiet" to="/aktivitas">
+                    Catat aktivitas
+                  </Link>
+                  <Link className="btn btn-quiet" to="/rencana">
+                    Evaluasi &amp; rencana
+                  </Link>
+                  <Link className="btn btn-quiet" to="/iklim">
+                    Lihat iklim
+                  </Link>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {selected !== undefined ? (
           <form className="panel" onSubmit={saveField}>
