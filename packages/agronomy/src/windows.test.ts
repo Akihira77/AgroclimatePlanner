@@ -684,4 +684,66 @@ describe("generatePlantingWindows", () => {
       }),
     ).toThrow(SuitabilityInputError);
   });
+
+  it("never produces suitable for a 130-day cycle lacking critical-stage forecast coverage or using single-observation proxy", () => {
+    const cabaiStages: readonly GrowthStage[] = [
+      { id: "st-veg", name: "vegetatif", startDayOffset: 0, endDayOffset: 43, isCritical: false, requirementProfile: null },
+      { id: "st-flw", name: "pembungaan", startDayOffset: 44, endDayOffset: 71, isCritical: true, requirementProfile: null },
+      { id: "st-frt", name: "pembuahan", startDayOffset: 72, endDayOffset: 114, isCritical: false, requirementProfile: null },
+      { id: "st-har", name: "panen", startDayOffset: 115, endDayOffset: 129, isCritical: false, requirementProfile: null },
+    ];
+    const cabaiRules: readonly Constraint[] = [
+      {
+        id: "c-ph",
+        dimension: "soil",
+        comparator: "range",
+        thresholdLower: 6,
+        thresholdUpper: 7,
+        thresholdCount: null,
+        unit: "pH",
+        growthStageId: null,
+        grade: "A",
+        severity: "soft",
+      },
+      {
+        id: "c-temp",
+        dimension: "climate",
+        comparator: "range",
+        thresholdLower: 18,
+        thresholdUpper: 27,
+        thresholdCount: null,
+        unit: "°C",
+        growthStageId: "st-flw",
+        grade: "A",
+        severity: "soft",
+      },
+    ];
+
+    // Case 1: 130-day single weather_forecast segment beyond 16-day horizon + single-observation proxy
+    const windows = generatePlantingWindows({
+      constraints: cabaiRules,
+      stages: cabaiStages,
+      durationDays: 130,
+      candidates: [
+        {
+          startDate: "2026-11-28",
+          observations: new Map([
+            ["c-ph", 6.4],
+            ["c-temp", 21.4],
+          ]),
+          primaryBasis: "daily",
+          evidenceSegments: [makeSegment("2026-11-28", "2027-04-06", { basis: "daily", evidenceClass: "weather_forecast" })],
+          missingRanges: [],
+          singlePointClimateProxy: true,
+        },
+      ],
+    });
+    expect(windows[0]!.assessment.verdict).toBe("conditional");
+    expect(windows[0]!.assessment.reasons.map((r) => r.code)).toEqual(
+      expect.arrayContaining([
+        "critical_stage_beyond_daily_horizon",
+        "single_observation_climate_proxy",
+      ]),
+    );
+  });
 });

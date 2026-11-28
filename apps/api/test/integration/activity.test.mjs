@@ -220,5 +220,12 @@ describe("activity HTTP lifecycle", () => {
       (await call(bob, "GET", `/v1/fields/${fieldId}/observations`)).response.status,
       404,
     );
+
+    // Harvest date before planting date is rejected with 400 VALIDATION_FAILED
+    const earlyHarvest = await call(alice, "POST", `/v1/plantings/${plantingId}/harvests`, {
+      body: { harvestedAt: "2026-10-01", yieldKg: 50 },
+    });
+    assert.equal(earlyHarvest.response.status, 400);
+    assert.equal(earlyHarvest.body.error.code, "VALIDATION_FAILED");
   });
 });

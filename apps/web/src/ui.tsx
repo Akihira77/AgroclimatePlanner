@@ -360,6 +360,18 @@ export function translateEvaluationDetail(detail: string): string {
     return "Evaluasi ini memakai rata-rata iklim historis (bukan prakiraan cuaca jangka pendek), sehingga status maksimal adalah Sesuai bersyarat.";
   }
 
+  if (/^the critical stage is not fully covered by weather evidence/i.test(text)) {
+    return "Fase kritis tanaman belum tercakup penuh oleh data prakiraan cuaca, sehingga status maksimal adalah Sesuai bersyarat.";
+  }
+
+  if (/^a short-range daily weather forecast cannot cover a critical stage beyond/i.test(text)) {
+    return "Prakiraan cuaca harian hanya menjangkau 16 hari ke depan dan belum mencakup fase kritis yang jatuh lebih jauh, sehingga status maksimal adalah Sesuai bersyarat.";
+  }
+
+  if (/^climate criteria rely on a single point-in-time field observation/i.test(text)) {
+    return "Penilaian suhu masih bersandar pada catatan pengamatan tunggal di lapangan (bukan prakiraan cuaca selama fase kritis), sehingga status maksimal adalah Sesuai bersyarat.";
+  }
+
   const hardViolated =
     /^a hard (climate|water|soil|timing|risk) constraint was observed and violated$/i.exec(text);
   if (hardViolated?.[1] !== undefined) {

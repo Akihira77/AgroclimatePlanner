@@ -34,6 +34,9 @@ export type VerdictReasonCode =
   | "hard_gate_failed"
   | "hard_gate_unknown"
   | "critical_stage_climatology"
+  | "critical_stage_uncovered"
+  | "critical_stage_beyond_daily_horizon"
+  | "single_observation_climate_proxy"
   | "soft_failure"
   | "dimension_unknown";
 
@@ -55,6 +58,12 @@ export interface VerdictInput {
    * rulebook, not an inference from whichever rules happened to be evaluated.
    */
   readonly hardGateDimensions: readonly ConstraintDimension[];
+  /** True when the critical stage is missing weather coverage or overlaps missingRanges. */
+  readonly criticalStageUncovered?: boolean;
+  /** True when a short-range daily forecast claims to cover a critical stage >16 days out. */
+  readonly criticalStageBeyondDailyHorizon?: boolean;
+  /** True when climate thresholds were evaluated only from a single point-in-time observation. */
+  readonly singlePointClimateProxy?: boolean;
 }
 
 export interface Verdict {
@@ -132,6 +141,31 @@ export function classifyVerdict(input: VerdictInput): Verdict {
     reasons.push({
       code: "critical_stage_climatology",
       detail: "the critical stage rests on climatology, which cannot support a suitable verdict",
+    });
+  }
+
+  if (input.criticalStageUncovered === true) {
+    reasons.push({
+      code: "critical_stage_uncovered",
+      detail:
+        "the critical stage is not fully covered by weather evidence, which cannot support a suitable verdict",
+    });
+  }
+
+  if (input.criticalStageBeyondDailyHorizon === true) {
+    reasons.push({
+      code: "critical_stage_beyond_daily_horizon",
+      detail:
+        "a short-range daily weather forecast cannot cover a critical stage beyond the 16-day forecast horizon",
+    });
+  }
+
+  if (input.singlePointClimateProxy === true) {
+    reasons.push({
+      code: "single_observation_climate_proxy",
+      dimension: "climate",
+      detail:
+        "climate criteria rely on a single point-in-time field observation rather than horizon forecast over the critical stage",
     });
   }
 

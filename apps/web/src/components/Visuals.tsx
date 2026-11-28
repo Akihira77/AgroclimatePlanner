@@ -612,6 +612,8 @@ function sourceLabel(source: unknown): string | null {
       return "Profil tanah lahan";
     case "field_observation":
       return "Pengamatan lapangan";
+    case "climate_outlook":
+      return "Prospek curah hujan bulanan";
     case "request":
       return "Input evaluasi";
     default:
@@ -713,11 +715,33 @@ export function ConstraintCheckList({ items }: { items: readonly Record<string, 
 export function HarvestBarChart({ items }: { items: Harvest[] }) {
   if (items.length === 0) return null;
 
-  const sorted = [...items].sort((a, b) => a.harvestedAt.localeCompare(b.harvestedAt)).slice(-10);
+  const sorted = [...items]
+    .sort((a, b) => {
+      const byDate = a.harvestedAt.localeCompare(b.harvestedAt);
+      if (byDate !== 0) return byDate;
+      const byCreated = a.createdAt.localeCompare(b.createdAt);
+      if (byCreated !== 0) return byCreated;
+      return a.id.localeCompare(b.id);
+    })
+    .slice(-10);
+
+  const dateCounts = new Map<string, number>();
+  for (const item of sorted) {
+    dateCounts.set(item.harvestedAt, (dateCounts.get(item.harvestedAt) ?? 0) + 1);
+  }
+  const dateSeq = new Map<string, number>();
+  const labels = sorted.map((item) => {
+    const base = item.harvestedAt.slice(5, 10);
+    if ((dateCounts.get(item.harvestedAt) ?? 0) <= 1) return base;
+    const next = (dateSeq.get(item.harvestedAt) ?? 0) + 1;
+    dateSeq.set(item.harvestedAt, next);
+    return `${base} (#${next})`;
+  });
+
   const maxYield = Math.max(...sorted.map((i) => i.yieldKg), 1);
   const totalYield = items.reduce((sum, i) => sum + i.yieldKg, 0);
 
-  const width = Math.max(360, sorted.length * 56 + 48);
+  const width = Math.max(360, sorted.length * 64 + 48);
   const height = 165;
   const chartBottom = 132;
   const chartTop = 24;
@@ -729,7 +753,8 @@ export function HarvestBarChart({ items }: { items: Harvest[] }) {
         <div>
           <h3>Grafik Hasil Panen</h3>
           <p className="muted">
-            Total {formatNumber(totalYield, 1)} kg dari {items.length} catatan panen
+            Total {formatNumber(totalYield, 1)} kg dari {items.length} catatan panen (urutan terlama
+            → terbaru)
           </p>
         </div>
       </div>
@@ -749,7 +774,7 @@ export function HarvestBarChart({ items }: { items: Harvest[] }) {
             strokeWidth="1"
           />
           {sorted.map((item, idx) => {
-            const x = 32 + idx * 54;
+            const x = 34 + idx * 62;
             const barH = Math.max(6, (item.yieldKg / maxYield) * plotH);
             const y = chartBottom - barH;
             return (
@@ -772,7 +797,7 @@ export function HarvestBarChart({ items }: { items: Harvest[] }) {
                   fontSize="10"
                   fill="#4b5d52"
                 >
-                  {item.harvestedAt.slice(5, 10)}
+                  {labels[idx]}
                 </text>
               </g>
             );

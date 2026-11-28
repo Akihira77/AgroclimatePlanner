@@ -53,6 +53,12 @@ export interface SuitabilityInput {
   readonly observations: ReadonlyMap<string, number | null>;
   /** The basis over the critical stage alone; never `mixed` (`D25`). */
   readonly primaryBasis: SingleValueEvaluationBasis;
+  /** True when the critical stage is missing weather coverage or overlaps missingRanges. */
+  readonly criticalStageUncovered?: boolean;
+  /** True when a short-range daily forecast claims to cover a critical stage >16 days out. */
+  readonly criticalStageBeyondDailyHorizon?: boolean;
+  /** True when climate thresholds were evaluated only from a single point-in-time observation. */
+  readonly singlePointClimateProxy?: boolean;
 }
 
 /** Exactly the fields a `suitability_runs` row keeps from the evaluation. */
@@ -106,6 +112,15 @@ export function assessSuitability(input: SuitabilityInput): SuitabilityAssessmen
     summaries,
     primaryBasis: input.primaryBasis,
     hardGateDimensions,
+    ...(input.criticalStageUncovered === undefined
+      ? {}
+      : { criticalStageUncovered: input.criticalStageUncovered }),
+    ...(input.criticalStageBeyondDailyHorizon === undefined
+      ? {}
+      : { criticalStageBeyondDailyHorizon: input.criticalStageBeyondDailyHorizon }),
+    ...(input.singlePointClimateProxy === undefined
+      ? {}
+      : { singlePointClimateProxy: input.singlePointClimateProxy }),
   });
 
   return {

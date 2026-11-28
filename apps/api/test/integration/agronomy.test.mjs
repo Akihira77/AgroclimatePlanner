@@ -371,4 +371,99 @@ describe("agronomy evaluation & planting-window HTTP lifecycle", () => {
     assert.equal(soilEval?.source, "field_profile");
     assert.equal(soilEval?.outcome, "satisfied");
   });
+
+  it("never returns suitable for a 130-day Cabai plan backed only by a single temperature observation", async () => {
+    const cabaiRows = await harness.owner.$queryRawUnsafe(
+      `SELECT cpv.id::text AS profile_version_id,
+              c.duration_days_typical::int AS duration_days
+         FROM app.crop_profile_versions cpv
+         JOIN app.cultivars c ON c.id = cpv.cultivar_id
+         JOIN app.crops cr ON cr.id = c.crop_id
+        WHERE cpv.status = 'published'
+          AND cr.slug = 'cabai'
+        LIMIT 1`,
+    );
+    if (cabaiRows.length === 0) return;
+
+    const cabai = cabaiRows[0];
+    const farmRes = await call(alice, "POST", "/v1/farms", {
+      body: { name: "Kebun Cabai Honesty" },
+    });
+    assert.equal(farmRes.response.status, 201);
+
+    const fieldRes = await call(alice, "POST", "/v1/fields", {
+      body: {
+        farmId: farmRes.body.data.id,
+        name: "Blok Cabai 130h",
+        geometry: JSON.parse(SQUARE_JSON),
+      },
+    });
+    assert.equal(fieldRes.response.status, 201);
+    const cabaiFieldId = fieldRes.body.data.id;
+
+    assert.equal(
+      (
+        await call(alice, "PATCH", `/v1/fields/${cabaiFieldId}/agronomy`, {
+          body: { soilPh: 6.4, irrigationAvailability: "partial_irrigation" },
+        })
+      ).response.status,
+      200,
+    );
+
+    assert.equal(
+      (
+        await call(alice, "POST", `/v1/fields/${cabaiFieldId}/observations`, {
+          body: {
+            kind: "temperature",
+            value: 21.4,
+            unit: "°C",
+            observedAt: "2026-11-28T06:00:00.000Z",
+          },
+        })
+      ).response.status,
+      201,
+    );
+
+    const startDate = "2026-11-28";
+    const endDateObj = new Date(Date.parse(`${startDate}T00:00:00Z`));
+    endDateObj.setUTCDate(endDateObj.getUTCDate() + cabai.duration_days - 1);
+    const endDate = endDateObj.toISOString().slice(0, 10);
+
+    const evalRes = await call(alice, "POST", `/v1/fields/${cabaiFieldId}/evaluate`, {
+      body: {
+        profileVersionId: cabai.profile_version_id,
+        inputRefs,
+        candidates: [
+          {
+            startDate,
+            observations: {},
+            primaryBasis: "daily",
+            evidenceSegments: [
+              {
+                startDate,
+                endDate,
+                evaluationBasis: "daily",
+                evidenceClass: "weather_forecast",
+                coveragePercent: 100,
+                provenance: {
+                  kind: "forecast",
+                  forecastRunIds: [cabai.profile_version_id],
+                  ingestionRunIds: [cabaiFieldId],
+                  initializedAt: "2026-11-28T00:00:00Z",
+                },
+              },
+            ],
+            missingRanges: [],
+          },
+        ],
+      },
+    });
+    assert.equal(evalRes.response.status, 201);
+    const win = evalRes.body.data.plantingWindows[0];
+    assert.notEqual(win.suitability, "suitable");
+    assert.equal(win.suitability, "conditional");
+    const codes = win.explanations.map((e) => e.code);
+    assert.ok(codes.includes("single_observation_climate_proxy"));
+    assert.ok(codes.includes("critical_stage_beyond_daily_horizon"));
+  });
 });

@@ -4,7 +4,7 @@ import type {
   PolygonGeometry,
   SoilType,
 } from "@agroclimate/contracts";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api } from "../api.js";
 import { CustomSelect } from "../components/CustomSelect.js";
@@ -142,7 +142,9 @@ export function FarmsPage() {
   const [lon, setLon] = useState("107.7520");
   const [spanKm, setSpanKm] = useState("1");
   const [vertices, setVertices] = useState<readonly SketchPoint[]>([]);
+  const [selectedVertex, setSelectedVertex] = useState<number | null>(null);
   const [dragging, setDragging] = useState<number | null>(null);
+  const fieldEditorRef = useRef<HTMLFormElement | null>(null);
   const [polygonText, setPolygonText] = useState("");
   const [showOsmBasemap, setShowOsmBasemap] = useState(false);
   const [osmTileFailed, setOsmTileFailed] = useState(false);
@@ -245,16 +247,21 @@ export function FarmsPage() {
     setLon(fitted.lon);
     setSpanKm(fitted.spanKm);
     setVertices(fitted.vertices);
+    setSelectedVertex(null);
     setPolygonText("");
     setLocationFeedback(
       `Mengubah batas lahan "${field.name}". Seret titik sudut di sketsa untuk mengubah bentuknya.`,
     );
+    window.requestAnimationFrame(() => {
+      fieldEditorRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   };
 
   const cancelEditingField = () => {
     setEditingFieldId(null);
     setFieldName("");
     setVertices([]);
+    setSelectedVertex(null);
     setPolygonText("");
     setLocationFeedback(null);
   };
@@ -343,6 +350,7 @@ export function FarmsPage() {
       setFieldName("");
       setEditingFieldId(null);
       setVertices([]);
+      setSelectedVertex(null);
       setPolygonText("");
       setLocationFeedback(null);
       notifyDataChanged();
@@ -643,7 +651,7 @@ export function FarmsPage() {
         })()}
 
         {selected !== undefined ? (
-          <form className="panel" onSubmit={saveField}>
+          <form ref={fieldEditorRef} className="panel" onSubmit={saveField}>
             <div className="panel-head">
               <h3>{editingFieldId === null ? "Tambah Lahan Baru" : "Ubah Nama & Batas Lahan"}</h3>
               {editingFieldId !== null ? <Tag tone="warn">Mode Edit Batas</Tag> : null}
@@ -819,15 +827,33 @@ export function FarmsPage() {
                     type="button"
                     className="btn btn-quiet btn-sm"
                     disabled={busy || vertices.length === 0}
-                    onClick={() => setVertices((current) => current.slice(0, -1))}
+                    onClick={() => {
+                      setVertices((current) => current.slice(0, -1));
+                      setSelectedVertex(null);
+                    }}
                   >
                     Hapus titik terakhir
                   </button>
                   <button
                     type="button"
                     className="btn btn-quiet btn-sm"
+                    disabled={busy || selectedVertex === null || vertices.length <= 3}
+                    onClick={() => {
+                      if (selectedVertex === null) return;
+                      setVertices((current) => current.filter((_, idx) => idx !== selectedVertex));
+                      setSelectedVertex(null);
+                    }}
+                  >
+                    Hapus titik terpilih
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-quiet btn-sm"
                     disabled={busy || vertices.length === 0}
-                    onClick={() => setVertices([])}
+                    onClick={() => {
+                      setVertices([]);
+                      setSelectedVertex(null);
+                    }}
                   >
                     Ulangi sketsa
                   </button>
@@ -928,14 +954,15 @@ export function FarmsPage() {
                     {vertices.map((vertex, index) => (
                       <circle
                         key={index}
-                        className="sketch-vertex"
+                        className={`sketch-vertex${selectedVertex === index ? " is-selected" : ""}`}
                         cx={plot(vertex.x)}
                         cy={plot(vertex.y)}
-                        r={4.8}
+                        r={selectedVertex === index ? 6 : 4.8}
                         role="img"
                         aria-label={`Titik ${index + 1}`}
                         onPointerDown={(event) => {
                           event.currentTarget.setPointerCapture(event.pointerId);
+                          setSelectedVertex(index);
                           setDragging(index);
                         }}
                         onPointerMove={(event) => {
@@ -1275,15 +1302,38 @@ function frameAndVerticesFromGeometry(geometry: PolygonGeometry): {
   };
 }
 
+const WGS84_A = 6_378_137.0;
+const WGS84_F = 1 / 298.257223563;
+const WGS84_E2 = 2 * WGS84_F - WGS84_F * WGS84_F;
+const WGS84_E = Math.sqrt(WGS84_E2);
+// Authalic sphere radius for WGS84 ellipsoid
+const WGS84_AUTHALIC_R =
+  WGS84_A *
+  Math.sqrt((1 - ((1 - WGS84_E2) / (2 * WGS84_E)) * Math.log((1 - WGS84_E) / (1 + WGS84_E))) / 2);
+
+function authalicSin(latRad: number): number {
+  const sinPhi = Math.sin(latRad);
+  const esin = WGS84_E * sinPhi;
+  const q =
+    (1 - WGS84_E2) *
+    (sinPhi / (1 - esin * esin) - (1 / (2 * WGS84_E)) * Math.log((1 - esin) / (1 + esin)));
+  const qMax =
+    (1 - WGS84_E2) *
+    (1 / (1 - WGS84_E2) - (1 / (2 * WGS84_E)) * Math.log((1 - WGS84_E) / (1 + WGS84_E)));
+  return q / qMax;
+}
+
 function haversineMeters(a: readonly [number, number], b: readonly [number, number]): number {
-  const R = 6_371_000;
   const toRad = (deg: number) => (deg * Math.PI) / 180;
-  const dLat = toRad(b[1] - a[1]);
-  const dLon = toRad(b[0] - a[0]);
-  const lat1 = toRad(a[1]);
-  const lat2 = toRad(b[1]);
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(h));
+  const latMid = toRad((a[1] + b[1]) / 2);
+  const sinMid = Math.sin(latMid);
+  const denom = 1 - WGS84_E2 * sinMid * sinMid;
+  // Meridian (M) and prime-vertical (N) radii on WGS84 ellipsoid
+  const mRadius = (WGS84_A * (1 - WGS84_E2)) / Math.pow(denom, 1.5);
+  const nRadius = WGS84_A / Math.sqrt(denom);
+  const dLat = toRad(b[1] - a[1]) * mRadius;
+  const dLon = toRad(b[0] - a[0]) * nRadius * Math.cos(latMid);
+  return Math.hypot(dLat, dLon);
 }
 
 function estimatePolygonMetrics(geometry: PolygonGeometry): {
@@ -1295,30 +1345,23 @@ function estimatePolygonMetrics(geometry: PolygonGeometry): {
   if (ring.length < 4) return { areaSqm: 0, areaHa: 0, perimeterM: 0 };
 
   let perimeterM = 0;
-  for (let i = 0; i < ring.length - 1; i += 1) {
-    const a = ring[i];
-    const b = ring[i + 1];
-    if (a !== undefined && b !== undefined) perimeterM += haversineMeters(a, b);
-  }
+  let geodesicSum = 0;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
 
-  const avgLat =
-    ring.slice(0, -1).reduce((sum, [, la]) => sum + la, 0) / Math.max(1, ring.length - 1);
-  const mPerDegLat = 111_320;
-  const mPerDegLon = 111_320 * Math.cos((avgLat * Math.PI) / 180);
-
-  let shoelace = 0;
   for (let i = 0; i < ring.length - 1; i += 1) {
     const p1 = ring[i];
     const p2 = ring[i + 1];
     if (p1 === undefined || p2 === undefined) continue;
-    const x1 = p1[0] * mPerDegLon;
-    const y1 = p1[1] * mPerDegLat;
-    const x2 = p2[0] * mPerDegLon;
-    const y2 = p2[1] * mPerDegLat;
-    shoelace += x1 * y2 - x2 * y1;
+    perimeterM += haversineMeters(p1, p2);
+
+    const lon1 = toRad(p1[0]);
+    const lon2 = toRad(p2[0]);
+    const lat1 = toRad(p1[1]);
+    const lat2 = toRad(p2[1]);
+    geodesicSum += (lon2 - lon1) * (2 + authalicSin(lat1) + authalicSin(lat2));
   }
 
-  const areaSqm = Math.abs(shoelace) / 2;
+  const areaSqm = (Math.abs(geodesicSum) * WGS84_AUTHALIC_R * WGS84_AUTHALIC_R) / 2;
   return { areaSqm, areaHa: areaSqm / 10_000, perimeterM };
 }
 

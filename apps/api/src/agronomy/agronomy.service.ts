@@ -21,10 +21,13 @@ import {
   findLatestSuitabilityRun,
   findProfileVersion,
   listActivePlantingWindows,
+  loadActiveOutlookMonths,
   loadFieldSnapshotSource,
   persistSuitabilityRunWithWindows,
+  selectFieldAnchor,
 } from "@agroclimate/database";
 import type { PrismaClient, TenantScope } from "@agroclimate/database";
+import { unvalidatedGridRegistry } from "@agroclimate/weather-core";
 import { Inject, Injectable } from "@nestjs/common";
 
 import { DATABASE_CLIENT } from "../tokens.js";
@@ -32,19 +35,73 @@ import { DATABASE_CLIENT } from "../tokens.js";
 export const AGRONOMY_ENGINE_VERSION = "0.1.0";
 export const AGRONOMY_DERIVATION_VERSION = "1";
 
-type ObservationSourceKind = "request" | "field_profile" | "field_observation";
+type ObservationSourceKind = "request" | "field_profile" | "field_observation" | "climate_outlook";
 
 interface ResolvedConstraintObservations {
   readonly observations: ReadonlyMap<string, number | null>;
   readonly sources: ReadonlyMap<string, ObservationSourceKind>;
+  readonly singlePointClimateProxy: boolean;
+}
+
+function addUtcDaysIso(isoDate: string, days: number): string {
+  const dt = new Date(Date.parse(`${isoDate}T00:00:00.000Z`));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return dt.toISOString().slice(0, 10);
+}
+
+function daysInUtcMonth(year: number, monthIndex0: number): number {
+  return new Date(Date.UTC(year, monthIndex0 + 1, 0)).getUTCDate();
+}
+
+/**
+ * Sums prorated monthly precipitation (mm) across `[windowStart, windowEnd]`.
+ * Returns `null` if any covered calendar month has missing/null data so
+ * missing climate data is never silently treated as zero.
+ */
+export function prorateOutlookRainfallMm(
+  months: readonly { readonly month: string; readonly valueMm: number | null }[],
+  windowStart: string,
+  windowEnd: string,
+): number | null {
+  if (windowEnd < windowStart) return null;
+  const byMonth = new Map(months.map((m) => [m.month.slice(0, 7), m.valueMm]));
+
+  const [sy, sm, sd] = windowStart.split("-").map(Number);
+  const [ey, em, ed] = windowEnd.split("-").map(Number);
+  if (sy === undefined || sm === undefined || sd === undefined) return null;
+  if (ey === undefined || em === undefined || ed === undefined) return null;
+
+  let year = sy;
+  let month = sm; // 1..12
+  let total = 0;
+
+  while (year < ey || (year === ey && month <= em)) {
+    const ym = `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}`;
+    const mm = byMonth.get(ym);
+    if (mm === undefined || mm === null || !Number.isFinite(mm)) return null;
+
+    const totalDays = daysInUtcMonth(year, month - 1);
+    const startDay = year === sy && month === sm ? sd : 1;
+    const endDay = year === ey && month === em ? ed : totalDays;
+    const coveredDays = Math.max(0, endDay - startDay + 1);
+    total += mm * (coveredDays / totalDays);
+
+    month += 1;
+    if (month > 12) {
+      month = 1;
+      year += 1;
+    }
+  }
+
+  return Number(total.toFixed(1));
 }
 
 /**
  * Resolves constraint observations per candidate without overriding explicit
- * caller inputs (including explicit `null`). Only fills omitted constraints
- * from verified field agronomy profile (`soilPh`) or latest matching field
- * observations (`temperature` in °C). Leaves water/rainfall constraints `null`
- * rather than fabricating totals from single-day readings.
+ * caller inputs (including explicit `null`). Fills omitted constraints from
+ * verified field agronomy profile (`soilPh`), seasonal/climatology outlook
+ * (`water` in `mm`), or latest field observation (`temperature` in °C).
+ * Tracks `singlePointClimateProxy` whenever climate uses a single field reading.
  */
 export function resolveConstraintObservations(
   constraints: readonly Constraint[],
@@ -57,9 +114,11 @@ export function resolveConstraintObservations(
       readonly unit: string;
     }[];
   },
+  outlookRainfallMm: number | null = null,
 ): ResolvedConstraintObservations {
   const observations = new Map<string, number | null>();
   const sources = new Map<string, ObservationSourceKind>();
+  let singlePointClimateProxy = false;
 
   const latestTemp = source.observationsUsed.find((obs) => {
     if (obs.kind !== "temperature") return false;
@@ -81,6 +140,12 @@ export function resolveConstraintObservations(
       continue;
     }
 
+    if (constraint.dimension === "water" && unit === "mm" && outlookRainfallMm !== null) {
+      observations.set(constraint.id, outlookRainfallMm);
+      sources.set(constraint.id, "climate_outlook");
+      continue;
+    }
+
     if (
       constraint.dimension === "climate" &&
       (unit === "°c" || unit === "c" || unit === "celsius") &&
@@ -88,13 +153,14 @@ export function resolveConstraintObservations(
     ) {
       observations.set(constraint.id, latestTemp.value);
       sources.set(constraint.id, "field_observation");
+      singlePointClimateProxy = true;
       continue;
     }
 
     observations.set(constraint.id, null);
   }
 
-  return { observations, sources };
+  return { observations, sources, singlePointClimateProxy };
 }
 
 export class AgronomyResourceNotFoundError extends Error {
@@ -172,13 +238,59 @@ export class AgronomyService {
       const stages = profile.growthStages as unknown as readonly GrowthStage[];
       const constraintById = new Map(constraints.map((c) => [c.id, c]));
 
+      const needsWaterMm = constraints.some(
+        (c) => c.dimension === "water" && (c.unit ?? "").trim().toLowerCase() === "mm",
+      );
+      let storedOutlookMonths: readonly { readonly month: string; readonly valueMm: number | null }[] =
+        [];
+      if (needsWaterMm && request.candidates.length > 0) {
+        const anchor = await selectFieldAnchor(tx, fieldId);
+        if (anchor !== null) {
+          try {
+            const resolution = unvalidatedGridRegistry.resolve(
+              { provider: "open-meteo", model: "ecmwf_ifs025" },
+              { lat: anchor.lat, lon: anchor.lon },
+            );
+            const sortedStarts = [...request.candidates]
+              .map((c) => c.startDate)
+              .sort();
+            const minMonth = `${sortedStarts[0]!.slice(0, 7)}-01`;
+            const maxEnd = addUtcDaysIso(
+              sortedStarts[sortedStarts.length - 1]!,
+              cultivar.durationDaysTypical - 1,
+            );
+            const maxMonth = `${maxEnd.slice(0, 7)}-01`;
+            const active = await loadActiveOutlookMonths(tx, {
+              provider: "open-meteo",
+              model: "ecmwf_ifs025",
+              cellKey: resolution.cellKey,
+              fromMonth: minMonth,
+              toMonth: maxMonth,
+            });
+            storedOutlookMonths = active.months;
+          } catch {
+            storedOutlookMonths = [];
+          }
+        }
+      }
+
       const candidateSourceMaps = new Map<string, ReadonlyMap<string, ObservationSourceKind>>();
       const generated = generatePlantingWindows({
         constraints,
         stages,
         durationDays: cultivar.durationDaysTypical,
         candidates: request.candidates.map((c) => {
-          const resolved = resolveConstraintObservations(constraints, c.observations, source);
+          const endIso = addUtcDaysIso(c.startDate, cultivar.durationDaysTypical - 1);
+          const outlookRainfallMm =
+            storedOutlookMonths.length > 0
+              ? prorateOutlookRainfallMm(storedOutlookMonths, c.startDate, endIso)
+              : null;
+          const resolved = resolveConstraintObservations(
+            constraints,
+            c.observations,
+            source,
+            outlookRainfallMm,
+          );
           candidateSourceMaps.set(c.startDate, resolved.sources);
           return {
             startDate: c.startDate,
@@ -186,6 +298,7 @@ export class AgronomyService {
             primaryBasis: c.primaryBasis,
             evidenceSegments: c.evidenceSegments,
             missingRanges: c.missingRanges,
+            singlePointClimateProxy: resolved.singlePointClimateProxy,
           };
         }),
       });

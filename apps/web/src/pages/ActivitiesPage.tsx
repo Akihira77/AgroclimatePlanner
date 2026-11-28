@@ -27,6 +27,7 @@ import {
   Notice,
   PageGuide,
   Tag,
+  dayLabel,
   notifyDataChanged,
   observationKindLabel,
   plantingStatusLabel,
@@ -76,6 +77,8 @@ export function ActivitiesPage() {
   const [harvestedAt, setHarvestedAt] = useState(todayJakarta);
   const [yieldKg, setYieldKg] = useState("");
   const [harvestNotes, setHarvestNotes] = useState("");
+  const [confirmEarlyHarvest, setConfirmEarlyHarvest] = useState(false);
+  const [openActionMenuId, setOpenActionMenuId] = useState<string | null>(null);
 
   const [observations, setObservations] = useState<Awaited<
     ReturnType<typeof api.listFieldObservations>
@@ -219,9 +222,32 @@ export function ActivitiesPage() {
     }
   };
 
+  const isBeforePlanting =
+    activeHarvestPlanting !== null && harvestedAt < activeHarvestPlanting.plantedAt;
+  const isEarlyHarvest =
+    activeHarvestPlanting !== null &&
+    !isBeforePlanting &&
+    harvestedAt < activeHarvestPlanting.expectedHarvestEarliest;
+
   const submitHarvest = async (event: React.FormEvent) => {
     event.preventDefault();
     if (activeHarvestPlanting === null) return;
+    if (harvestedAt < activeHarvestPlanting.plantedAt) {
+      setActionError(
+        new Error(
+          `Tanggal panen (${harvestedAt}) tidak boleh lebih awal dari tanggal tanam (${activeHarvestPlanting.plantedAt}).`,
+        ),
+      );
+      return;
+    }
+    if (isEarlyHarvest && !confirmEarlyHarvest) {
+      setActionError(
+        new Error(
+          "Centang konfirmasi panen lebih awal sebelum menyimpan catatan panen sebelum perkiraan panen.",
+        ),
+      );
+      return;
+    }
     const kg = Number(yieldKg);
     if (!Number.isFinite(kg) || kg < 0) {
       setActionError(new Error("Hasil panen (kg) harus berupa angka >= 0."));
@@ -238,6 +264,7 @@ export function ActivitiesPage() {
       });
       setYieldKg("");
       setHarvestNotes("");
+      setConfirmEarlyHarvest(false);
       const updated = await api.listHarvests(activeHarvestPlanting.id);
       setHarvestState({ items: updated.data, meta: updated.meta });
       setSavedNotice("Catatan hasil panen berhasil ditambahkan.");
@@ -449,12 +476,11 @@ export function ActivitiesPage() {
             ) : (
               <>
                 <PlantingProgressList plantings={plantings} fields={fields} maxItems={6} />
-                <div className="panel table-wrap">
-                  <table className="table">
+                <div className="panel table-wrap table-wrap-visible">
+                  <table className="table table-cards">
                     <thead>
                       <tr>
-                        <th>Komoditas &amp; Varietas</th>
-                        <th>Lahan</th>
+                        <th>Komoditas &amp; Lahan</th>
                         <th>Tanggal Tanam</th>
                         <th>Perkiraan Panen</th>
                         <th className="numeric">Total Panen</th>
@@ -465,62 +491,98 @@ export function ActivitiesPage() {
                     <tbody>
                       {plantings.map((p) => {
                         const fieldName = fields.find((f) => f.id === p.fieldId)?.name ?? p.fieldId;
+                        const menuOpen = openActionMenuId === p.id;
                         return (
                           <tr key={p.id}>
-                            <td>
-                              <strong>{p.cropNameId}</strong>
-                              <div className="muted">{p.cultivarName}</div>
+                            <td data-label="Komoditas & Lahan">
+                              <strong>{p.cropNameId}</strong>{" "}
+                              <span className="muted">({p.cultivarName})</span>
+                              <div className="muted" style={{ fontSize: "0.8rem" }}>
+                                {fieldName}
+                              </div>
                             </td>
-                            <td>{fieldName}</td>
-                            <td className="nowrap">{p.plantedAt}</td>
-                            <td className="nowrap muted">
-                              {p.expectedHarvestEarliest} – {p.expectedHarvestLatest}
+                            <td data-label="Tanggal Tanam" className="nowrap">
+                              {dayLabel(p.plantedAt)}
                             </td>
-                            <td className="numeric nowrap">
+                            <td data-label="Perkiraan Panen" className="nowrap muted">
+                              {dayLabel(p.expectedHarvestEarliest)} –{" "}
+                              {dayLabel(p.expectedHarvestLatest)}
+                            </td>
+                            <td data-label="Total Panen" className="numeric nowrap">
                               {p.totalYieldKg.toLocaleString("id-ID")} kg
                             </td>
-                            <td className="nowrap">
+                            <td data-label="Status" className="nowrap">
                               <Tag tone={plantingStatusTone(p.status)}>
                                 {plantingStatusLabel(p.status)}
                               </Tag>
                             </td>
-                            <td>
-                              <div className="action-grid">
+                            <td data-label="Aksi">
+                              <div className="action-bar">
                                 <button
                                   type="button"
                                   className="btn btn-quiet btn-sm"
                                   disabled={busy}
-                                  onClick={() => void loadHarvests(p)}
+                                  onClick={() => {
+                                    setOpenActionMenuId(null);
+                                    setConfirmEarlyHarvest(false);
+                                    void loadHarvests(p);
+                                  }}
                                 >
                                   Catat Panen
                                 </button>
                                 {p.status === "active" ? (
-                                  <>
+                                  <div className="action-menu-wrap">
                                     <button
                                       type="button"
-                                      className="btn btn-quiet btn-sm"
+                                      className="btn btn-quiet btn-sm action-menu-btn"
+                                      aria-expanded={menuOpen}
+                                      aria-haspopup="menu"
+                                      aria-label={`Aksi lainnya untuk ${p.cropNameId}`}
                                       disabled={busy}
-                                      onClick={() => void transitionStatus(p.id, "harvested")}
+                                      onClick={() =>
+                                        setOpenActionMenuId((cur) => (cur === p.id ? null : p.id))
+                                      }
                                     >
-                                      Selesai Panen
+                                      ⋯
                                     </button>
-                                    <button
-                                      type="button"
-                                      className="btn btn-danger-outline btn-sm"
-                                      disabled={busy}
-                                      onClick={() => void transitionStatus(p.id, "failed")}
-                                    >
-                                      Gagal
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="btn btn-danger-outline btn-sm"
-                                      disabled={busy}
-                                      onClick={() => void transitionStatus(p.id, "abandoned")}
-                                    >
-                                      Hentikan
-                                    </button>
-                                  </>
+                                    {menuOpen ? (
+                                      <div className="action-menu-popover" role="menu">
+                                        <button
+                                          type="button"
+                                          role="menuitem"
+                                          className="action-menu-item"
+                                          onClick={() => {
+                                            setOpenActionMenuId(null);
+                                            void transitionStatus(p.id, "harvested");
+                                          }}
+                                        >
+                                          Selesai Panen
+                                        </button>
+                                        <button
+                                          type="button"
+                                          role="menuitem"
+                                          className="action-menu-item is-danger"
+                                          onClick={() => {
+                                            setOpenActionMenuId(null);
+                                            void transitionStatus(p.id, "failed");
+                                          }}
+                                        >
+                                          Tandai Gagal
+                                        </button>
+                                        <button
+                                          type="button"
+                                          role="menuitem"
+                                          className="action-menu-item is-danger"
+                                          onClick={() => {
+                                            setOpenActionMenuId(null);
+                                            void transitionStatus(p.id, "abandoned");
+                                          }}
+                                        >
+                                          Hentikan
+                                        </button>
+                                      </div>
+                                    ) : null}
+                                  </div>
                                 ) : null}
                               </div>
                             </td>
@@ -550,7 +612,14 @@ export function ActivitiesPage() {
                   <form className="form-grid" onSubmit={submitHarvest}>
                     <div className="field">
                       <FieldLabel htmlFor="harv-date" label="Tanggal Panen" />
-                      <DatePicker id="harv-date" value={harvestedAt} onChange={setHarvestedAt} />
+                      <DatePicker
+                        id="harv-date"
+                        value={harvestedAt}
+                        onChange={(nextDate) => {
+                          setHarvestedAt(nextDate);
+                          setConfirmEarlyHarvest(false);
+                        }}
+                      />
                     </div>
                     <div className="field">
                       <FieldLabel htmlFor="harv-kg" label="Berat Hasil (kg)" />
@@ -575,8 +644,38 @@ export function ActivitiesPage() {
                         onChange={(e) => setHarvestNotes(e.target.value)}
                       />
                     </div>
+                    {isBeforePlanting ? (
+                      <div className="field-span-2">
+                        <Notice tone="error">
+                          Tanggal panen ({harvestedAt}) tidak boleh lebih awal dari tanggal tanam (
+                          {activeHarvestPlanting.plantedAt}).
+                        </Notice>
+                      </div>
+                    ) : isEarlyHarvest ? (
+                      <div className="field-span-2 stack-tight">
+                        <Notice tone="warn">
+                          Perhatian: Tanggal panen ({harvestedAt}) jauh lebih awal dari perkiraan
+                          panen paling awal ({activeHarvestPlanting.expectedHarvestEarliest}).
+                          Pastikan ini memang panen dini sebelum menyimpan.
+                        </Notice>
+                        <label className="confirm-check">
+                          <input
+                            type="checkbox"
+                            checked={confirmEarlyHarvest}
+                            onChange={(e) => setConfirmEarlyHarvest(e.target.checked)}
+                          />
+                          <span>Saya yakin ingin mencatat panen lebih awal dari perkiraan</span>
+                        </label>
+                      </div>
+                    ) : null}
                     <div className="form-actions">
-                      <button className="btn btn-primary" type="submit" disabled={busy}>
+                      <button
+                        className="btn btn-primary"
+                        type="submit"
+                        disabled={
+                          busy || isBeforePlanting || (isEarlyHarvest && !confirmEarlyHarvest)
+                        }
+                      >
                         Simpan Panen
                       </button>
                       <button
@@ -585,6 +684,7 @@ export function ActivitiesPage() {
                         onClick={() => {
                           setActiveHarvestPlanting(null);
                           setHarvestState(null);
+                          setConfirmEarlyHarvest(false);
                         }}
                       >
                         Tutup

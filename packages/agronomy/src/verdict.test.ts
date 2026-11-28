@@ -110,4 +110,33 @@ describe("classifyVerdict — precedence is the policy", () => {
 
     expect(classifyVerdict(input)).toEqual(classifyVerdict(input));
   });
+
+  it("caps verdict at conditional when critical stage is uncovered, beyond daily horizon, or single-observation proxy", () => {
+    const uncovered = classifyVerdict({
+      summaries: [summary()],
+      primaryBasis: "daily",
+      hardGateDimensions: [],
+      criticalStageUncovered: true,
+    });
+    expect(uncovered.verdict).toBe("conditional");
+    expect(uncovered.reasons.map((r) => r.code)).toEqual(["critical_stage_uncovered"]);
+
+    const beyond = classifyVerdict({
+      summaries: [summary()],
+      primaryBasis: "daily",
+      hardGateDimensions: [],
+      criticalStageBeyondDailyHorizon: true,
+    });
+    expect(beyond.verdict).toBe("conditional");
+    expect(beyond.reasons.map((r) => r.code)).toEqual(["critical_stage_beyond_daily_horizon"]);
+
+    const proxy = classifyVerdict({
+      summaries: [summary()],
+      primaryBasis: "daily",
+      hardGateDimensions: [],
+      singlePointClimateProxy: true,
+    });
+    expect(proxy.verdict).toBe("conditional");
+    expect(proxy.reasons.map((r) => r.code)).toEqual(["single_observation_climate_proxy"]);
+  });
 });

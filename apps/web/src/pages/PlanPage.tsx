@@ -158,57 +158,144 @@ export function PlanPage() {
         throw new Error(`Belum ada panduan aktif untuk komoditas ${crop.nameId}.`);
       }
 
-      const endDate = addDaysIso(date, published.cultivar.durationDaysTypical - 1);
-      const evidenceClass = basis === "daily" ? "weather_forecast" : "climatology";
+      const totalDays = published.cultivar.durationDaysTypical;
+      const endDate = addDaysIso(date, totalDays - 1);
+      const cycle = await api.cropCycle(published.version.id, date);
+
+      const forecastProv = {
+        kind: "forecast" as const,
+        forecastRunIds: [published.version.id] as [string, ...string[]],
+        ingestionRunIds: [field.id] as [string, ...string[]],
+        initializedAt: new Date().toISOString(),
+      };
+      const climatologyProv = {
+        kind: "climatology" as const,
+        baselineVersion: "1991-2020-v1",
+      };
+
+      type EvalSegment = {
+        startDate: string;
+        endDate: string;
+        evaluationBasis: SingleValueEvaluationBasis;
+        evidenceClass: "weather_forecast" | "subseasonal_forecast" | "climatology";
+        coveragePercent: number;
+        provenance: typeof forecastProv | typeof climatologyProv;
+      };
+
+      let evidenceSegments: EvalSegment[] = [];
+
+      if (basis === "daily") {
+        const dailyEndOffset = Math.min(13, totalDays - 1);
+        evidenceSegments.push({
+          startDate: date,
+          endDate: addDaysIso(date, dailyEndOffset),
+          evaluationBasis: "daily",
+          evidenceClass: "weather_forecast",
+          coveragePercent: 100,
+          provenance: forecastProv,
+        });
+        if (totalDays > 14) {
+          const weeklyEndOffset = Math.min(44, totalDays - 1);
+          evidenceSegments.push({
+            startDate: addDaysIso(date, 14),
+            endDate: addDaysIso(date, weeklyEndOffset),
+            evaluationBasis: "weekly",
+            evidenceClass: "subseasonal_forecast",
+            coveragePercent: 100,
+            provenance: forecastProv,
+          });
+        }
+        if (totalDays > 45) {
+          evidenceSegments.push({
+            startDate: addDaysIso(date, 45),
+            endDate,
+            evaluationBasis: "climatology",
+            evidenceClass: "climatology",
+            coveragePercent: 100,
+            provenance: climatologyProv,
+          });
+        }
+      } else {
+        evidenceSegments = [
+          {
+            startDate: date,
+            endDate,
+            evaluationBasis: "climatology",
+            evidenceClass: "climatology",
+            coveragePercent: 100,
+            provenance: climatologyProv,
+          },
+        ];
+      }
+
+      const criticalStages = cycle.stages.filter((s) => s.isCritical);
+      const basisOrder: Record<SingleValueEvaluationBasis, number> = {
+        daily: 0,
+        weekly: 1,
+        monthly: 2,
+        climatology: 3,
+      };
+      let primaryBasis: SingleValueEvaluationBasis = basis;
+      if (criticalStages.length > 0 && basis === "daily") {
+        const overlapping = evidenceSegments.filter((seg) =>
+          criticalStages.some((cs) => seg.startDate <= cs.endDate && seg.endDate >= cs.startDate),
+        );
+        if (overlapping.length > 0) {
+          primaryBasis = overlapping.reduce<SingleValueEvaluationBasis>(
+            (coarsest, seg) =>
+              basisOrder[seg.evaluationBasis] > basisOrder[coarsest]
+                ? seg.evaluationBasis
+                : coarsest,
+            "daily",
+          );
+        }
+      }
+
+      const inputRefs =
+        basis === "daily"
+          ? [
+              {
+                kind: "forecast" as const,
+                role: "short_range" as const,
+                purpose: "input" as const,
+                forecastRunIds: [published.version.id] as [string, ...string[]],
+                ingestionRunIds: [field.id] as [string, ...string[]],
+                recordSetHash: BASELINE_HASH_PLACEHOLDER,
+              },
+              ...(totalDays > 45
+                ? [
+                    {
+                      kind: "baseline" as const,
+                      role: "climatology" as const,
+                      purpose: "input" as const,
+                      baselineVersion: "1991-2020-v1",
+                      baselineHash: BASELINE_HASH_PLACEHOLDER,
+                      cellKeys: ["centroid-preview"] as [string, ...string[]],
+                    },
+                  ]
+                : []),
+            ]
+          : [
+              {
+                kind: "baseline" as const,
+                role: "climatology" as const,
+                purpose: "input" as const,
+                baselineVersion: "1991-2020-v1",
+                baselineHash: BASELINE_HASH_PLACEHOLDER,
+                cellKeys: ["centroid-preview"] as [string, ...string[]],
+              },
+            ];
 
       const result = await api.evaluateField(field.id, {
         profileVersionId: published.version.id,
         irrigationAvailability: irrigation,
-        inputRefs: [
-          basis === "daily"
-            ? {
-                kind: "forecast",
-                role: "short_range",
-                purpose: "input",
-                forecastRunIds: [published.version.id],
-                ingestionRunIds: [field.id],
-                recordSetHash: BASELINE_HASH_PLACEHOLDER,
-              }
-            : {
-                kind: "baseline",
-                role: "climatology",
-                purpose: "input",
-                baselineVersion: "1991-2020-v1",
-                baselineHash: BASELINE_HASH_PLACEHOLDER,
-                cellKeys: ["centroid-preview"],
-              },
-        ],
+        inputRefs,
         candidates: [
           {
             startDate: date,
             observations: {},
-            primaryBasis: basis,
-            evidenceSegments: [
-              {
-                startDate: date,
-                endDate,
-                evaluationBasis: basis,
-                evidenceClass,
-                coveragePercent: 100,
-                provenance:
-                  basis === "daily"
-                    ? {
-                        kind: "forecast",
-                        forecastRunIds: [published.version.id],
-                        ingestionRunIds: [field.id],
-                        initializedAt: new Date().toISOString(),
-                      }
-                    : {
-                        kind: "climatology",
-                        baselineVersion: "1991-2020-v1",
-                      },
-              },
-            ],
+            primaryBasis,
+            evidenceSegments,
             missingRanges: [],
           },
         ],

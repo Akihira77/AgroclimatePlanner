@@ -294,6 +294,32 @@ function Shell({
         </div>
       </main>
       <OnboardingTracker />
+      <nav className="mobile-bottom-nav" aria-label="Navigasi cepat">
+        <Link to="/" className={navClass(current === "ringkasan")}>
+          <IconHome size={18} />
+          <span>Beranda</span>
+        </Link>
+        <Link to="/lahan" className={navClass(current === "lahan")}>
+          <IconMap size={18} />
+          <span>Lahan</span>
+        </Link>
+        <Link to="/katalog" className={navClass(current === "katalog")}>
+          <IconBook size={18} />
+          <span>Tanaman</span>
+        </Link>
+        <Link to="/rencana" className={navClass(current === "rencana")}>
+          <IconCalendar size={18} />
+          <span>Rencana</span>
+        </Link>
+        <Link to="/aktivitas" className={navClass(current === "aktivitas")}>
+          <IconClipboard size={18} />
+          <span>Aktivitas</span>
+        </Link>
+        <Link to="/iklim" className={navClass(current === "iklim")}>
+          <IconCloud size={18} />
+          <span>Cuaca</span>
+        </Link>
+      </nav>
       {passwordModalOpen ? (
         <ChangePasswordModal onClose={() => setPasswordModalOpen(false)} />
       ) : null}

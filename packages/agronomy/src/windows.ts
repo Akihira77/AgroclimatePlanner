@@ -60,6 +60,8 @@ export interface PlantingWindowCandidate {
   readonly primaryBasis: SingleValueEvaluationBasis;
   readonly evidenceSegments: readonly EvidenceSegment[];
   readonly missingRanges: readonly MissingRange[];
+  /** True when climate constraints were resolved from a single point-in-time field observation. */
+  readonly singlePointClimateProxy?: boolean;
 }
 
 export interface GeneratePlantingWindowsInput {
@@ -226,10 +228,20 @@ export function generatePlantingWindows(
     const sortedMissingRanges = [...candidate.missingRanges].sort(compareIntervals);
 
     const criticalStages = criticalStageWindows(stages, candidate.startDate, durationDays);
+    let criticalStageUncovered = false;
+    let criticalStageBeyondDailyHorizon = false;
+    const dailyHorizonLimit = addDays(candidate.startDate, 16);
+
     if (criticalStages.length > 0) {
       const overlappingCriticalSegments = sortedSegments.filter((seg) =>
         criticalStages.some((cs) => seg.startDate <= cs.endDate && seg.endDate >= cs.startDate),
       );
+      const overlappingMissing = sortedMissingRanges.some((mr) =>
+        criticalStages.some((cs) => mr.startDate <= cs.endDate && mr.endDate >= cs.startDate),
+      );
+      if (overlappingCriticalSegments.length === 0 || overlappingMissing) {
+        criticalStageUncovered = true;
+      }
       if (overlappingCriticalSegments.length > 0) {
         const coarsestCriticalRank = Math.max(
           ...overlappingCriticalSegments.map((seg) => BASIS_RANK[seg.evaluationBasis]),
@@ -240,6 +252,14 @@ export function generatePlantingWindows(
             `primaryBasis ${candidate.primaryBasis} is finer than critical-stage evidence for window starting ${candidate.startDate}`,
           );
         }
+        const allDailyForecast = overlappingCriticalSegments.every(
+          (seg) =>
+            seg.evaluationBasis === "daily" || seg.evidenceClass === "weather_forecast",
+        );
+        const endsPastHorizon = criticalStages.some((cs) => cs.endDate > dailyHorizonLimit);
+        if (allDailyForecast && endsPastHorizon) {
+          criticalStageBeyondDailyHorizon = true;
+        }
       }
     }
 
@@ -247,6 +267,11 @@ export function generatePlantingWindows(
       constraints,
       observations: candidate.observations,
       primaryBasis: candidate.primaryBasis,
+      criticalStageUncovered,
+      criticalStageBeyondDailyHorizon,
+      ...(candidate.singlePointClimateProxy === undefined
+        ? {}
+        : { singlePointClimateProxy: candidate.singlePointClimateProxy }),
     });
 
     const bases = new Set(sortedSegments.map((s) => s.evaluationBasis));
