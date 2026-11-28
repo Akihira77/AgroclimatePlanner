@@ -12,6 +12,11 @@ import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { CustomSelect } from "../components/CustomSelect.js";
 import { DatePicker } from "../components/DatePicker.js";
+import {
+  HarvestBarChart,
+  ObservationTrendChart,
+  PlantingProgressList,
+} from "../components/Visuals.js";
 import { IconClipboard, IconCloud } from "../icons.js";
 import { Link } from "../router.js";
 import {
@@ -442,85 +447,88 @@ export function ActivitiesPage() {
             {plantings.length === 0 ? (
               <Empty>Belum ada catatan penanaman.</Empty>
             ) : (
-              <div className="panel table-wrap">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Komoditas &amp; Varietas</th>
-                      <th>Lahan</th>
-                      <th>Tanggal Tanam</th>
-                      <th>Perkiraan Panen</th>
-                      <th className="numeric">Total Panen</th>
-                      <th>Status</th>
-                      <th />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {plantings.map((p) => {
-                      const fieldName = fields.find((f) => f.id === p.fieldId)?.name ?? p.fieldId;
-                      return (
-                        <tr key={p.id}>
-                          <td>
-                            <strong>{p.cropNameId}</strong>
-                            <div className="muted">{p.cultivarName}</div>
-                          </td>
-                          <td>{fieldName}</td>
-                          <td className="numeric">{p.plantedAt}</td>
-                          <td className="numeric muted">
-                            {p.expectedHarvestEarliest} – {p.expectedHarvestLatest}
-                          </td>
-                          <td className="numeric">{p.totalYieldKg.toLocaleString("id-ID")} kg</td>
-                          <td>
-                            <Tag tone={plantingStatusTone(p.status)}>
-                              {plantingStatusLabel(p.status)}
-                            </Tag>
-                          </td>
-                          <td>
-                            <div className="btn-row">
-                              <button
-                                type="button"
-                                className="btn btn-quiet btn-sm"
-                                disabled={busy}
-                                onClick={() => void loadHarvests(p)}
-                              >
-                                Catat Panen
-                              </button>
-                              {p.status === "active" ? (
-                                <>
-                                  <button
-                                    type="button"
-                                    className="btn btn-quiet btn-sm"
-                                    disabled={busy}
-                                    onClick={() => void transitionStatus(p.id, "harvested")}
-                                  >
-                                    Selesai Panen
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="btn btn-danger btn-sm"
-                                    disabled={busy}
-                                    onClick={() => void transitionStatus(p.id, "failed")}
-                                  >
-                                    Gagal
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="btn btn-danger btn-sm"
-                                    disabled={busy}
-                                    onClick={() => void transitionStatus(p.id, "abandoned")}
-                                  >
-                                    Hentikan
-                                  </button>
-                                </>
-                              ) : null}
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <>
+                <PlantingProgressList plantings={plantings} fields={fields} maxItems={6} />
+                <div className="panel table-wrap">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th>Komoditas &amp; Varietas</th>
+                        <th>Lahan</th>
+                        <th>Tanggal Tanam</th>
+                        <th>Perkiraan Panen</th>
+                        <th className="numeric">Total Panen</th>
+                        <th>Status</th>
+                        <th />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {plantings.map((p) => {
+                        const fieldName = fields.find((f) => f.id === p.fieldId)?.name ?? p.fieldId;
+                        return (
+                          <tr key={p.id}>
+                            <td>
+                              <strong>{p.cropNameId}</strong>
+                              <div className="muted">{p.cultivarName}</div>
+                            </td>
+                            <td>{fieldName}</td>
+                            <td className="numeric">{p.plantedAt}</td>
+                            <td className="numeric muted">
+                              {p.expectedHarvestEarliest} – {p.expectedHarvestLatest}
+                            </td>
+                            <td className="numeric">{p.totalYieldKg.toLocaleString("id-ID")} kg</td>
+                            <td>
+                              <Tag tone={plantingStatusTone(p.status)}>
+                                {plantingStatusLabel(p.status)}
+                              </Tag>
+                            </td>
+                            <td>
+                              <div className="btn-row">
+                                <button
+                                  type="button"
+                                  className="btn btn-quiet btn-sm"
+                                  disabled={busy}
+                                  onClick={() => void loadHarvests(p)}
+                                >
+                                  Catat Panen
+                                </button>
+                                {p.status === "active" ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="btn btn-quiet btn-sm"
+                                      disabled={busy}
+                                      onClick={() => void transitionStatus(p.id, "harvested")}
+                                    >
+                                      Selesai Panen
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-danger btn-sm"
+                                      disabled={busy}
+                                      onClick={() => void transitionStatus(p.id, "failed")}
+                                    >
+                                      Gagal
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-danger btn-sm"
+                                      disabled={busy}
+                                      onClick={() => void transitionStatus(p.id, "abandoned")}
+                                    >
+                                      Hentikan
+                                    </button>
+                                  </>
+                                ) : null}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </section>
 
@@ -587,26 +595,29 @@ export function ActivitiesPage() {
                   ) : harvestState.items.length === 0 ? (
                     <p className="muted">Belum ada catatan panen untuk penanaman ini.</p>
                   ) : (
-                    <div className="table-wrap">
-                      <table className="table">
-                        <thead>
-                          <tr>
-                            <th>Tanggal</th>
-                            <th className="numeric">Hasil (kg)</th>
-                            <th>Catatan</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {harvestState.items.map((h) => (
-                            <tr key={h.id}>
-                              <td className="numeric">{h.harvestedAt}</td>
-                              <td className="numeric">{h.yieldKg.toLocaleString("id-ID")}</td>
-                              <td className="muted">{h.notes ?? "—"}</td>
+                    <>
+                      <HarvestBarChart items={harvestState.items} />
+                      <div className="table-wrap">
+                        <table className="table">
+                          <thead>
+                            <tr>
+                              <th>Tanggal</th>
+                              <th className="numeric">Hasil (kg)</th>
+                              <th>Catatan</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                          </thead>
+                          <tbody>
+                            {harvestState.items.map((h) => (
+                              <tr key={h.id}>
+                                <td className="numeric">{h.harvestedAt}</td>
+                                <td className="numeric">{h.yieldKg.toLocaleString("id-ID")}</td>
+                                <td className="muted">{h.notes ?? "—"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
                   )}
                 </div>
               </div>
@@ -715,32 +726,35 @@ export function ActivitiesPage() {
           ) : observations.length === 0 ? (
             <Empty>Belum ada pengamatan yang dicatat untuk lahan ini.</Empty>
           ) : (
-            <div className="panel table-wrap">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Waktu</th>
-                    <th>Jenis</th>
-                    <th className="numeric">Hasil</th>
-                    <th>Alat / Catatan</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {observations.map((obs) => (
-                    <tr key={obs.id}>
-                      <td className="numeric muted">
-                        {obs.observedAt.slice(0, 16).replace("T", " ")}
-                      </td>
-                      <td>{observationKindLabel(obs.kind)}</td>
-                      <td className="numeric">
-                        {obs.value === null ? "—" : `${obs.value} ${obs.unit ?? ""}`}
-                      </td>
-                      <td className="muted">{obs.method ?? "—"}</td>
+            <>
+              <ObservationTrendChart observations={observations} />
+              <div className="panel table-wrap">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Waktu</th>
+                      <th>Jenis</th>
+                      <th className="numeric">Hasil</th>
+                      <th>Alat / Catatan</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {observations.map((obs) => (
+                      <tr key={obs.id}>
+                        <td className="numeric muted">
+                          {obs.observedAt.slice(0, 16).replace("T", " ")}
+                        </td>
+                        <td>{observationKindLabel(obs.kind)}</td>
+                        <td className="numeric">
+                          {obs.value === null ? "—" : `${obs.value} ${obs.unit ?? ""}`}
+                        </td>
+                        <td className="muted">{obs.method ?? "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </section>
       )}

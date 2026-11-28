@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import { api } from "../api.js";
 import { DatePicker } from "../components/DatePicker.js";
+import { CropIllustration, GrowthStageTimeline } from "../components/Visuals.js";
 import { IconArrowRight } from "../icons.js";
 import { Link } from "../router.js";
 import {
@@ -89,8 +90,11 @@ function CropList() {
         {state.data.crops.map((crop) => (
           <Link key={crop.id} to={`/katalog/${crop.slug}`} className="crop-card">
             <div className="spread">
-              <Tag tone="accent">{cropCategoryLabel(crop.category)}</Tag>
-              <IconArrowRight size={16} className="muted" />
+              <CropIllustration slug={crop.slug} size={46} />
+              <div className="row">
+                <Tag tone="accent">{cropCategoryLabel(crop.category)}</Tag>
+                <IconArrowRight size={16} className="muted" />
+              </div>
             </div>
             <h3>{crop.nameId}</h3>
             <span className="muted" style={{ fontSize: "0.875rem" }}>
@@ -116,10 +120,13 @@ function CropDetail({ slug }: { readonly slug: string }) {
   return (
     <div className="stack">
       <div className="spread">
-        <div className="stack-tight">
-          <span className="eyebrow">{cropCategoryLabel(crop.category)}</span>
-          <h2>{crop.nameId}</h2>
-          <p className="muted">{crop.nameEn}</p>
+        <div className="row" style={{ gap: "var(--space-3)" }}>
+          <CropIllustration slug={crop.slug} size={56} />
+          <div className="stack-tight">
+            <span className="eyebrow">{cropCategoryLabel(crop.category)}</span>
+            <h2>{crop.nameId}</h2>
+            <p className="muted">{crop.nameEn}</p>
+          </div>
         </div>
         <Link className="btn btn-quiet" to="/katalog">
           Semua komoditas
@@ -235,30 +242,16 @@ function VersionDetail({
         {profile.growthStages.length === 0 ? (
           <p className="muted">Tidak ada rincian fase pertumbuhan.</p>
         ) : (
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Nama Fase</th>
-                  <th className="numeric">Rentang Hari</th>
-                  <th>Prioritas</th>
-                  <th>Kebutuhan Khusus</th>
-                </tr>
-              </thead>
-              <tbody>
-                {profile.growthStages.map((stage) => (
-                  <tr key={stage.id}>
-                    <td>{stage.name}</td>
-                    <td className="numeric">
-                      Hari ke-{stage.startDayOffset} s.d. {stage.endDayOffset}
-                    </td>
-                    <td>{stage.isCritical ? <Tag tone="warn">Fase kritis</Tag> : "Normal"}</td>
-                    <td className="muted">{stage.requirementProfile ?? "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <GrowthStageTimeline
+            stages={profile.growthStages.map((stage) => ({
+              id: stage.id,
+              name: stage.name,
+              startDayOffset: stage.startDayOffset,
+              endDayOffset: stage.endDayOffset,
+              isCritical: stage.isCritical,
+              subtitle: stage.requirementProfile,
+            }))}
+          />
         )}
       </section>
 
@@ -269,44 +262,31 @@ function VersionDetail({
         {profile.constraints.length === 0 ? (
           <p className="muted">Belum ada ambang batas tercatat.</p>
         ) : (
-          <div className="table-wrap">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Aspek</th>
-                  <th>Jenis Batas</th>
-                  <th className="numeric">Nilai Ideal</th>
-                  <th>Berlaku Pada Fase</th>
-                  <th>Tingkat Rujukan</th>
-                  <th>Sifat Aturan</th>
-                </tr>
-              </thead>
-              <tbody>
-                {profile.constraints.map((constraint) => {
-                  const stage = profile.growthStages.find(
-                    (candidate) => candidate.id === constraint.growthStageId,
-                  );
-                  return (
-                    <tr key={constraint.id}>
-                      <td>{dimensionLabel(constraint.dimension)}</td>
-                      <td className="muted">{comparatorLabel(constraint.comparator)}</td>
-                      <td className="numeric">{thresholdLabel(constraint)}</td>
-                      <td className="muted">{stage?.name ?? "Seluruh masa tanam"}</td>
-                      <td>
-                        <Tag tone={constraint.grade === "A" ? "accent" : undefined}>
-                          {gradeLabel(constraint.grade)}
-                        </Tag>
-                      </td>
-                      <td>
-                        <Tag tone={constraint.severity === "hard" ? "warn" : undefined}>
-                          {severityLabel(constraint.severity)}
-                        </Tag>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <div className="constraint-grid">
+            {profile.constraints.map((constraint) => {
+              const stage = profile.growthStages.find(
+                (candidate) => candidate.id === constraint.growthStageId,
+              );
+              return (
+                <div key={constraint.id} className="constraint-tile">
+                  <div className="spread">
+                    <strong>{dimensionLabel(constraint.dimension)}</strong>
+                    <Tag tone={constraint.severity === "hard" ? "warn" : undefined}>
+                      {severityLabel(constraint.severity)}
+                    </Tag>
+                  </div>
+                  <div className="constraint-val">{thresholdLabel(constraint)}</div>
+                  <div className="muted" style={{ fontSize: "0.8rem" }}>
+                    {comparatorLabel(constraint.comparator)} • {stage?.name ?? "Seluruh masa tanam"}
+                  </div>
+                  <div>
+                    <Tag tone={constraint.grade === "A" ? "accent" : undefined}>
+                      {gradeLabel(constraint.grade)}
+                    </Tag>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </section>

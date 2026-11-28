@@ -1,4 +1,5 @@
 import { api } from "../api.js";
+import { FarmAreaBarChart, PlantingProgressList } from "../components/Visuals.js";
 import {
   IconBook,
   IconCalendar,
@@ -96,6 +97,11 @@ export function DashboardPage() {
         </div>
       </div>
 
+      <div className="visual-grid-2">
+        <FarmAreaBarChart farms={farms} fields={fields} />
+        <PlantingProgressList plantings={plantings} fields={fields} />
+      </div>
+
       <section className="section">
         <div className="section-head">
           <h2>Kebun Terbaru</h2>
@@ -145,58 +151,49 @@ export function DashboardPage() {
       <section className="section">
         <h2>Menu Utama</h2>
         <div className="card-grid">
-          <div className="card spread">
+          <Link className="card spread" to="/rencana">
             <div>
-              <h3>Rencana Tanam &amp; Asisten AI</h3>
-              <p className="muted">
-                Periksa apakah tanggal tanam pilihan Anda cocok dengan curah hujan dan kondisi
-                lahan.
-              </p>
+              <h3>Rencana Tanam &amp; AI</h3>
+              <p className="muted">Cek kecocokan tanggal tanam &amp; hujan.</p>
             </div>
-            <Link className="btn btn-primary btn-sm" to="/rencana">
-              Buka Rencana
-            </Link>
-          </div>
+            <span className="btn btn-primary btn-sm">
+              <IconCalendar size={15} />
+              <span>Buka</span>
+            </span>
+          </Link>
 
-          <div className="card spread">
+          <Link className="card spread" to="/aktivitas">
             <div>
               <h3>Aktivitas &amp; Panen</h3>
-              <p className="muted">
-                Catat penanaman baru, hasil panen bertahap, serta pengamatan curah hujan atau tanah.
-              </p>
+              <p className="muted">Catat tanam, panen, dan hujan lapangan.</p>
             </div>
-            <Link className="btn btn-quiet btn-sm" to="/aktivitas">
+            <span className="btn btn-quiet btn-sm">
               <IconClipboard size={15} />
-              <span>Buka Aktivitas</span>
-            </Link>
-          </div>
+              <span>Buka</span>
+            </span>
+          </Link>
 
-          <div className="card spread">
+          <Link className="card spread" to="/iklim">
             <div>
               <h3>Cuaca &amp; Iklim</h3>
-              <p className="muted">
-                Lihat grafik curah hujan bulanan (12 bulan) dan prakiraan harian 0–45 hari ke depan.
-              </p>
+              <p className="muted">Grafik hujan bulanan &amp; harian.</p>
             </div>
-            <Link className="btn btn-quiet btn-sm" to="/iklim">
+            <span className="btn btn-quiet btn-sm">
               <IconCloud size={15} />
-              <span>Lihat Cuaca</span>
-            </Link>
-          </div>
+              <span>Lihat</span>
+            </span>
+          </Link>
 
-          <div className="card spread">
+          <Link className="card spread" to="/katalog">
             <div>
               <h3>Panduan Tanaman</h3>
-              <p className="muted">
-                Baca daftar komoditas, fase pertumbuhan, dan syarat batas iklim yang digunakan
-                sistem.
-              </p>
+              <p className="muted">Fase tumbuh &amp; syarat iklim komoditas.</p>
             </div>
-            <Link className="btn btn-quiet btn-sm" to="/katalog">
+            <span className="btn btn-quiet btn-sm">
               <IconBook size={15} />
-              <span>Buka Panduan</span>
-            </Link>
-          </div>
+              <span>Buka</span>
+            </span>
+          </Link>
         </div>
       </section>
 

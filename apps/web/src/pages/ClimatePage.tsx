@@ -275,18 +275,70 @@ function MonthlyTable({ outlook }: { readonly outlook: ClimateOutlook }) {
   );
 }
 
+const SHORT_MONTHS_ID = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "Mei",
+  "Jun",
+  "Jul",
+  "Agt",
+  "Sep",
+  "Okt",
+  "Nov",
+  "Des",
+];
+
+function shortMonthLabel(isoMonth: string): string {
+  const m = Number(isoMonth.slice(5, 7));
+  if (m >= 1 && m <= 12) return SHORT_MONTHS_ID[m - 1] ?? isoMonth.slice(5, 7);
+  return isoMonth.slice(5, 7);
+}
+
 function MonthlyRainfallChart({ outlook }: { readonly outlook: ClimateOutlook }) {
   const values = outlook.months.map((m) => m.valueMm).filter((v): v is number => v !== null);
   const maxVal = Math.max(10, ...values);
+  const totalMm = values.reduce((sum, v) => sum + v, 0);
+  const avgMm = values.length > 0 ? totalMm / values.length : null;
+  const wettest = outlook.months.reduce<(typeof outlook.months)[number] | null>(
+    (best, cur) =>
+      cur.valueMm !== null && (best === null || (best.valueMm ?? -1) < cur.valueMm) ? cur : best,
+    null,
+  );
+
   const width = 640;
-  const height = 180;
+  const height = 200;
   const padBottom = 28;
-  const padTop = 16;
+  const padTop = 26;
   const plotHeight = height - padTop - padBottom;
   const slotWidth = width / outlook.months.length;
 
   return (
     <div className="chart-card">
+      <div className="soil-gauges" style={{ marginBottom: "var(--space-2)" }}>
+        <div className="soil-gauge-tile">
+          <span className="soil-gauge-k">Bulan Terbasah</span>
+          <strong>
+            {wettest !== null && wettest.valueMm !== null
+              ? `${shortMonthLabel(wettest.month)} (${millimetres(wettest.valueMm)})`
+              : "Belum tersedia"}
+          </strong>
+        </div>
+        <div className="soil-gauge-tile">
+          <span className="soil-gauge-k">Rata-rata / Bulan</span>
+          <strong>{avgMm !== null ? millimetres(Math.round(avgMm)) : "Belum tersedia"}</strong>
+        </div>
+        <div className="soil-gauge-tile">
+          <span className="soil-gauge-k">Total Bulan Terisi</span>
+          <strong>
+            {values.length > 0
+              ? `${millimetres(Math.round(totalMm))} (${values.length} bln)`
+              : "0 bln"}
+          </strong>
+        </div>
+      </div>
+
       <div className="chart-legend" aria-label="Legenda grafik bulanan">
         <span className="legend-item">
           <span className="legend-swatch" data-kind="forecast" /> Prakiraan musiman
@@ -304,10 +356,27 @@ function MonthlyRainfallChart({ outlook }: { readonly outlook: ClimateOutlook })
         role="img"
         aria-label="Grafik curah hujan bulanan 12 bulan"
       >
+        <line
+          x1="8"
+          y1={padTop + plotHeight / 2}
+          x2={width - 8}
+          y2={padTop + plotHeight / 2}
+          stroke="var(--line)"
+          strokeDasharray="4 4"
+          strokeWidth="1"
+        />
+        <line
+          x1="8"
+          y1={padTop + plotHeight}
+          x2={width - 8}
+          y2={padTop + plotHeight}
+          stroke="var(--line-strong)"
+          strokeWidth="1"
+        />
         {outlook.months.map((m, idx) => {
           const x = idx * slotWidth + 8;
           const barWidth = Math.max(12, slotWidth - 16);
-          const label = m.month.slice(5, 7);
+          const label = shortMonthLabel(m.month);
           if (m.valueMm === null) {
             return (
               <g key={m.month}>
@@ -335,14 +404,24 @@ function MonthlyRainfallChart({ outlook }: { readonly outlook: ClimateOutlook })
               </g>
             );
           }
-          const barH = Math.max(2, (m.valueMm / maxVal) * plotHeight);
+          const barH = Math.max(3, (m.valueMm / maxVal) * plotHeight);
           const y = padTop + plotHeight - barH;
           const fill = m.dataClass === "climatology" ? "var(--warn)" : "var(--accent)";
           return (
             <g key={m.month}>
-              <rect x={x} y={y} width={barWidth} height={barH} fill={fill} rx={3}>
+              <rect x={x} y={y} width={barWidth} height={barH} fill={fill} rx={4}>
                 <title>{`${monthLabel(m.month)}: ${millimetres(m.valueMm)} (${dataClassLabel(m.dataClass ?? "")})`}</title>
               </rect>
+              <text
+                x={x + barWidth / 2}
+                y={y - 5}
+                textAnchor="middle"
+                fontSize="10"
+                fontWeight="700"
+                fill="var(--ink)"
+              >
+                {Math.round(m.valueMm)}
+              </text>
               <text
                 x={x + barWidth / 2}
                 y={height - 8}
@@ -457,12 +536,24 @@ function DailyRainfallChart({
 
   return (
     <div className="chart-card">
+      <div className="spread" style={{ marginBottom: "4px", fontSize: "0.78rem" }}>
+        <span className="muted">Puncak harian: {millimetres(Math.round(maxVal))}</span>
+        <span className="muted">{segment.days.length} hari</span>
+      </div>
       <svg
         className="chart-svg"
         viewBox={`0 0 ${width} ${height}`}
         role="img"
         aria-label={`Grafik curah hujan ${segment.band === "daily" ? "harian" : "jangka menengah"}`}
       >
+        <line
+          x1="2"
+          y1={padTop + plotHeight}
+          x2={width - 2}
+          y2={padTop + plotHeight}
+          stroke="var(--line-strong)"
+          strokeWidth="1"
+        />
         {segment.days.map((d, idx) => {
           const x = idx * slotWidth + 2;
           const barWidth = Math.max(3, slotWidth - 4);

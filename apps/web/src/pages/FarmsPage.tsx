@@ -9,6 +9,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api.js";
 import { CustomSelect } from "../components/CustomSelect.js";
 import { FarmOverviewMap } from "../components/FarmOverviewMap.js";
+import { SoilProfileVisual } from "../components/Visuals.js";
 import { IconCompass, IconPlus } from "../icons.js";
 import { Link } from "../router.js";
 import {
@@ -1064,9 +1065,20 @@ function FieldAgronomyForm({ fieldId }: { readonly fieldId: string }) {
       <div className="stack-tight">
         <h4>Kondisi Tanah &amp; Pengairan</h4>
         <p className="muted" style={{ fontSize: "0.875rem" }}>
-          Lengkapi data ini agar evaluasi kecocokan tanaman di halaman Rencana Tanam lebih akurat.
+          Ringkasan visual otomatis berubah saat Anda mengisi data di bawah.
         </p>
       </div>
+      <SoilProfileVisual
+        soilType={soilType || null}
+        drainageClass={drainageClass || null}
+        irrigationAvailability={irrigation || null}
+        soilPh={soilPh.trim() !== "" && Number.isFinite(Number(soilPh)) ? Number(soilPh) : null}
+        elevationM={
+          elevationM.trim() !== "" && Number.isFinite(Number(elevationM))
+            ? Number(elevationM)
+            : null
+        }
+      />
       {error !== null ? <ErrorNotice error={error} /> : null}
       {savedNotice ? (
         <Notice tone="success">Profil tanah dan pengairan berhasil disimpan.</Notice>

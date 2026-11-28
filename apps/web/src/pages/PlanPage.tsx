@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 import { ApiError, api } from "../api.js";
 import { CustomSelect } from "../components/CustomSelect.js";
 import { DatePicker } from "../components/DatePicker.js";
+import { EvaluationVisualSummary, GrowthStageTimeline } from "../components/Visuals.js";
 import { IconCalendar, IconSparkles } from "../icons.js";
 import { Link } from "../router.js";
 import {
@@ -25,9 +26,6 @@ import {
   PageGuide,
   Tag,
   dataClassLabel,
-  dimensionLabel,
-  dimensionStateLabel,
-  gradeLabel,
   irrigationLabel,
   monthLabel,
   notifyDataChanged,
@@ -416,22 +414,7 @@ export function PlanPage() {
               ) : (
                 <div className="panel">
                   <div className="panel-body stack">
-                    <div className="row">
-                      {suitabilityRun.maxAchievableLevel !== null ? (
-                        <Tag tone="accent">{gradeLabel(suitabilityRun.maxAchievableLevel)}</Tag>
-                      ) : (
-                        <Tag>Tingkat rujukan tidak tersedia</Tag>
-                      )}
-                      <Tag>
-                        Pengairan:{" "}
-                        {irrigationLabel(suitabilityRun.fieldSnapshot.irrigationAvailability)}
-                      </Tag>
-                      {suitabilityRun.dimensionCoverage.map((d) => (
-                        <Tag key={d.dimension} tone={d.state === "known" ? "accent" : "warn"}>
-                          {dimensionLabel(d.dimension)}: {dimensionStateLabel(d.state)}
-                        </Tag>
-                      ))}
-                    </div>
+                    <EvaluationVisualSummary run={suitabilityRun} />
 
                     {suitabilityRun.plantingWindows.map((w) => (
                       <div key={w.id} className="panel">
@@ -802,6 +785,23 @@ function PlanTimeline({
       </p>
 
       <Notice tone="info">{position}</Notice>
+
+      <GrowthStageTimeline
+        stages={cycle.stages.map((s) => ({
+          id: s.stageId,
+          name: s.name,
+          startDayOffset: s.startDayOffset,
+          endDayOffset: s.endDayOffset,
+          isCritical: s.isCritical,
+          subtitle: `${s.startDate} s.d. ${s.endDate} • ${stageStatus(s)}`,
+        }))}
+        totalDays={cycle.duration.typical}
+        todayOffset={
+          today() >= cycle.cycleStartDate && today() <= cycle.harvest.latest
+            ? daysBetween(cycle.cycleStartDate, today())
+            : null
+        }
+      />
 
       <div className="table-wrap">
         <table className="table">
