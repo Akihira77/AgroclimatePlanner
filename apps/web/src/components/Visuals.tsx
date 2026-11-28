@@ -37,6 +37,12 @@ function formatNumber(value: number, maxFractionDigits = 1): string {
   });
 }
 
+function capitalizeLabel(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return text;
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
+
 function daysBetween(startIso: string, endIso: string): number {
   const start = Date.parse(startIso);
   const end = Date.parse(endIso);
@@ -420,13 +426,31 @@ export function GrowthStageTimeline({
 }) {
   if (stages.length === 0) return null;
 
-  const computedMax = Math.max(totalDays ?? 0, ...stages.map((s) => s.endDayOffset), 1);
+  const spans = stages.map((s) => Math.max(1, s.endDayOffset - s.startDayOffset + 1));
+  const barTotal = Math.max(
+    spans.reduce((sum, span) => sum + span, 0),
+    1,
+  );
+  const computedMax = Math.max(
+    totalDays ?? 0,
+    barTotal,
+    ...stages.map((s) => s.endDayOffset + 1),
+    1,
+  );
   const showToday =
     typeof todayOffset === "number" &&
     Number.isFinite(todayOffset) &&
     todayOffset >= 0 &&
     todayOffset <= computedMax;
-  const todayPct = showToday ? clamp((todayOffset / computedMax) * 100, 1, 99) : null;
+  const todayPct = showToday ? clamp((todayOffset / barTotal) * 100, 0, 100) : null;
+  const todayPinClass =
+    todayPct === null
+      ? ""
+      : todayPct < 14
+        ? " stage-today-pin-left"
+        : todayPct > 86
+          ? " stage-today-pin-right"
+          : "";
 
   return (
     <div className="stage-timeline" aria-label="Diagram linimasa fase tumbuh tanaman">
@@ -437,23 +461,24 @@ export function GrowthStageTimeline({
           aria-label={`Linimasa ${stages.length} fase tanam selama ${computedMax} hari`}
         >
           {stages.map((stage, idx) => {
-            const span = Math.max(1, stage.endDayOffset - stage.startDayOffset);
-            const widthPct = (span / computedMax) * 100;
+            const span = spans[idx] ?? 1;
+            const widthPct = (span / barTotal) * 100;
             const bg = stage.isCritical ? "#d97706" : STAGE_COLORS[idx % STAGE_COLORS.length];
+            const name = capitalizeLabel(stage.name);
             return (
               <div
                 key={stage.id}
                 className={`stage-seg ${stage.isCritical ? "stage-seg-critical" : ""}`}
                 style={{ width: `${widthPct}%`, backgroundColor: bg }}
-                title={`${stage.name}: Hari ${stage.startDayOffset}–${stage.endDayOffset} (${span} hari)${stage.isCritical ? " • Fase Kritis" : ""}`}
+                title={`${name}: Hari ${stage.startDayOffset}–${stage.endDayOffset} (${span} hari)${stage.isCritical ? " • Fase Kritis" : ""}`}
               >
-                {widthPct >= 14 ? <span>{stage.name}</span> : null}
+                {widthPct >= 9 ? <span>{name}</span> : null}
               </div>
             );
           })}
         </div>
         {todayPct !== null && (
-          <div className="stage-today-pin" style={{ left: `${todayPct}%` }}>
+          <div className={`stage-today-pin${todayPinClass}`} style={{ left: `${todayPct}%` }}>
             <span>Hari ini (H+{todayOffset})</span>
           </div>
         )}
@@ -461,20 +486,28 @@ export function GrowthStageTimeline({
 
       <div className="stage-legend">
         {stages.map((stage, idx) => {
-          const span = Math.max(1, stage.endDayOffset - stage.startDayOffset);
+          const span = spans[idx] ?? 1;
           const color = stage.isCritical ? "#d97706" : STAGE_COLORS[idx % STAGE_COLORS.length];
+          const name = capitalizeLabel(stage.name);
           return (
             <div key={stage.id} className="stage-legend-item">
-              <span className="stage-dot" style={{ backgroundColor: color }} aria-hidden="true" />
-              <div>
-                <strong>{stage.name}</strong>
-                <span className="muted">
-                  {" "}
-                  (H{stage.startDayOffset}–{stage.endDayOffset}, {span} hr)
+              <div className="stage-legend-head">
+                <span className="stage-legend-title">
+                  <span
+                    className="stage-dot"
+                    style={{ backgroundColor: color }}
+                    aria-hidden="true"
+                  />
+                  <strong>{name}</strong>
                 </span>
                 {stage.isCritical ? <Tag tone="warn">Fase Kritis</Tag> : null}
-                {stage.subtitle ? <div className="muted">{stage.subtitle}</div> : null}
               </div>
+              <div className="muted stage-legend-meta">
+                Hari {stage.startDayOffset}–{stage.endDayOffset} ({span} hari)
+              </div>
+              {stage.subtitle ? (
+                <div className="muted stage-legend-sub">{stage.subtitle}</div>
+              ) : null}
             </div>
           );
         })}

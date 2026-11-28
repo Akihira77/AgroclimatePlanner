@@ -459,7 +459,7 @@ export function ActivitiesPage() {
                         <th>Perkiraan Panen</th>
                         <th className="numeric">Total Panen</th>
                         <th>Status</th>
-                        <th />
+                        <th>Aksi</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -472,18 +472,20 @@ export function ActivitiesPage() {
                               <div className="muted">{p.cultivarName}</div>
                             </td>
                             <td>{fieldName}</td>
-                            <td className="numeric">{p.plantedAt}</td>
-                            <td className="numeric muted">
+                            <td className="nowrap">{p.plantedAt}</td>
+                            <td className="nowrap muted">
                               {p.expectedHarvestEarliest} – {p.expectedHarvestLatest}
                             </td>
-                            <td className="numeric">{p.totalYieldKg.toLocaleString("id-ID")} kg</td>
-                            <td>
+                            <td className="numeric nowrap">
+                              {p.totalYieldKg.toLocaleString("id-ID")} kg
+                            </td>
+                            <td className="nowrap">
                               <Tag tone={plantingStatusTone(p.status)}>
                                 {plantingStatusLabel(p.status)}
                               </Tag>
                             </td>
                             <td>
-                              <div className="btn-row">
+                              <div className="action-grid">
                                 <button
                                   type="button"
                                   className="btn btn-quiet btn-sm"
@@ -504,7 +506,7 @@ export function ActivitiesPage() {
                                     </button>
                                     <button
                                       type="button"
-                                      className="btn btn-danger btn-sm"
+                                      className="btn btn-danger-outline btn-sm"
                                       disabled={busy}
                                       onClick={() => void transitionStatus(p.id, "failed")}
                                     >
@@ -512,7 +514,7 @@ export function ActivitiesPage() {
                                     </button>
                                     <button
                                       type="button"
-                                      className="btn btn-danger btn-sm"
+                                      className="btn btn-danger-outline btn-sm"
                                       disabled={busy}
                                       onClick={() => void transitionStatus(p.id, "abandoned")}
                                     >

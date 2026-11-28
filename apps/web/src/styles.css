@@ -2644,3 +2644,111 @@ a {
   font-size: 0.78rem;
   color: var(--ink-muted);
 }
+
+/* ── UI Alignment, Timeline Pin & Climate Filter Polish ── */
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.stage-today-pin-left span {
+  left: 0;
+  transform: none;
+}
+
+.stage-today-pin-right span {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+.stage-legend-item {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.stage-legend-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.stage-legend-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stage-legend-title .stage-dot {
+  margin-top: 0;
+}
+
+.stage-legend-meta {
+  font-size: 0.78rem;
+}
+
+.stage-legend-sub {
+  font-size: 0.8rem;
+}
+
+.btn-danger-outline {
+  background: #fff7f7;
+  color: var(--danger);
+  border: 1px solid #f3c5c2;
+}
+
+.btn-danger-outline:hover {
+  background: var(--danger-tint);
+  border-color: #eba49f;
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(105px, 1fr));
+  gap: 6px;
+  min-width: 224px;
+}
+
+.action-grid .btn {
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.climate-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+
+.climate-filter-field {
+  flex: 1 1 250px;
+  min-width: 0;
+}
+
+.climate-filter-tabs {
+  flex: 0 0 auto;
+}
+
+.climate-filter-tabs .tabs {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+
+.climate-filter-actions {
+  display: flex;
+  align-items: flex-end;
+}
+
+@media (max-width: 640px) {
+  .climate-filter-tabs .tabs {
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+
+  .action-grid {
+    min-width: 196px;
+  }
+}

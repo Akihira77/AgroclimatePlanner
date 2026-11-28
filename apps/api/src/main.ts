@@ -3,6 +3,8 @@ import "reflect-metadata";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
+import { unvalidatedGridRegistry } from "@agroclimate/weather-core";
+
 import { createApplication } from "./app.factory.js";
 import { loadLocalEnv, parseRuntimeConfig, readEnvironment } from "./config/runtime-config.js";
 
@@ -13,7 +15,10 @@ if (existsSync(localEnv)) loadLocalEnv(localEnv);
 
 async function bootstrap(): Promise<void> {
   const config = parseRuntimeConfig(readEnvironment());
-  const app = await createApplication({ config });
+  const app = await createApplication({
+    config,
+    ...(config.nodeEnv !== "production" ? { gridRegistry: unvalidatedGridRegistry } : {}),
+  });
   await app.listen(config.port);
   console.log(`[api] listening on ${config.port}`);
 }

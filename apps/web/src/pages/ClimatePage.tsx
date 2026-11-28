@@ -21,8 +21,8 @@ import {
 } from "../ui.js";
 import { useAsync } from "../useAsync.js";
 
-const SYNTHETIC_PROVIDER = "synthetic";
-const SYNTHETIC_MODEL = "synthetic_1deg_20x20";
+const DEFAULT_PROVIDER = "open-meteo";
+const DEFAULT_MODEL = "ecmwf_ifs025";
 
 type Basis = "monthly" | "daily";
 
@@ -30,8 +30,8 @@ export function ClimatePage() {
   const fields = useAsync("climate-fields", () => api.listFields());
 
   const [fieldId, setFieldId] = useState("");
-  const [provider, setProvider] = useState(SYNTHETIC_PROVIDER);
-  const [model, setModel] = useState(SYNTHETIC_MODEL);
+  const [provider, setProvider] = useState(DEFAULT_PROVIDER);
+  const [model, setModel] = useState(DEFAULT_MODEL);
   const [basis, setBasis] = useState<Basis>("monthly");
   const [request, setRequest] = useState<{
     fieldId: string;
@@ -44,7 +44,7 @@ export function ClimatePage() {
 
   useEffect(() => {
     if (request === null && selected !== undefined) {
-      setRequest({ fieldId: selected.id, provider: SYNTHETIC_PROVIDER, model: SYNTHETIC_MODEL });
+      setRequest({ fieldId: selected.id, provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL });
     }
   }, [request, selected]);
 
@@ -79,8 +79,9 @@ export function ClimatePage() {
 
       <Notice tone="info">
         <span>
-          <strong>Info Sumber Data:</strong> Grafik di bawah menggunakan data cuaca simulasi bawaan
-          agar Anda dapat langsung menguji perencanaan lahan.
+          <strong>Info Sumber Data:</strong> Grafik di bawah menggunakan grid{" "}
+          <code>open-meteo / ecmwf_ifs025</code> (<code>unvalidated</code>, <code>OPEN-18</code>)
+          dengan data referensi iklim lokal Jawa Barat untuk simulasi perencanaan.
         </span>
       </Notice>
 
@@ -102,8 +103,8 @@ export function ClimatePage() {
             }}
           >
             <div className="panel-body stack">
-              <div className="form-grid">
-                <div className="field">
+              <div className="climate-filter-bar">
+                <div className="field climate-filter-field">
                   <FieldLabel htmlFor="climate-field" label="Pilih Lahan" />
                   <CustomSelect
                     id="climate-field"
@@ -123,7 +124,7 @@ export function ClimatePage() {
                   />
                 </div>
 
-                <div className="field">
+                <div className="field climate-filter-tabs">
                   <label>Rentang Waktu</label>
                   <div className="tabs" role="tablist" aria-label="Pilih rentang waktu iklim">
                     <button
@@ -147,7 +148,7 @@ export function ClimatePage() {
                   </div>
                 </div>
 
-                <div className="form-actions">
+                <div className="climate-filter-actions">
                   <button className="btn btn-primary" type="submit">
                     Muat Ulang Data
                   </button>

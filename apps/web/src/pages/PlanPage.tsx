@@ -752,7 +752,7 @@ function CropPlan({
           <div className="panel-body stack">
             <div className="section-head">
               <h3>{cultivar.name}</h3>
-              <Tag>Panduan v{version.ruleVersion}</Tag>
+              <Tag>Panduan Aktif · {version.ruleVersion.replace(/^agronomic-matrix-/, "")}</Tag>
             </div>
             <PlanTimeline profileVersionId={version.id} cultivarName={cultivar.name} date={date} />
           </div>
@@ -827,7 +827,7 @@ function PlanTimeline({
             {cycle.stages.map((stage) => (
               <tr key={stage.stageId}>
                 <td>
-                  {stage.name}
+                  {stage.name.charAt(0).toUpperCase() + stage.name.slice(1)}
                   {stage.isCritical ? (
                     <>
                       {" "}
@@ -835,13 +835,18 @@ function PlanTimeline({
                     </>
                   ) : null}
                 </td>
-                <td className="numeric">
+                <td className="numeric nowrap">
                   {stage.startDayOffset}–{stage.endDayOffset}
                 </td>
-                <td className="numeric">{stage.startDate}</td>
-                <td className="numeric">
+                <td className="nowrap">{stage.startDate}</td>
+                <td className="nowrap">
                   {stage.endDate}
-                  {stage.clipped ? <Tag>Disesuaikan</Tag> : null}
+                  {stage.clipped ? (
+                    <>
+                      {" "}
+                      <Tag>Disesuaikan</Tag>
+                    </>
+                  ) : null}
                 </td>
                 <td className="muted">{stageStatus(stage)}</td>
               </tr>
