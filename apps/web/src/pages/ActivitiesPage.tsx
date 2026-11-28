@@ -547,7 +547,7 @@ export function ActivitiesPage() {
                       <input
                         id="harv-kg"
                         type="number"
-                        step="0.1"
+                        step="any"
                         min="0"
                         required
                         placeholder="Contoh: 450"
@@ -661,7 +661,7 @@ export function ActivitiesPage() {
                     <input
                       id="obs-val"
                       type="number"
-                      step="0.1"
+                      step="any"
                       required
                       placeholder="Contoh: 18.5"
                       value={obsValue}

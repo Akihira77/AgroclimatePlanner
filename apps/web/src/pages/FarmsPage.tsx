@@ -740,10 +740,9 @@ export function FarmsPage() {
                       <input
                         id="field-lat"
                         type="number"
-                        step="0.0001"
+                        step="any"
                         min="-90"
                         max="90"
-                        required
                         value={lat}
                         onChange={(event) => setLat(event.target.value)}
                       />
@@ -753,10 +752,9 @@ export function FarmsPage() {
                       <input
                         id="field-lon"
                         type="number"
-                        step="0.0001"
+                        step="any"
                         min="-180"
                         max="180"
-                        required
                         value={lon}
                         onChange={(event) => setLon(event.target.value)}
                       />
@@ -1107,7 +1105,7 @@ function FieldAgronomyForm({ fieldId }: { readonly fieldId: string }) {
           <input
             id="agro-ph"
             type="number"
-            step="0.1"
+            step="any"
             min="3"
             max="10"
             placeholder="Contoh: 6.3"
