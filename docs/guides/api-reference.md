@@ -362,7 +362,19 @@ Each of these is an absence, not an oversight:
   file handle, so there is no per-object permission to get wrong.
 - **No graph, no RPC, no websocket.** JSON over HTTP.
 
-## 9. Keeping this page true
+## 9. Newly added routes (Phase 3.6–3.7, Phase 6, Phase 8)
+
+All routes below require a valid session cookie (`AuthGuard`); state-changing `POST`/`PATCH` routes also require trusted `Origin` and `X-CSRF-Token`:
+
+| Method & Path | Controller | Purpose |
+| --- | --- | --- |
+| `POST /v1/plantings`, `GET /v1/plantings`, `GET /v1/plantings/:plantingId`, `PATCH /v1/plantings/:plantingId` | `ActivityController` | Create, list, read, and transition (`active` → `harvested` \| `failed` \| `abandoned`) field plantings (`OPEN-09`). |
+| `POST /v1/plantings/:plantingId/harvests`, `GET /v1/plantings/:plantingId/harvests` | `ActivityController` | Record and list harvests with summed `meta.totalYieldKg`. |
+| `POST /v1/fields/:fieldId/observations`, `GET /v1/fields/:fieldId/observations` | `ActivityController` | Record and list local field observations (`rainfall`, `soil_moisture`, `temperature`, `note`). |
+| `POST /v1/fields/:fieldId/evaluate`, `GET /v1/fields/:fieldId/suitability`, `GET /v1/planting-windows` | `AgronomyController` | Run deterministic suitability + window generation with atomic supersession, read latest field suitability, and filter active planting windows. |
+| `POST /v1/fields/:fieldId/briefing`, `GET /v1/fields/:fieldId/briefing` | `BriefingController` | Generate/cache or read latest `OPEN-11` structured `ClimateBriefing` grounded in `evidenceSegmentIds` with deterministic fallback. |
+
+## 10. Keeping this page true
 
 The route count is mechanical:
 

@@ -1,13 +1,12 @@
 # Agroclimate Planner — Implementation Master Roadmap
 
-**Document Type:** Master Implementation Roadmap  
-**Version:** 1.1  
-**Status:** Active  
-**Last Reconciled:** 2026-11-27 (after `9908dd3`)  
+**Document Type:** Master Implementation Roadmap
+**Version:** 1.2
+**Status:** Active
+**Last Reconciled:** 2026-11-28 (Milestones A–E verified)
 **Repository:** `Akihira77/AgroclimatePlanner`  
 **Baseline Branch:** `master`  
-**Baseline Commit:** `9908dd3` — `feat(climate): materialise seasonal outlook from SEAS5`  
-**Reconciliation note:** v1.0 was written against `973aca9`, before Phase 5.7D landed. This revision marks 5.7D `VERIFIED`, corrects the Phase 4 adapter and ingestion checklists against the code that 5.4–5.6 actually shipped, and reorders the execution queue to match PRD §15.
+**Reconciliation note:** v1.2 reconciles the roadmap against Milestones A–E (`81d2467`, `a948e1a`, `89a4063`, `c84dea0`, and Milestone E): settled `OPEN-09`, `OPEN-11`, `OPEN-20`, `OPEN-21` (`irrigationAvailability`), conditional `OPEN-18` (`ADR-008` `nearest-centre`, `ecmwf_ifs025` `unvalidated`), Phase 3.6–3.7 activity APIs, Phase 6 suitability/window engine + persistence, Phase 7 full frontend + live E2E, Phase 8 grounded AI briefing, and Phase 9 structured API logs / forecast verification metrics / Dockerfiles / CI. External and owner-gated items remain `PARTIAL` or `BLOCKED` where noted.
 **Companion Documents:**
 - `docs/PRD.md` — Product Requirements Document
 - `docs/PROJECT.md` — Product definition and scope
@@ -162,14 +161,14 @@ Roadmap mempertahankan pembagian fase utama proyek.
 |---|---|---|---|
 | 0 | Research & Data Validation | `VERIFIED` | Data sources and agronomic references |
 | 1 | Product Requirements & Architecture | `VERIFIED` | Product and technical contracts |
-| 2 | Monorepo & Database Foundation | `PARTIAL`* | Secure application foundation |
-| 3 | Domain Model & Core Administration | `PARTIAL` | Identity, farms, fields, crop catalog |
-| 4 | Weather Data Ingestion | `PARTIAL` | Reliable normalized weather data |
-| 5 | Climate Data Foundation | `PARTIAL` | Rolling 12-month climate outlook |
-| 6 | Agronomic Suitability & Planting Window Engine | `PARTIAL` | Explainable agricultural recommendations |
-| 7 | Frontend & Agricultural Calendar | `PARTIAL` | Complete user-facing application |
-| 8 | AI Agricultural Analyst | `NOT_STARTED` | Evidence-grounded agricultural explanations |
-| 9 | Monitoring, Verification & Production Readiness | `PARTIAL` | Reliable production operation |
+| 2 | Monorepo & Database Foundation | `PARTIAL`* | Secure application foundation (`OPEN-04` deletion, `OPEN-28` signed context open) |
+| 3 | Domain Model & Core Administration | `PARTIAL` | Identity, farms, fields, crop catalog, plantings/harvests/observations (`OPEN-17` point fields, `OPEN-21` soil/drainage closed vocabularies open) |
+| 4 | Weather Data Ingestion | `PARTIAL` | Normalized weather ingestion & `ADR-008` grid selection (`OPEN-02` BMKG, `OPEN-03` Open-Meteo commercial plan, `OPEN-18` grade A+B production validation open) |
+| 5 | Climate Data Foundation | `PARTIAL` | Rolling 12-month climate outlook (`OPEN-05` raw payload retention, `OPEN-27` post-ingestion worker fan-out deferred) |
+| 6 | Agronomic Suitability & Planting Window Engine | `VERIFIED` | Explainable deterministic suitability, stage alignment, window generator, and atomic supersession persistence |
+| 7 | Frontend & Agricultural Calendar | `VERIFIED` | Complete Indonesian web app (farms/fields, catalog, climate charts, calendar, suitability, AI briefing, `/aktivitas`, responsive mobile + live E2E) |
+| 8 | AI Agricultural Analyst | `VERIFIED` | `OPEN-11` structured `ClimateBriefing`, segment-ref grounding validator, deterministic fallback, DB cache/supersession, and API |
+| 9 | Monitoring, Verification & Production Readiness | `PARTIAL` | Structured JSON error logs, pure forecast verification metrics, Dockerfiles, and CI shipped; production infra deployment/restore drill external |
 
 \* Phase 2 memiliki implementasi database dan security foundation yang substansial. Namun, keputusan dan blocker untuk subsistem lanjutan masih ada. Status keseluruhan tidak boleh dianggap selesai untuk seluruh kebutuhan produk hanya karena migration foundation telah diverifikasi.
 

@@ -267,11 +267,13 @@ describe("exception filter logging", () => {
     const { lines, logger } = recordLog();
     run(new Error("boom"), DEFAULT_REQUEST_ID, logger);
 
-    const line = lines[0];
-    assert.equal(line.includes(`requestId=${DEFAULT_REQUEST_ID}`), true);
-    assert.equal(line.includes("status=500"), true);
-    assert.equal(line.includes("code=INTERNAL_ERROR"), true);
-    assert.equal(line.includes("exception=Error"), true);
+    const parsed = JSON.parse(lines[0]);
+    assert.equal(parsed.event, "api_error");
+    assert.equal(parsed.requestId, DEFAULT_REQUEST_ID);
+    assert.equal(parsed.status, 500);
+    assert.equal(parsed.code, "INTERNAL_ERROR");
+    assert.equal(parsed.exception, "Error");
+    assert.equal(parsed.env, "test");
   });
 
   it("does not trust the exception name, which is mutable", () => {
@@ -284,8 +286,9 @@ describe("exception filter logging", () => {
     assert.equal(lines.length, 1);
     assert.equal(lines[0].includes("SECRET_TOKEN"), false);
     assert.equal(lines[0].includes("\n"), false);
-    assert.equal(lines[0].includes("status=200"), false);
-    assert.equal(lines[0].includes("exception=Error"), true);
+    const parsed = JSON.parse(lines[0]);
+    assert.equal(parsed.status, 500);
+    assert.equal(parsed.exception, "Error");
   });
 
   it("labels a classified refusal by category, not by class name", () => {
@@ -293,7 +296,8 @@ describe("exception filter logging", () => {
     run(new ServiceUnavailableException(), DEFAULT_REQUEST_ID, logger);
 
     assert.equal(lines.length, 1);
-    assert.equal(lines[0].includes("exception=HttpException"), true);
+    const parsed = JSON.parse(lines[0]);
+    assert.equal(parsed.exception, "HttpException");
     assert.equal(lines[0].includes("ServiceUnavailableException"), false);
   });
 
@@ -302,7 +306,8 @@ describe("exception filter logging", () => {
     run("a thrown string with hunter2 in it", DEFAULT_REQUEST_ID, logger);
 
     assert.equal(lines.length, 1);
-    assert.equal(lines[0].includes("exception=Unknown"), true);
+    const parsed = JSON.parse(lines[0]);
+    assert.equal(parsed.exception, "Unknown");
     assert.equal(lines[0].includes("hunter2"), false);
   });
 

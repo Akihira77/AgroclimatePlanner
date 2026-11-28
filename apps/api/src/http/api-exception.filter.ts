@@ -59,13 +59,6 @@ const RESOURCE_NOT_FOUND = notFoundErrorCodeSchema.parse("RESOURCE_NOT_FOUND");
  */
 const PASS_THROUGH_4XX = new Set([405, 406, 413, 415]);
 
-/**
- * A single log line's worth of a failure. Deliberately a fixed field list rather
- * than free text: the response is sanitised, and the log must not become the leak
- * path it was cleaned out of the response.
- */
-type LogField = string | number;
-
 /** The only logger method this filter uses, so a test can pass a recorder. */
 interface MinimalLogger {
   error(message: string): void;
@@ -140,7 +133,8 @@ export class ApiExceptionFilter implements ExceptionFilter {
     resolved: Resolved,
     exception: unknown,
   ): void {
-    const fields: Record<string, LogField> = {
+    const payload = {
+      event: "api_error",
       requestId,
       status,
       code: resolved.code,
@@ -148,11 +142,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
       env: this.config.nodeEnv,
     };
 
-    const line = Object.entries(fields)
-      .map(([key, value]) => `${key}=${String(value)}`)
-      .join(" ");
-
-    this.logger.error(line);
+    this.logger.error(JSON.stringify(payload));
   }
 
   private resolve(exception: unknown): Resolved {

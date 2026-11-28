@@ -1,6 +1,6 @@
 # Implementation Status
 
-Last updated: 2026-11-23.
+Last updated: 2026-11-28.
 
 ## Phase 0 — Research & validation — **DONE (revised after adversarial review)**
 
@@ -2009,3 +2009,13 @@ the decision records that unblocked it.
 | Counted in the database | 4 crops, 4 cultivars, 4 profile versions (all `published`), 14 growth stages, 12 constraints, 5 source refs |
 | Not claimed | Nothing evaluates a field. `OPEN-21` still decides how `soil_type`, `drainage_class` and `irrigation_availability` become a snapshot, and `OPEN-27` still blocks the recompute fan-out. A seeded catalogue is a readable rulebook, not a recommendation |
 | The interface copy that was wrong | The Katalog empty state said v1 coverage was waiting for `OPEN-20`. It now names the command. The empty state still exists, because an installation that skips the seed is a legitimate state |
+
+### Autonomous Milestones A–E Reconciled — 2026-11-28
+
+| Milestone | Scope | Verification Evidence |
+|---|---|---|
+| Milestone A (`81d2467`) | Settled `OPEN-09` & `OPEN-21` (`irrigationAvailability` enum + DB CHECK + golden hash vectors), fixed `partition.ts` `coveragePercent` guard, pure window generator (`windows.ts`), Phase 3.6–3.7 `/v1/plantings`, `/v1/plantings/:id/harvests`, `/v1/fields/:id/observations` | Unit, DB integration, RLS, and API integration suites green |
+| Milestone B (`a948e1a`) | `OPEN-18` / `ADR-008` `nearest-centre` cell selection + `unvalidatedGridRegistry` (`ecmwf_ifs025`), Phase 6 suitability/window DB persistence & `/v1/fields/:id/evaluate`, `/v1/fields/:id/suitability`, `/v1/planting-windows` | Unit, DB integration, RLS, and API integration suites green |
+| Milestone C (`89a4063`) | Phase 8 `OPEN-11` structured `ClimateBriefing`, segment-ref grounding validator, deterministic fallback, `app.ai_briefings` supersession persistence, `/v1/fields/:id/briefing` | `packages/contracts` (461), `packages/agronomy` (89), `packages/database` briefings + RLS, and `apps/api` integration green |
+| Milestone D (`c84dea0`) | Phase 7 complete frontend (`apps/web`): SVG rainfall charts, `insufficient_data` catalog badges, field detail panel, `/aktivitas`, `/rencana` (evaluation, calendar, opportunities, AI briefing), mobile responsive fixes | `tsc --noEmit`, `eslint`, `vite build`, `prettier`, and live browser E2E on `http://127.0.0.1:5179` (all 7 steps) green |
+| Milestone E | Phase 9 structured JSON API error logs, pure forecast verification metrics (`packages/climate-core`), multi-stage Dockerfiles (`api`, `worker`, `web` + nginx), GitHub Actions CI, and roadmap/docs reconciliation | Full monorepo sweep green across all 8 workspaces |

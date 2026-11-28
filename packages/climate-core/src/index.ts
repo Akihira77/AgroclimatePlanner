@@ -84,3 +84,13 @@ export {
   type OutlookReadOutcome,
   type StoredOutlookMonth,
 } from "./outlook-read.js";
+export {
+  DEFAULT_MIN_COVERAGE_RATIO,
+  DEFAULT_MIN_SAMPLE_SIZE,
+  VerificationInputError,
+  evaluateForecastVerification,
+  type ForecastVerificationMetrics,
+  type VerificationOptions,
+  type VerificationOutcome,
+  type VerificationPair,
+} from "./verification.js";

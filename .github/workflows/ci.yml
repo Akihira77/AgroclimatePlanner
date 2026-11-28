@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  quality-and-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm --filter @agroclimate/contracts test
+      - run: pnpm --filter @agroclimate/agronomy test
+      - run: pnpm --filter @agroclimate/climate-core test
+      - run: pnpm --filter @agroclimate/weather-core test
+      - run: pnpm --filter @agroclimate/database test
+      - run: pnpm --filter @agroclimate/api test
+      - run: pnpm --filter @agroclimate/worker test
+
+  database-and-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgis/postgis:18-3.6
+        env:
+          POSTGRES_USER: agroclimate
+          POSTGRES_PASSWORD: agroclimate-dev
+          POSTGRES_DB: agroclimate
+        ports:
+          - 5442:5432
+        options: >-
+          --health-cmd="pg_isready -U agroclimate -d agroclimate"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      NODE_ENV: development
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: 5442
+      POSTGRES_DB: agroclimate
+      APP_API_PASSWORD: app-api-dev
+      APP_AUTH_PASSWORD: app_auth_dev
+      APP_SYSTEM_PASSWORD: app-system-dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm --filter @agroclimate/database db:bootstrap
+      - run: pnpm --filter @agroclimate/database db:migrate
+      - run: pnpm --filter @agroclimate/database db:seed:catalog
+      - run: pnpm --filter @agroclimate/database db:verify
+      - run: pnpm --filter @agroclimate/database test:schema
+      - run: pnpm --filter @agroclimate/database test:rls
+      - run: pnpm --filter @agroclimate/database test:integration
+      - run: pnpm --filter @agroclimate/api test:integration
