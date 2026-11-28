@@ -241,6 +241,13 @@ export const api = {
     forgetCsrfToken();
   },
 
+  async changePassword(currentPassword: string, newPassword: string): Promise<void> {
+    await request<void>("/auth/password", {
+      method: "POST",
+      body: { currentPassword, newPassword },
+    });
+  },
+
   async me(): Promise<RegisteredUser> {
     const body = await request<{ data: RegisteredUser }>("/auth/me");
     return body.data;

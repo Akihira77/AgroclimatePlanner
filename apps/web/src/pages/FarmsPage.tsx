@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 
 import { api } from "../api.js";
 import { CustomSelect } from "../components/CustomSelect.js";
+import { FarmOverviewMap } from "../components/FarmOverviewMap.js";
 import { IconCompass, IconPlus } from "../icons.js";
 import { Link } from "../router.js";
 import {
@@ -142,6 +143,8 @@ export function FarmsPage() {
   const [vertices, setVertices] = useState<readonly SketchPoint[]>([]);
   const [dragging, setDragging] = useState<number | null>(null);
   const [polygonText, setPolygonText] = useState("");
+  const [showOsmBasemap, setShowOsmBasemap] = useState(false);
+  const [osmTileFailed, setOsmTileFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
@@ -583,6 +586,15 @@ export function FarmsPage() {
           </div>
         )}
 
+        {selected !== undefined && selectedFields.length > 0 ? (
+          <FarmOverviewMap
+            farmName={selected.name}
+            fields={selectedFields}
+            selectedFieldId={detailFieldId}
+            onSelectField={(id) => setDetailFieldId(id)}
+          />
+        ) : null}
+
         {(() => {
           const detailField = selectedFields.find((f) => f.id === detailFieldId);
           if (detailField === undefined) return null;
@@ -818,6 +830,19 @@ export function FarmsPage() {
                   >
                     Ulangi sketsa
                   </button>
+                  <button
+                    type="button"
+                    className="btn btn-quiet btn-sm"
+                    aria-pressed={showOsmBasemap}
+                    onClick={() => {
+                      setOsmTileFailed(false);
+                      setShowOsmBasemap((prev) => !prev);
+                    }}
+                  >
+                    {showOsmBasemap
+                      ? "Sembunyikan latar peta"
+                      : "Tampilkan latar peta (OpenStreetMap)"}
+                  </button>
                 </div>
 
                 <div className="sketch-wrap">
@@ -835,6 +860,19 @@ export function FarmsPage() {
                       height={PLOT_SIZE}
                       onPointerDown={addVertex}
                     />
+                    {showOsmBasemap && !osmTileFailed ? (
+                      <image
+                        href={osmTileUrl(Number(lat), Number(lon), spanKm)}
+                        x={PLOT_MIN}
+                        y={PLOT_MIN}
+                        width={PLOT_SIZE}
+                        height={PLOT_SIZE}
+                        preserveAspectRatio="xMidYMid slice"
+                        opacity={0.48}
+                        pointerEvents="none"
+                        onError={() => setOsmTileFailed(true)}
+                      />
+                    ) : null}
                     {[0.25, 0.5, 0.75].map((ratio) => {
                       const pos = plot(ratio);
                       return (
@@ -1293,6 +1331,26 @@ function computeEdgeLabels(
     });
   }
   return labels;
+}
+
+function osmTileUrl(latDeg: number, lonDeg: number, spanText: string): string {
+  const safeLat = Number.isFinite(latDeg) ? Math.max(-85, Math.min(85, latDeg)) : -6.322;
+  const safeLon = Number.isFinite(lonDeg) ? Math.max(-180, Math.min(180, lonDeg)) : 107.752;
+  const span = Number(spanText);
+  const zoom = !Number.isFinite(span)
+    ? 15
+    : span <= 0.5
+      ? 16
+      : span <= 1.5
+        ? 15
+        : span <= 3
+          ? 14
+          : 13;
+  const n = 2 ** zoom;
+  const x = Math.floor(((safeLon + 180) / 360) * n);
+  const latRad = (safeLat * Math.PI) / 180;
+  const y = Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n);
+  return `https://tile.openstreetmap.org/${zoom}/${Math.max(0, Math.min(n - 1, x))}/${Math.max(0, Math.min(n - 1, y))}.png`;
 }
 
 function countLabel(fields: readonly { farmId: string }[], farmId: string): string {

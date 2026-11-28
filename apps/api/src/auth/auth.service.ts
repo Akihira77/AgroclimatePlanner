@@ -3,7 +3,9 @@ import { randomBytes } from "node:crypto";
 import { Inject, Injectable, ServiceUnavailableException } from "@nestjs/common";
 import type { PrismaClient } from "@agroclimate/database";
 import {
+  changeUserPassword,
   findAuthUserByEmail,
+  findAuthUserById,
   insertSession,
   readSessionCsrfToken,
   resolveSession,
@@ -176,6 +178,26 @@ export class AuthService {
    */
   async deleteAccount(userId: string): Promise<boolean> {
     return this.withDatabaseErrors(() => softDeleteAccount(this.client, userId));
+  }
+
+  /**
+   * Verifies `currentPassword` and updates the user's password hash (`AUTH-14`),
+   * revoking all other active sessions while preserving `sessionId`.
+   */
+  async changePassword(
+    userId: string,
+    sessionId: string,
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<boolean> {
+    return this.withDatabaseErrors(async () => {
+      const record = await findAuthUserById(this.client, userId);
+      const verified = await this.verify(record?.passwordHash ?? null, currentPassword);
+      if (record === null || !verified) return false;
+
+      const nextHash = await this.hasher.hashPassword(newPassword);
+      return changeUserPassword(this.client, userId, nextHash, sessionId);
+    });
   }
 
   private async verify(storedHash: string | null, password: string): Promise<boolean> {

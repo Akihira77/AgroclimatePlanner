@@ -1,15 +1,15 @@
 # AGROCLIMATE PLANNER
 ## Product Requirements Document (PRD)
 
-**Version:** 1.1 — Product Baseline & Implementation Reconciliation  
-**Document date:** 27 November 2026  
-**Repository:** [Akihira77/AgroclimatePlanner](https://github.com/Akihira77/AgroclimatePlanner)  
-**Verified repository baseline:** `9908dd3` (`feat(climate): materialise seasonal outlook from SEAS5`)  
-**Reconciled:** 2026-11-27 — v1.0 was written against `973aca9`, before Phase 5.7D was committed. §4.6, §10, §13 and §17 record the shipped 5.7D and, after it, the 0–45 day read model `GET /v1/climate/forecast`; what remains is production provider validation, not a missing read path.
+**Version:** 1.2 — Final Unblocked Product Baseline & Reconciliation
+**Document date:** 28 November 2026
+**Repository:** [Akihira77/AgroclimatePlanner](https://github.com/Akihira77/AgroclimatePlanner)
+**Verified repository baseline:** Milestones A–G (`68d16ad`, `33f9408`, and Milestone G closure)
+**Reconciled:** 2026-11-28 — Reconciled against all shipped capabilities across Phases 0–9: `AUTH-14` change password, `OPEN-04` account deletion, `OPEN-17` polygon-only fields + overview map + optional OSM basemap, `OPEN-21` soil/drainage/irrigation profile editor, `OPEN-20` crop catalog, `OPEN-09` plantings/harvests/observations, Phase 6 deterministic suitability + window persistence, Phase 7 full Indonesian web app, Phase 8 `OPEN-11` grounded AI briefing, and Phase 9 operational status/logging/metrics/Docker/CI. Remaining items are strictly external/deferred gates (`OPEN-02`, `OPEN-03`, `OPEN-05`, `OPEN-18`, `OPEN-27` worker fan-out, `OPEN-28`, `AUTH-13` email recovery, and hosted production infrastructure).
 **Product category:** Agricultural Weather & Climate Planning Platform  
 **Primary market:** Indonesia  
 **Primary language:** Bahasa Indonesia  
-**Product status:** Under development
+**Product status:** Core V1 Complete (awaiting external provider/licensing & production hosting gates)
 
 ---
 
@@ -159,7 +159,7 @@ Priority:
 
 ## 4.1 Identity & Access Management
 
-**Status repository: Implemented, with documentation reconciliation still outstanding.**
+**Status repository: Implemented & verified (`AUTH-01`–`AUTH-12`, `AUTH-14` change password, `AUTH-15` `OPEN-04` account deletion); `AUTH-13` (email-based account recovery) remains deferred until email/SMTP transport is provisioned.**
 
 ### Functional requirements
 
@@ -193,16 +193,15 @@ Priority:
 - CSRF synchronizer token.
 - Origin validation.
 - Rate limiting.
+- `POST /v1/auth/password` (`AUTH-14` change password, revokes other active sessions).
+- `DELETE /v1/auth/account` (`AUTH-15` / `OPEN-04` soft-delete + 30-day grace anonymization).
 - Dedicated `app_auth` database role.
 - Tenant identity boundary.
 - Real-role database integration tests.
 
 ### Remaining
 
-- Account recovery.
-- Password reset.
-- Account deletion policy.
-- Final authentication documentation reconciliation.
+- Account recovery (`AUTH-13` — deferred until email/SMTP infrastructure is configured).
 
 ---
 
@@ -245,10 +244,7 @@ Priority:
 
 ### Remaining
 
-- Farm dashboard.
-- Map overview.
-- Aggregate statistics.
-- UI implementation.
+- Aggregate farm summary statistics and overview map are implemented in `apps/web` (`DashboardPage` + `FarmOverviewMap`); no unblocked backend gaps remain.
 
 ---
 
@@ -287,37 +283,32 @@ Setiap field dapat memiliki karakteristik yang berbeda walaupun berada di farm y
 - `GET /v1/fields`
 - `GET /v1/fields/:fieldId`
 - `PATCH /v1/fields/:fieldId`
+- `GET /v1/fields/:fieldId/agronomy` & `PATCH /v1/fields/:fieldId/agronomy` (`OPEN-21` soil, drainage, irrigation, pH, elevation, water source).
 - `DELETE /v1/fields/:fieldId`
 
 ### Implemented technical capabilities
 
-- Polygon GeoJSON validation.
-- PostGIS geometry.
-- Automatic area calculation.
-- Tenant-scoped access.
-- Database-level ownership constraints.
-- Geometry response validation.
-- Stored geometry consistency checks.
+- Polygon GeoJSON validation (`OPEN-17`: `POLYGON`/`MULTIPOLYGON` only in v1).
+- PostGIS geometry & automatic area calculation.
+- Tenant-scoped access & database-level ownership constraints.
+- Closed nullable agronomic vocabularies (`soil_type`, `drainage_class`, `irrigation_availability`) + UI editor (`FarmsPage`), farm overview map (`FarmOverviewMap`), editable polygon sketch with live area/perimeter measurements, layman location picker, and optional OSM tile basemap toggle.
 
-### Partial / Missing
+### Remaining / External Gates
 
-- Soil attributes are represented in the broader domain model but are not yet exposed through a complete field editing workflow.
-- Irrigation and drainage semantics remain subject to unresolved domain decisions.
-- Elevation enrichment.
-- Field-to-provider-grid production mapping.
-- Frontend map and field editor.
+- Elevation auto-enrichment (optional convenience; manual `elevationM` entry shipped).
+- Field-to-provider-grid production mapping (`OPEN-18` grade A+B multi-coordinate validation).
 
-### Important open decisions
+### Settled & Open Decisions
 
-- `OPEN-17`: Point-shaped field handling. V1 does not require point fields.
-- `OPEN-21`: Mapping of field text vocabularies to agronomic snapshot values.
-- `OPEN-18`: Production grid selection and field-to-cell mapping.
+- `OPEN-17` (**Settled**): Disallow `POINT` fields in v1; defer to v2.
+- `OPEN-21` (**Settled**): Closed nullable vocabularies + `irrigationAvailability` enum.
+- `OPEN-18` (**Conditionally Approved**): `ADR-008` `nearest-centre` implemented; `ecmwf_ifs025` stays `unvalidated` pending grade A+B evidence.
 
 ---
 
 ## 4.4 Crop Catalog & Agronomic Profiles
 
-**Status repository: Database schema and domain contracts exist; functional catalog and agronomic engine are not implemented.**
+**Status repository: Implemented & verified (`OPEN-20` seed shipped for Padi, Jagung, Kedelai, Cabai; read APIs, version immutability triggers, cycle projection, and UI catalog shipped).**
 
 ### Functional requirements
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  changePasswordRequestSchema,
   countCodePoints,
   emailSchema,
   hasUnpairedSurrogate,
@@ -184,6 +185,45 @@ describe("loginRequestSchema", () => {
         email: "a@b.example",
         password: "correct horse battery staple",
         userId: "01930000-0000-7000-8000-0000000000aa",
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("changePasswordRequestSchema", () => {
+  it("accepts distinct valid passwords", () => {
+    const parsed = changePasswordRequestSchema.parse({
+      currentPassword: "old-password-123",
+      newPassword: "new-password-456",
+    });
+    expect(parsed.currentPassword).toBe("old-password-123");
+    expect(parsed.newPassword).toBe("new-password-456");
+  });
+
+  it("rejects short new passwords, identical passwords, unpaired surrogates, and unknown keys", () => {
+    expect(
+      changePasswordRequestSchema.safeParse({
+        currentPassword: "old-password-123",
+        newPassword: "short",
+      }).success,
+    ).toBe(false);
+    expect(
+      changePasswordRequestSchema.safeParse({
+        currentPassword: "same-password-123",
+        newPassword: "same-password-123",
+      }).success,
+    ).toBe(false);
+    expect(
+      changePasswordRequestSchema.safeParse({
+        currentPassword: "old-password-123",
+        newPassword: "new-password\uD800",
+      }).success,
+    ).toBe(false);
+    expect(
+      changePasswordRequestSchema.safeParse({
+        currentPassword: "old-password-123",
+        newPassword: "new-password-456",
+        extra: true,
       }).success,
     ).toBe(false);
   });

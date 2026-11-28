@@ -102,6 +102,47 @@ export async function findAuthUserByEmail(
   return rows[0] ?? null;
 }
 
+/** Looks up an active user by id through `app_auth` for password verification. */
+export async function findAuthUserById(
+  client: PrismaClient,
+  userId: string,
+): Promise<AuthUserRecord | null> {
+  const rows = await client.$queryRaw<AuthUserRecord[]>`
+    SELECT id::text AS id,
+           email,
+           password_hash AS "passwordHash",
+           role,
+           locale,
+           timezone
+      FROM app.users
+     WHERE id = ${userId}::uuid
+       AND deleted_at IS NULL
+     LIMIT 1
+  `;
+
+  return rows[0] ?? null;
+}
+
+/**
+ * Updates the user's password hash (`AUTH-14`) and revokes all other active
+ * sessions via the narrow `SECURITY DEFINER` function granted to `app_auth`.
+ */
+export async function changeUserPassword(
+  client: PrismaClient,
+  userId: string,
+  newPasswordHash: string,
+  keepSessionId: string | null = null,
+): Promise<boolean> {
+  const rows = await client.$queryRaw<{ changed: boolean }[]>`
+    SELECT app.change_user_password(
+      ${userId}::uuid,
+      ${newPasswordHash},
+      ${keepSessionId}::uuid
+    ) AS changed
+  `;
+  return rows[0]?.changed === true;
+}
+
 /**
  * Soft-deletes an account (`OPEN-04`) and revokes all of its live sessions via
  * the narrow `SECURITY DEFINER` function granted to `app_auth`.

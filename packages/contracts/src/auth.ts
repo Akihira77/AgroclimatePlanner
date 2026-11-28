@@ -157,6 +157,18 @@ export const loginRequestSchema = z.strictObject({
 });
 export type LoginRequest = z.infer<typeof loginRequestSchema>;
 
+/** `AUTH-14`: authenticated password change request. */
+export const changePasswordRequestSchema = z
+  .strictObject({
+    currentPassword: loginPasswordSchema,
+    newPassword: passwordSchema,
+  })
+  .refine((value) => value.currentPassword !== value.newPassword, {
+    path: ["newPassword"],
+    message: "new password must differ from current password",
+  });
+export type ChangePasswordRequest = z.infer<typeof changePasswordRequestSchema>;
+
 /**
  * The safe registration response (`H-1`). `createdAt` is absent because the
  * `app_auth` grant does not include `created_at`; widening the grant to return it

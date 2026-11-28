@@ -1,11 +1,16 @@
 import type {
+  ChangePasswordRequest,
   CsrfTokenResponse,
   Envelope,
   LoginRequest,
   RegisterRequest,
   RegisteredUser,
 } from "@agroclimate/contracts";
-import { loginRequestSchema, registerRequestSchema } from "@agroclimate/contracts";
+import {
+  changePasswordRequestSchema,
+  loginRequestSchema,
+  registerRequestSchema,
+} from "@agroclimate/contracts";
 import {
   Body,
   ConflictException,
@@ -178,6 +183,28 @@ export class AuthController {
     }
 
     clearSessionCookie(response);
+  }
+
+  /**
+   * Changes the authenticated user's password (`AUTH-14`) and revokes other sessions.
+   */
+  @Post("password")
+  @HttpCode(204)
+  @UseGuards(AuthGuard, AuthRateLimitGuard)
+  async changePassword(
+    @Req() request: AuthenticatedRequest,
+    @Body(new ZodValidationPipe(changePasswordRequestSchema)) body: ChangePasswordRequest,
+  ): Promise<void> {
+    const context = request.auth;
+    if (context === undefined) throw unauthenticated();
+
+    const changed = await this.auth.changePassword(
+      context.user.id,
+      context.sessionId,
+      body.currentPassword,
+      body.newPassword,
+    );
+    if (!changed) throw unauthenticated();
   }
 
   /**

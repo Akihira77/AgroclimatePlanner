@@ -2076,3 +2076,40 @@ a {
     justify-self: start;
   }
 }
+
+/* ---------- Modals & Farm Overview Map ---------- */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgb(19 34 25 / 45%);
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+}
+
+.modal-card {
+  width: 100%;
+  max-width: 440px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-5);
+  box-shadow: var(--shadow-lg);
+  display: grid;
+  gap: var(--space-4);
+}
+
+.overview-map-wrap {
+  width: 100%;
+  max-width: 480px;
+}
+
+.overview-map {
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  display: block;
+}

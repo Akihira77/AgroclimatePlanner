@@ -12,9 +12,11 @@ import { PrismaClient } from "./generated/prisma/client.js";
 export { PrismaClient } from "./generated/prisma/client.js";
 export { Prisma } from "./generated/prisma/client.js";
 export {
+  changeUserPassword,
   EMAIL_UNIQUE_CONSTRAINT,
   EmailAlreadyRegisteredError,
   findAuthUserByEmail,
+  findAuthUserById,
   insertRegisteredUser,
   isEmailUniqueViolation,
   softDeleteAccount,

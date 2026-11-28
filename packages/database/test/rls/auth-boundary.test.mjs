@@ -558,4 +558,19 @@ describe("other roles on app.sessions", () => {
     await deniedCode(auth, "select app.anonymize_expired_deleted_users(30)", [], "42501");
     await deniedCode(api, "select app.anonymize_expired_deleted_users(30)", [], "42501");
   });
+
+  it("AUTH-14 change_user_password is restricted to app_auth", async () => {
+    await deniedCode(
+      api,
+      "select app.change_user_password($1::uuid, 'hash-x', null)",
+      [fixtures.primaryUserId],
+      "42501",
+    );
+    await deniedCode(
+      system,
+      "select app.change_user_password($1::uuid, 'hash-x', null)",
+      [fixtures.primaryUserId],
+      "42501",
+    );
+  });
 });

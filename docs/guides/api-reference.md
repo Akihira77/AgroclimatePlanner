@@ -24,6 +24,7 @@ global prefix on purpose (`app.factory.ts:127`):
 | ---------------- | -------- | ---- |
 | `GET /health`    | liveness | none |
 | `GET /health/ready` | readiness, one `SELECT 1` with a 2 s budget | none |
+| `GET /v1/health/status` | non-sensitive operational catalog & ingestion summary | none |
 
 Liveness touches nothing — a database outage must not make the process look
 dead and get it restarted for no reason. Readiness answers
@@ -145,6 +146,8 @@ the server silently ignores.
 | GET    | `/v1/auth/me`       | yes  | n/a | `200`   | —                          |
 | GET    | `/v1/auth/csrf`     | yes  | n/a | `200`   | —                          |
 | POST   | `/v1/auth/logout`   | cookie only | n/a | `204` | —                     |
+| POST   | `/v1/auth/password` | yes  | yes | `204`   | `{ currentPassword, newPassword }` |
+| DELETE | `/v1/auth/account`  | yes  | yes | `204`   | —                          |
 
 **`register`** returns `{ id, email, role, locale, timezone }` inside `data`, and issues no
 session, cookie or token. The password is hashed before the insert, so a

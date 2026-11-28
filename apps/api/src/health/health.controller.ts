@@ -17,6 +17,21 @@ interface ReadyResponse {
   checks: { database: "ok" };
 }
 
+interface StatusResponse {
+  status: "ok";
+  uptimeSec: number;
+  contractsVersion: string;
+  catalog: {
+    crops: number;
+    publishedProfiles: number;
+  };
+  weather: {
+    forecastRuns: number;
+    latestIngestionStatus: string | null;
+    latestIngestionAt: string | null;
+  };
+}
+
 /**
  * The readiness budget, in two shares that cannot both be spent.
  *
@@ -108,5 +123,68 @@ export class HealthController {
       throw new ServiceUnavailableException({ code: "DEPENDENCY_UNAVAILABLE" });
     }
     return { status: "ok", checks: { database: "ok" } };
+  }
+
+  /**
+   * Non-sensitive operational status (`MOD-11`) reading only tables `app_api`
+   * already holds `SELECT` on, bounded by the same readiness timeout budget.
+   */
+  @Get("status")
+  async status(): Promise<StatusResponse> {
+    const deadline = performance.now() + READINESS_BUDGET_MS;
+
+    try {
+      const summary = await this.client.$transaction(
+        async (tx) => {
+          const remaining = Math.min(EXECUTION_BUDGET_MS, Math.floor(deadline - performance.now()));
+          if (remaining <= 0) throw new Error("status budget exhausted");
+
+          await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = ${remaining}`);
+
+          const [counts] = await tx.$queryRaw<
+            { crops: number; published_profiles: number; forecast_runs: number }[]
+          >`
+            SELECT
+              (SELECT COUNT(*)::int FROM app.crops) AS crops,
+              (SELECT COUNT(*)::int FROM app.crop_profile_versions WHERE status = 'published') AS published_profiles,
+              (SELECT COUNT(*)::int FROM app.forecast_runs) AS forecast_runs
+          `;
+          const [latestIngestion] = await tx.$queryRaw<
+            { status: string; started_at: Date }[]
+          >`
+            SELECT status, started_at
+              FROM app.ingestion_runs
+             ORDER BY started_at DESC
+             LIMIT 1
+          `;
+
+          return {
+            crops: counts?.crops ?? 0,
+            publishedProfiles: counts?.published_profiles ?? 0,
+            forecastRuns: counts?.forecast_runs ?? 0,
+            latestIngestionStatus: latestIngestion?.status ?? null,
+            latestIngestionAt: latestIngestion?.started_at.toISOString() ?? null,
+          };
+        },
+        { timeout: EXECUTION_BUDGET_MS, maxWait: ACQUISITION_BUDGET_MS },
+      );
+
+      return {
+        status: "ok",
+        uptimeSec: Math.floor(process.uptime()),
+        contractsVersion: CONTRACTS_VERSION,
+        catalog: {
+          crops: summary.crops,
+          publishedProfiles: summary.publishedProfiles,
+        },
+        weather: {
+          forecastRuns: summary.forecastRuns,
+          latestIngestionStatus: summary.latestIngestionStatus,
+          latestIngestionAt: summary.latestIngestionAt,
+        },
+      };
+    } catch {
+      throw new ServiceUnavailableException({ code: "DEPENDENCY_UNAVAILABLE" });
+    }
   }
 }

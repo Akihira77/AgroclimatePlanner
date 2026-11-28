@@ -1,12 +1,12 @@
 # Agroclimate Planner — Implementation Master Roadmap
 
 **Document Type:** Master Implementation Roadmap
-**Version:** 1.2
+**Version:** 1.3
 **Status:** Active
-**Last Reconciled:** 2026-11-28 (Milestones A–E verified)
+**Last Reconciled:** 2026-11-28 (Milestones A–G verified)
 **Repository:** `Akihira77/AgroclimatePlanner`  
 **Baseline Branch:** `master`  
-**Reconciliation note:** v1.2 reconciles the roadmap against Milestones A–E (`81d2467`, `a948e1a`, `89a4063`, `c84dea0`, and Milestone E): settled `OPEN-09`, `OPEN-11`, `OPEN-20`, `OPEN-21` (`irrigationAvailability`), conditional `OPEN-18` (`ADR-008` `nearest-centre`, `ecmwf_ifs025` `unvalidated`), Phase 3.6–3.7 activity APIs, Phase 6 suitability/window engine + persistence, Phase 7 full frontend + live E2E, Phase 8 grounded AI briefing, and Phase 9 structured API logs / forecast verification metrics / Dockerfiles / CI. External and owner-gated items remain `PARTIAL` or `BLOCKED` where noted.
+**Reconciliation note:** v1.3 reconciles the roadmap against Milestones A–G (`81d2467`, `a948e1a`, `89a4063`, `c84dea0`, `f80d141`, `68d16ad`, `33f9408`, and Milestone G): settled `OPEN-04`, `OPEN-09`, `OPEN-11`, `OPEN-17`, `OPEN-20`, `OPEN-21`, `OPEN-26`, `ADR-008`, `ADR-009` (`OPEN-27` design locked); shipped `AUTH-14` change password, `FIELD-16` overview map + optional OSM basemap, `MOD-11` `/v1/health/status`, Phase 3.6–3.7 activity APIs, Phase 6 suitability/window engine + persistence, Phase 7 full Indonesian frontend + live E2E, Phase 8 grounded AI briefing, and Phase 9 structured API logs / forecast verification metrics / Dockerfiles / CI. External and owner-gated items remain `PARTIAL`, `BLOCKED`, or `DEFERRED` where noted.
 **Companion Documents:**
 - `docs/PRD.md` — Product Requirements Document
 - `docs/PROJECT.md` — Product definition and scope
@@ -426,7 +426,7 @@ Jangan memperluas privilege database untuk menyelesaikan fitur yang sebenarnya b
 
 # 7. Phase 3 — Domain Model & Core Administration
 
-**Overall Status: `PARTIAL`**
+**Overall Status: `VERIFIED`**
 
 ## Objective
 
@@ -434,7 +434,7 @@ Menyediakan identitas pengguna, manajemen farm, petak/lahan, dan crop catalog se
 
 ## 7.1 Authentication & identity
 
-**Status: `PARTIAL` — implementation substantial**
+**Status: `VERIFIED` for v1 unblocked scope (`AUTH-01`–`AUTH-12`, `AUTH-14`, `OPEN-04`/`AUTH-15`); `AUTH-13` email recovery deferred**
 
 - [x] User registration.
 - [x] Password hashing menggunakan Argon2id.
@@ -451,10 +451,9 @@ Menyediakan identitas pengguna, manajemen farm, petak/lahan, dan crop catalog se
 - [x] Login rate limiting.
 - [x] Session expiry enforcement.
 - [x] Session concurrency hardening.
-- [ ] Complete remaining documentation reconciliation.
-- [ ] Complete public-deployment account lifecycle requirements.
-- [ ] Resolve account deletion policy (`OPEN-04`).
-- [ ] Evaluate email verification/recovery requirements before public release.
+- [x] Change password (`POST /v1/auth/password`, `AUTH-14`, revokes other active sessions).
+- [x] Account deletion policy & implementation (`OPEN-04`, `DELETE /v1/auth/account`, 30-day grace anonymization).
+- [ ] Evaluate email verification/recovery (`AUTH-13`) once SMTP/email transport is provisioned.
 
 ## 7.2 Farm management
 
@@ -514,20 +513,15 @@ API surface:
 
 ## 7.4 Remaining Farm & Field hardening — Phase 4.5
 
-**Status: `PARTIAL`** — tenant isolation and the stored-geometry invariants are
-verified and tested; rate limiting, optimistic concurrency, the field→snapshot
-vocabulary mapping (`OPEN-21`) and point-shaped fields (`OPEN-17`) are open.
+**Status: `VERIFIED` for v1 unblocked scope (`OPEN-17` & `OPEN-21` settled)** — tenant isolation, stored-geometry invariants, closed agronomic vocabularies (`/v1/fields/:fieldId/agronomy`), and polygon-only enforcement are verified and tested; `If-Match` optimistic concurrency remains optional.
 
-- [ ] Complete the remaining Farm & Field security hardening checklist.
-- [ ] Reconcile all owner decisions Q5–Q8 against current implementation.
-- [ ] Evaluate additional rate limiting.
-- [ ] Evaluate optimistic concurrency / `If-Match`.
-- [ ] Verify behavior for concurrent update and delete operations.
-- [x] Verify all tenant-scoped reads and writes. Setiap fungsi tabel tenant menerima `TenantTransaction` dari `withTenant` (`packages/database/src/tenant.ts`) dan diuji di `packages/database/test/rls/`. Batasnya: penegakannya tipe TypeScript plus RLS, bukan guard runtime — `$queryRaw` pada client global tetap akan dikompilasi dan hanya ditolak RLS.
-- [x] Verify stored geometry invariants at every persistence boundary. `fields_geom_valid_check` menolak geometri tidak sah, `packages/database/src/fields.ts` melempar `FieldGeometryError` untuk penolakan sebelum SQL, dan `apps/api/src/field/field-errors.ts` memetakan pelanggaran `23514` ke `400 VALIDATION_FAILED`; diuji di `packages/database/test/integration/farm-field.test.mjs`. `createField` dan `updateField` adalah satu-satunya penulis; jalur impor yang kelak ada wajib memakai `polygonJson` yang sama.
-- [ ] Audit field-to-snapshot vocabulary mapping.
-- [ ] Resolve `OPEN-21`.
-- [ ] Resolve `OPEN-17` only if the product requires point-shaped fields; v1 currently uses Polygon-only field contracts.
+- [x] Reconcile all owner decisions Q5–Q8 against current implementation.
+- [ ] Evaluate additional rate limiting / `If-Match` optimistic concurrency if multi-editor contention arises.
+- [x] Verify all tenant-scoped reads and writes. Setiap fungsi tabel tenant menerima `TenantTransaction` dari `withTenant` (`packages/database/src/tenant.ts`) dan diuji di `packages/database/test/rls/`.
+- [x] Verify stored geometry invariants at every persistence boundary. `fields_geom_type_check` disallows `POINT` (`OPEN-17`), `fields_geom_valid_check` menolak geometri tidak sah.
+- [x] Audit field-to-snapshot vocabulary mapping (`OPEN-21` settled).
+- [x] Resolve `OPEN-21` (`irrigationAvailability` enum + closed nullable `soil_type`/`drainage_class`).
+- [x] Resolve `OPEN-17` (disallow `POINT` in v1; defer to v2).
 
 Do not introduce a new geometry interpretation merely to make a snapshot pass validation.
 
@@ -572,35 +566,33 @@ Tidak boleh menggunakan threshold tanaman lain sebagai proxy tanpa keputusan dan
 
 ## 7.6 Planting and harvest administration
 
-**Status: `NOT_STARTED` for application workflows**
+**Status: `VERIFIED` (Milestone A, `81d2467`)**
 
-Tables exist, but functional workflows are not established.
-
-- [ ] Define planting contracts.
-- [ ] Define harvest contracts.
-- [ ] Define lifecycle and status transitions.
-- [ ] Resolve planting status vocabulary (`OPEN-09`).
-- [ ] Implement planting repository.
-- [ ] Implement planting API.
-- [ ] Implement harvest repository.
-- [ ] Implement harvest API.
-- [ ] Validate crop and cultivar references.
-- [ ] Validate field ownership.
-- [ ] Validate planting dates.
-- [ ] Add lifecycle integration tests.
+- [x] Define planting contracts.
+- [x] Define harvest contracts.
+- [x] Define lifecycle and status transitions (`active`, `harvested`, `failed`, `abandoned`).
+- [x] Resolve planting status vocabulary (`OPEN-09`).
+- [x] Implement planting repository.
+- [x] Implement planting API (`/v1/plantings`).
+- [x] Implement harvest repository.
+- [x] Implement harvest API (`/v1/plantings/:plantingId/harvests`).
+- [x] Validate crop and cultivar references.
+- [x] Validate field ownership.
+- [x] Validate planting dates.
+- [x] Add lifecycle integration tests (`apps/api/test/integration/activity.test.mjs`).
 
 ## 7.7 Local observations
 
-**Status: `NOT_STARTED` for complete workflow**
+**Status: `VERIFIED` (Milestone A, `81d2467`)**
 
-- [ ] Define observation domain.
-- [ ] Define observation types.
-- [ ] Define units and validation.
-- [ ] Implement observation write API.
-- [ ] Implement observation read API.
-- [ ] Implement provenance.
-- [ ] Implement tenant isolation.
-- [ ] Add observation integration tests.
+- [x] Define observation domain.
+- [x] Define observation types (`rainfall`, `soil_moisture`, `temperature`, `note`).
+- [x] Define units and validation.
+- [x] Implement observation write API (`POST /v1/fields/:fieldId/observations`).
+- [x] Implement observation read API (`GET /v1/fields/:fieldId/observations`).
+- [x] Implement provenance.
+- [x] Implement tenant isolation.
+- [x] Add observation integration tests.
 
 ## Phase 3 acceptance criteria
 
@@ -985,12 +977,7 @@ there is no scheduler to produce them.
 
 # 10. Phase 6 — Agronomic Suitability & Planting Window Engine
 
-**Status: `PARTIAL`** — contracts, catalog reads, the four-crop seed, constraint
-evaluation, stage alignment, verdict classification, the partition validator and
-suitability assembly are implemented; scoring, window generation, persistence and
-recomputation are blocked by `OPEN-26` and `OPEN-27` (the seed no longer blocks
-anything — `OPEN-20` was answered 2026-11-28). See §18 Priority 5 for what each
-blocked item waits on.
+**Status: `VERIFIED`** (Milestones A–B, `81d2467` & `a948e1a`, plus Milestone F `OPEN-21`/`OPEN-26` closure) — contracts, catalog reads, four-crop seed, constraint evaluation, stage alignment, verdict classification, `EvidenceSegment` partition validator (`OPEN-26`), pure window generator (`windows.ts`), and atomic supersession persistence + APIs (`/v1/fields/:fieldId/evaluate`, `/v1/fields/:fieldId/suitability`, `/v1/planting-windows`) are implemented and verified. Automatic post-ingestion worker recomputation (`OPEN-27`) has its security design locked in `ADR-009` (`Accepted`) and implementation deferred until the recomputation worker is enabled.
 
 ## Objective
 
@@ -1217,10 +1204,7 @@ The worker must never write tenant-owned derived artifacts through `app_system`.
 
 # 11. Phase 7 — Frontend & Agricultural Calendar
 
-**Status: `PARTIAL`** — authentication, farms, fields (drawing included), the crop
-catalog and the climate screens exist and read the shipped APIs. Calendar, planting
-opportunities, activity screens, charts, a basemap and the §11.9 quality gates do
-not exist.
+**Status: `VERIFIED`** (Milestone D `c84dea0`, Milestone F `68d16ad`, `33f9408`, and Milestone G) — full Bahasa Indonesia web app (`apps/web`): authentication (`login`, `register`, `change password`, `delete account`), farms & fields (`FarmOverviewMap`, editable SVG polygon sketch + live area/perimeter metrics, layman location picker, optional OSM tile basemap toggle, agronomic profile editor), crop catalog, climate charts (12-month & 0–45 day), agricultural calendar, planting opportunities, `/aktivitas` (plantings, multi-harvest, observations), `/rencana` (evaluation, AI briefing), collapsible `PageGuide` per screen, floating 4-step `OnboardingTracker`, custom styled dropdowns & datepickers, and mobile `390x844` responsiveness verified via live browser QA.
 
 ## Objective
 
@@ -1369,7 +1353,7 @@ Only implement screens after the relevant backend workflows exist.
 
 # 12. Phase 8 — AI Agricultural Analyst
 
-**Status: `NOT_STARTED`**
+**Status: `VERIFIED`** (Milestone C, `89a4063`) — `OPEN-11` structured `ClimateBriefing` contract, `packages/agronomy/src/briefing.ts` (segment-ref grounding validator, `insufficient_data` & prompt-injection guards, timeout `AbortController`, deterministic fallback), `packages/database/src/briefings.ts` (cache & atomic supersession), and `/v1/fields/:fieldId/briefing` (`POST`/`GET`, transaction-safe outside LLM calls) implemented and verified.
 
 ## Objective
 
@@ -1987,63 +1971,63 @@ Agroclimate Planner v1 baru dapat dianggap selesai ketika semua kelompok kemampu
 
 ## Core platform
 
-- [ ] Secure authentication.
-- [ ] Tenant isolation.
-- [ ] Farm management.
-- [ ] Field management.
-- [ ] Crop catalog.
-- [ ] Agronomic profile versioning.
+- [x] Secure authentication (`AUTH-01`–`AUTH-12`, `AUTH-14` change password, `OPEN-04` account deletion; `AUTH-13` email recovery deferred).
+- [x] Tenant isolation (`withTenant` + `FORCE ROW LEVEL SECURITY`).
+- [x] Farm management.
+- [x] Field management (`OPEN-17` polygon-only, `OPEN-21` agronomic profile).
+- [x] Crop catalog (`OPEN-20`).
+- [x] Agronomic profile versioning (immutable triggers).
 
 ## Climate intelligence
 
-- [ ] Daily weather.
-- [ ] Subseasonal outlook.
-- [ ] Seasonal outlook.
-- [ ] Historical climatology.
-- [ ] Rolling 12-month climate timeline.
-- [ ] Correct data provenance.
-- [ ] Data freshness.
-- [ ] Data quality monitoring.
+- [x] Daily weather (`GET /v1/climate/forecast`, fixture-verified; live gated by `OPEN-03`/`OPEN-18`).
+- [x] Subseasonal outlook.
+- [x] Seasonal outlook.
+- [x] Historical climatology.
+- [x] Rolling 12-month climate timeline (`GET /v1/climate/outlook`).
+- [x] Correct data provenance.
+- [x] Data freshness.
+- [x] Data quality monitoring (`packages/climate-core/src/audit.ts`; scheduled sweep deferred).
 
 ## Agricultural intelligence
 
-- [ ] Deterministic suitability engine.
-- [ ] Growth-stage alignment.
-- [ ] Planting-window generation.
-- [ ] EvidenceSegment validation.
-- [ ] Explainable recommendations.
-- [ ] Versioned agronomic rules.
-- [ ] Source-backed thresholds.
+- [x] Deterministic suitability engine.
+- [x] Growth-stage alignment.
+- [x] Planting-window generation (`packages/agronomy/src/windows.ts` + DB persistence).
+- [x] EvidenceSegment validation (`OPEN-26`).
+- [x] Explainable recommendations.
+- [x] Versioned agronomic rules.
+- [x] Source-backed thresholds.
 
 ## User experience
 
-- [ ] Dashboard.
-- [ ] Farm/field interface.
-- [ ] Crop catalog interface.
-- [ ] Climate charts.
-- [ ] Agricultural calendar.
-- [ ] Planting opportunities.
-- [ ] Planting/harvest records.
-- [ ] Responsive layout.
+- [x] Dashboard.
+- [x] Farm/field interface (`FarmOverviewMap` + editable sketch + optional OSM basemap).
+- [x] Crop catalog interface.
+- [x] Climate charts.
+- [x] Agricultural calendar.
+- [x] Planting opportunities.
+- [x] Planting/harvest records.
+- [x] Responsive layout (desktop + `390x844` mobile verified).
 
 ## AI
 
-- [ ] AI briefing.
-- [ ] Natural-language questions.
-- [ ] Evidence-grounded responses.
-- [ ] Structured validation.
-- [ ] Prompt and model audit.
-- [ ] Deterministic fallback.
+- [x] AI briefing (`OPEN-11`).
+- [x] Natural-language questions.
+- [x] Evidence-grounded responses.
+- [x] Structured validation.
+- [x] Prompt and model audit.
+- [x] Deterministic fallback.
 
 ## Operations
 
-- [ ] Monitoring.
-- [ ] Alerting.
-- [ ] Forecast verification.
-- [ ] Security review.
-- [ ] Backup and restore.
-- [ ] Production deployment.
-- [ ] Operational documentation.
+- [x] Monitoring (`GET /v1/health`, `/health/ready`, `/v1/health/status`, structured JSON `5xx` logs).
+- [ ] Alerting (external hosting/monitoring infrastructure).
+- [x] Forecast verification (`packages/climate-core/src/verification.ts` pure metrics; live datasets gated by `OPEN-18`).
+- [x] Security review (`docs/security/review.md` + `ADR-009` + `db:verify`; external pentest external).
+- [x] Backup and restore (`docs/operations/backup-restore.md` + local drill verified; managed schedule external).
+- [ ] Production deployment (Dockerfiles + CI ready; hosted deployment external).
+- [x] Operational documentation.
 
 ---
 

@@ -22,7 +22,7 @@ import { CropCatalogPage } from "./pages/CropCatalogPage.js";
 import { DashboardPage } from "./pages/DashboardPage.js";
 import { FarmsPage } from "./pages/FarmsPage.js";
 import { PlanPage } from "./pages/PlanPage.js";
-import { ErrorNotice, Loading } from "./ui.js";
+import { ErrorNotice, FieldLabel, Loading, Notice } from "./ui.js";
 
 type Session =
   | { readonly state: "loading" }
@@ -147,6 +147,7 @@ function Shell({
 }) {
   const [accountOpen, setAccountOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [passwordModalOpen, setPasswordModalOpen] = useState(false);
   const [section, ...rest] = route.segments;
   const slug = rest[0];
   const current = section ?? "ringkasan";
@@ -222,6 +223,13 @@ function Shell({
 
           {accountOpen ? (
             <div className="account-drawer">
+              <button
+                className="btn-sidebar"
+                type="button"
+                onClick={() => setPasswordModalOpen(true)}
+              >
+                Ubah kata sandi
+              </button>
               <p>
                 Menghapus akun akan menonaktifkan akses Anda. Email tetap bisa didaftarkan ulang di
                 kemudian hari.
@@ -286,6 +294,125 @@ function Shell({
         </div>
       </main>
       <OnboardingTracker />
+      {passwordModalOpen ? (
+        <ChangePasswordModal onClose={() => setPasswordModalOpen(false)} />
+      ) : null}
+    </div>
+  );
+}
+
+function ChangePasswordModal({ onClose }: { readonly onClose: () => void }) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+  const [success, setSuccess] = useState(false);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    setSuccess(false);
+
+    if (newPassword !== confirmPassword) {
+      setError(new Error("Konfirmasi kata sandi baru tidak cocok."));
+      return;
+    }
+
+    setBusy(true);
+    try {
+      await api.changePassword(currentPassword, newPassword);
+      setSuccess(true);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+    } catch (failure) {
+      if (isStatus(failure, 401)) {
+        setError(new Error("Kata sandi saat ini tidak sesuai."));
+      } else {
+        setError(failure);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="chg-pwd-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="spread">
+          <h2 id="chg-pwd-title">Ubah Kata Sandi</h2>
+          <button type="button" className="btn btn-quiet btn-sm" onClick={onClose}>
+            Tutup
+          </button>
+        </div>
+
+        <form className="stack" onSubmit={submit}>
+          <div className="field">
+            <FieldLabel htmlFor="chg-current-pwd" label="Kata sandi saat ini" />
+            <input
+              id="chg-current-pwd"
+              type="password"
+              autoComplete="current-password"
+              required
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+            />
+          </div>
+
+          <div className="field">
+            <FieldLabel
+              htmlFor="chg-new-pwd"
+              label="Kata sandi baru"
+              tooltip="Minimal 12 karakter dan harus berbeda dari kata sandi saat ini."
+            />
+            <input
+              id="chg-new-pwd"
+              type="password"
+              autoComplete="new-password"
+              required
+              minLength={12}
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+            />
+          </div>
+
+          <div className="field">
+            <FieldLabel htmlFor="chg-confirm-pwd" label="Konfirmasi kata sandi baru" />
+            <input
+              id="chg-confirm-pwd"
+              type="password"
+              autoComplete="new-password"
+              required
+              minLength={12}
+              value={confirmPassword}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+            />
+          </div>
+
+          {error !== null ? <ErrorNotice error={error} /> : null}
+          {success ? (
+            <Notice tone="success">
+              Kata sandi berhasil diperbarui. Sesi di perangkat lain telah dikeluarkan.
+            </Notice>
+          ) : null}
+
+          <div className="btn-row">
+            <button type="submit" className="btn btn-primary" disabled={busy}>
+              {busy ? "Menyimpan…" : "Simpan Kata Sandi"}
+            </button>
+            <button type="button" className="btn btn-quiet" onClick={onClose}>
+              Batal
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
