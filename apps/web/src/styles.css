@@ -2955,3 +2955,66 @@ a {
     flex-shrink: 0;
   }
 }
+
+.climate-attribution {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--line);
+  font-size: 0.78rem;
+  color: var(--ink-faint);
+}
+
+.climate-attribution a {
+  color: var(--accent-ink);
+  text-decoration: underline;
+}
+
+.basemap-toggle {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.basemap-attribution {
+  margin-top: 6px;
+  font-size: 0.74rem;
+  color: var(--ink-faint);
+  text-align: right;
+}
+
+.nominatim-results {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.nominatim-hit {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  font-size: 0.84rem;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.nominatim-hit:hover {
+  background: var(--surface-muted);
+}
+

@@ -23,11 +23,11 @@ still open, so nothing evaluates a field yet. `docs/OWNER_DECISIONS.md` holds th
 | Contracts       | implemented — Zod schemas, provenance contract, canonical serialisation, SHA-256 golden vectors                                                                                               |
 | Database        | implemented — 25 tables in schema `app` (24 domain + `sessions`), RLS forced on every tenant-owned table, four explicit roles, hand-written SQL migrations, digest and privilege verification |
 | API             | implemented — health and readiness, auth (register, login, logout, CSRF), tenant-scoped Farm and Field CRUD, crop catalog, climate outlook and forecast reads; role `app_api`                 |
-| Worker          | implemented — PostgreSQL queue, lease/reaper/retry runner, `IngestionRun` lifecycle, forecast/climatology/seasonal handlers, job cancellation; role `app_system`; no scheduler                |
-| Web             | implemented — auth, dashboard, farms, climate outlook, crop catalog                                                                                                                           |
-| Agronomy engine | implemented as a package — suitability, constraints, verdicts; not yet wired into the API or worker; planting-window generation and persistence are not built                                 |
-| Providers       | adapters and normalisation exist; every real ingestion is refused until the grid is validated (`OPEN-18`) and licensing is settled (`OPEN-03`)                                                |
-| AI briefing     | not implemented — the contract and hash exist, the pipeline does not (`OPEN-11`)                                                                                                              |
+| Worker          | implemented — PostgreSQL queue, lease/reaper/retry runner, `IngestionRun` lifecycle, forecast/climatology/seasonal handlers, job cancellation, opt-in idempotent scheduler (`WORKER_SCHEDULER_ENABLED=true`); role `app_system` |
+| Web             | implemented — auth, dashboard, farms (Esri Satellite / OSM basemap + Nominatim search), climate outlook & forecast with Open-Meteo/ECMWF/ERA5 attribution, crop catalog, planting planner & activities |
+| Agronomy engine | implemented and wired — suitability, constraints, verdicts, critical-stage data-honesty gates, planting-window generation |
+| Providers       | `open-meteo / ecmwf_ifs025` & `era5` empirically validated (`OPEN-18`) for personal / non-commercial use (`WEATHER_PROVIDER_LICENSE_MODE=non_commercial`, CC BY 4.0); `ecmwf_seas5` deferred |
+| AI briefing     | implemented — deterministic grounded validation (`OPEN-11`) with optional pluggable `LLM_PROVIDER=none\|gemini\|openai_compatible` and farmer-friendly Indonesian fallback |
 
 Next: the remaining Phase 9 items split into work that can be done now
 (observability metrics, security review, documentation, forecast verification

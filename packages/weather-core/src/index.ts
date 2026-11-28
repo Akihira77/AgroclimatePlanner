@@ -112,5 +112,22 @@ export {
   SYNTHETIC_GRID_PROVIDER,
 } from "./grids/synthetic.js";
 
-export { ECMWF_IFS025_GRID_ENTRY, ECMWF_IFS025_GRID_SPEC } from "./grids/ecmwf-ifs025.js";
-export { syntheticGridRegistry, unvalidatedGridRegistry } from "./grids/registry.js";
+export {
+  ECMWF_IFS025_GRID_ENTRY,
+  ECMWF_IFS025_GRID_SPEC,
+  ECMWF_IFS025_VALIDATED_GRID_ENTRY,
+} from "./grids/ecmwf-ifs025.js";
+export { ERA5_GRID_SPEC, ERA5_VALIDATED_GRID_ENTRY } from "./grids/era5.js";
+export {
+  syntheticGridRegistry,
+  unvalidatedGridRegistry,
+  validatedOpenMeteoGridRegistry,
+} from "./grids/registry.js";
+export {
+  WeatherLicenseConfigError,
+  appendApiKey,
+  redactUrlApiKey,
+  resolveOpenMeteoLicenseConfig,
+  type OpenMeteoLicenseConfig,
+  type WeatherProviderLicenseMode,
+} from "./license.js";

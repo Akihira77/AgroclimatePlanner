@@ -1,5 +1,9 @@
 import { createGridRegistry, type GridRegistry } from "@agroclimate/contracts";
-import { ECMWF_IFS025_GRID_ENTRY } from "./ecmwf-ifs025.js";
+import {
+  ECMWF_IFS025_GRID_ENTRY,
+  ECMWF_IFS025_VALIDATED_GRID_ENTRY,
+} from "./ecmwf-ifs025.js";
+import { ERA5_VALIDATED_GRID_ENTRY } from "./era5.js";
 import { SYNTHETIC_GRID_ENTRY } from "./synthetic.js";
 
 /**
@@ -25,4 +29,15 @@ export const syntheticGridRegistry: GridRegistry = createGridRegistry([SYNTHETIC
 export const unvalidatedGridRegistry: GridRegistry = createGridRegistry([
   SYNTHETIC_GRID_ENTRY,
   ECMWF_IFS025_GRID_ENTRY,
+]);
+
+/**
+ * Validated Open-Meteo regular 0.25° registry (`OPEN-18` empirical proof:
+ * 18/18 exact Indonesian coordinate matches for `ecmwf_ifs025` & `era5`
+ * with `cell_selection=nearest`). Excludes `ecmwf_seas5` (Reduced Gaussian Grid).
+ */
+export const validatedOpenMeteoGridRegistry: GridRegistry = createGridRegistry([
+  SYNTHETIC_GRID_ENTRY,
+  ECMWF_IFS025_VALIDATED_GRID_ENTRY,
+  ERA5_VALIDATED_GRID_ENTRY,
 ]);

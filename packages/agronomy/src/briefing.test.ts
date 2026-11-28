@@ -157,7 +157,7 @@ describe("grounded AI briefing engine", () => {
       expect(body.sourceMode).toBe("deterministic_fallback");
       expect(body.evidenceSegmentIds).toEqual(context.allowedSegmentIds);
       if (verdict !== "suitable") {
-        expect(body.weatherInterpretation).toContain("klimatologi");
+        expect(body.weatherInterpretation).toContain("rata-rata iklim historis");
       }
       if (verdict === "insufficient_data") {
         expect(body.missingDataCaveats.length).toBeGreaterThan(0);
@@ -275,6 +275,6 @@ describe("grounded AI briefing engine", () => {
     expect(result.fallbackReason).toBe("provider_timeout");
     expect(result.body.sourceMode).toBe("deterministic_fallback");
     expect(result.body.questionAnswer).toContain("tidak sesuai");
-    expect(result.body.questionAnswer).toContain("mesin agronomi deterministik");
+    expect(result.body.questionAnswer).toContain("perhitungan agronomi deterministik");
   });
 });

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { failure, type AdapterOutcome } from "../failures.js";
+import { appendApiKey, redactUrlApiKey } from "../license.js";
 import type { AdapterRuntime } from "../runtime.js";
 
 /**
@@ -52,6 +53,8 @@ export interface DailyAdapterConfig {
   /** Attribution/licence string for this product. Required, never invented. */
   readonly attribution: string;
   readonly baseUrl?: string;
+  readonly model?: string;
+  readonly apiKey?: string;
 }
 
 /** One value. `member` is `null` for a deterministic product. */
@@ -105,6 +108,10 @@ export function buildDailyForecastUrl(config: DailyAdapterConfig): string {
   params.set("latitude", String(config.latitude));
   params.set("longitude", String(config.longitude));
   params.set("daily", DAILY_VARIABLE);
+  if (config.model) {
+    params.set("models", config.model);
+  }
+  params.set("cell_selection", "nearest");
   params.set("forecast_days", String(DAILY_FORECAST_DAYS));
   params.set("timezone", "UTC");
   return `${baseUrl.replace(/\/$/, "")}/v1/forecast?${params.toString()}`;
@@ -116,7 +123,8 @@ export function buildDailyEnsembleUrl(config: DailyAdapterConfig): string {
   params.set("latitude", String(config.latitude));
   params.set("longitude", String(config.longitude));
   params.set("daily", DAILY_VARIABLE);
-  params.set("models", DAILY_ENSEMBLE_MODEL);
+  params.set("models", config.model ?? DAILY_ENSEMBLE_MODEL);
+  params.set("cell_selection", "nearest");
   params.set("forecast_days", String(DAILY_FORECAST_DAYS));
   params.set("timezone", "UTC");
   return `${baseUrl.replace(/\/$/, "")}/v1/ensemble?${params.toString()}`;
@@ -328,8 +336,9 @@ export async function fetchDailyForecast(
   config: DailyAdapterConfig,
   runtime: AdapterRuntime,
 ): Promise<AdapterOutcome<DailyProviderPayload>> {
-  const url = buildDailyForecastUrl(config);
-  const body = await fetchDailyBlock("forecast", url, config, runtime);
+  const redactedUrl = buildDailyForecastUrl(config);
+  const requestUrl = appendApiKey(redactedUrl, config.apiKey);
+  const body = await fetchDailyBlock("forecast", requestUrl, config, runtime);
   if (!body.ok) return body;
 
   const column = body.value.columns.find((entry) => entry.name === DAILY_VARIABLE);
@@ -350,7 +359,7 @@ export async function fetchDailyForecast(
     ok: true,
     value: toPayload(
       {
-        model: "best_match",
+        model: config.model ?? "best_match",
         product: "forecast",
         adapterVersion: DAILY_FORECAST_ADAPTER_VERSION,
         ensembleSize: null,
@@ -362,7 +371,7 @@ export async function fetchDailyForecast(
       },
       body.value,
       config,
-      url,
+      redactUrlApiKey(redactedUrl),
       runtime,
     ),
   };
@@ -386,8 +395,9 @@ export async function fetchDailyEnsemble(
   config: DailyAdapterConfig,
   runtime: AdapterRuntime,
 ): Promise<AdapterOutcome<DailyProviderPayload>> {
-  const url = buildDailyEnsembleUrl(config);
-  const body = await fetchDailyBlock("ensemble", url, config, runtime);
+  const redactedUrl = buildDailyEnsembleUrl(config);
+  const requestUrl = appendApiKey(redactedUrl, config.apiKey);
+  const body = await fetchDailyBlock("ensemble", requestUrl, config, runtime);
   if (!body.ok) return body;
 
   if (body.value.time.length !== DAILY_FORECAST_DAYS) {
@@ -427,7 +437,7 @@ export async function fetchDailyEnsemble(
       },
       body.value,
       config,
-      url,
+      redactUrlApiKey(redactedUrl),
       runtime,
     ),
   };

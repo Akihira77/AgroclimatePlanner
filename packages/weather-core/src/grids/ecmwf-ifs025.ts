@@ -26,3 +26,14 @@ export const ECMWF_IFS025_GRID_ENTRY: GridRegistryEntry = Object.freeze({
   spec: ECMWF_IFS025_GRID_SPEC,
   evidence: "unvalidated",
 });
+
+/**
+ * Promoted `validated` entry backed by 18/18 exact Indonesian coordinate matches
+ * in `docs/review/open-18-open-meteo-ifs025-evidence.md` (`cell_selection=nearest`).
+ */
+export const ECMWF_IFS025_VALIDATED_GRID_ENTRY: GridRegistryEntry = Object.freeze({
+  provider: "open-meteo",
+  model: "ecmwf_ifs025",
+  spec: ECMWF_IFS025_GRID_SPEC,
+  evidence: "validated",
+});

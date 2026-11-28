@@ -80,8 +80,8 @@ export function ClimatePage() {
       <Notice tone="info">
         <span>
           <strong>Info Sumber Data:</strong> Grafik di bawah menggunakan grid{" "}
-          <code>open-meteo / ecmwf_ifs025</code> (<code>unvalidated</code>, <code>OPEN-18</code>)
-          dengan data referensi iklim lokal Jawa Barat untuk simulasi perencanaan.
+          <code>open-meteo / ecmwf_ifs025</code> &amp; <code>era5</code> (tervalidasi empiris{" "}
+          <code>OPEN-18</code>, penggunaan pribadi / non-komersial CC BY 4.0).
         </span>
       </Notice>
 
@@ -196,6 +196,19 @@ export function ClimatePage() {
           )}
         </>
       )}
+
+      <footer className="climate-attribution" aria-label="Atribusi sumber data cuaca">
+        <span>
+          <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">
+            Weather data by Open-Meteo.com (CC BY 4.0)
+          </a>
+        </span>
+        <span>
+          Based on data and products of the European Centre for Medium-Range Weather Forecasts
+          (ECMWF)
+        </span>
+        <span>Contains modified Copernicus Climate Change Service information 2026 (ERA5)</span>
+      </footer>
     </div>
   );
 }

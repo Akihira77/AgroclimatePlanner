@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { failure, type AdapterOutcome } from "../failures.js";
+import { appendApiKey, redactUrlApiKey } from "../license.js";
 import type { AdapterRuntime } from "../runtime.js";
 
 /**
@@ -50,6 +51,7 @@ export interface ArchiveAdapterConfig {
   /** Attribution/licence string for this dataset. Required, never invented. */
   readonly attribution: string;
   readonly baseUrl?: string | undefined;
+  readonly apiKey?: string | undefined;
 }
 
 export interface ProviderArchiveDay {
@@ -189,7 +191,8 @@ export async function fetchArchiveDaily(
     return failure("invalid_config", configError);
   }
 
-  const url = buildArchiveDailyUrl(config);
+  const redactedUrl = buildArchiveDailyUrl(config);
+  const url = appendApiKey(redactedUrl, config.apiKey);
   const outcome = await runtime.transport.get({
     url,
     timeoutMs: runtime.timeoutMs,
@@ -309,7 +312,7 @@ export async function fetchArchiveDaily(
       servedLongitude: body.longitude,
       startDate: config.startDate,
       endDate: config.endDate,
-      sourceUrl: url,
+      sourceUrl: redactUrlApiKey(redactedUrl),
       sourceReference: buildArchiveSourceReference(config.baseUrl ?? ARCHIVE_DEFAULT_BASE_URL),
       receivedAt: runtime.now().toISOString(),
       rawPayloadRef: null,

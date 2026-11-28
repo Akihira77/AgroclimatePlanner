@@ -28,6 +28,13 @@ import {
 } from "../ui.js";
 import { useAsync } from "../useAsync.js";
 
+interface NominatimHit {
+  readonly place_id: number;
+  readonly display_name: string;
+  readonly lat: string;
+  readonly lon: string;
+}
+
 const REGION_OPTIONS = [
   {
     value: "subang",
@@ -146,11 +153,74 @@ export function FarmsPage() {
   const [dragging, setDragging] = useState<number | null>(null);
   const fieldEditorRef = useRef<HTMLFormElement | null>(null);
   const [polygonText, setPolygonText] = useState("");
-  const [showOsmBasemap, setShowOsmBasemap] = useState(false);
-  const [osmTileFailed, setOsmTileFailed] = useState(false);
+  const [basemapMode, setBasemapMode] = useState<"none" | "osm" | "satellite">("none");
+  const [tileFailed, setTileFailed] = useState(false);
+  const [nominatimQuery, setNominatimQuery] = useState("");
+  const [nominatimResults, setNominatimResults] = useState<readonly NominatimHit[]>([]);
+  const [nominatimLoading, setNominatimLoading] = useState(false);
+  const [nominatimError, setNominatimError] = useState<string | null>(null);
+  const nominatimCacheRef = useRef<Map<string, readonly NominatimHit[]>>(new Map());
+  const nominatimAbortRef = useRef<AbortController | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
+
+  const runNominatimSearch = async (rawQuery: string) => {
+    const q = rawQuery.trim();
+    if (q.length < 3) {
+      setNominatimResults([]);
+      setNominatimError(null);
+      return;
+    }
+    const cacheKey = q.toLowerCase();
+    const cached = nominatimCacheRef.current.get(cacheKey);
+    if (cached !== undefined) {
+      setNominatimResults(cached);
+      setNominatimError(null);
+      return;
+    }
+    nominatimAbortRef.current?.abort();
+    const controller = new AbortController();
+    nominatimAbortRef.current = controller;
+    setNominatimLoading(true);
+    setNominatimError(null);
+    try {
+      const url = `https://nominatim.openstreetmap.org/search?format=json&countrycodes=id&limit=5&q=${encodeURIComponent(q)}`;
+      const res = await fetch(url, {
+        signal: controller.signal,
+        headers: { "Accept-Language": "id" },
+      });
+      if (!res.ok) {
+        throw new Error(`Nominatim HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as NominatimHit[];
+      nominatimCacheRef.current.set(cacheKey, data);
+      setNominatimResults(data);
+      if (data.length === 0) {
+        setNominatimError("Lokasi tidak ditemukan. Coba nama kecamatan/kabupaten lain.");
+      }
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      setNominatimError(
+        "Pencarian peta sedang tidak tersedia (offline / dibatasi). Gunakan pilihan wilayah atau koordinat manual.",
+      );
+    } finally {
+      setNominatimLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const q = nominatimQuery.trim();
+    if (q.length < 3) {
+      setNominatimResults([]);
+      setNominatimError(null);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void runNominatimSearch(q);
+    }, 650);
+    return () => window.clearTimeout(timer);
+  }, [nominatimQuery]);
 
   if (state.data === null) {
     if (state.loading) return <Loading />;
@@ -192,6 +262,19 @@ export function FarmsPage() {
       setLocationFeedback(`Lokasi dipindahkan ke ${found.label}.`);
       setError(null);
     }
+  };
+
+  const applyNominatimHit = (hit: NominatimHit) => {
+    const parsedLat = Number(hit.lat);
+    const parsedLon = Number(hit.lon);
+    if (!Number.isFinite(parsedLat) || !Number.isFinite(parsedLon)) return;
+    setRegionPreset("custom");
+    setLat(parsedLat.toFixed(5));
+    setLon(parsedLon.toFixed(5));
+    setTileFailed(false);
+    setNominatimResults([]);
+    setLocationFeedback(`Lokasi dipindahkan ke ${hit.display_name.split(",").slice(0, 2).join(", ")}.`);
+    setError(null);
   };
 
   const applyGoogleMapsInput = () => {
@@ -737,6 +820,59 @@ export function FarmsPage() {
                   </div>
                 </div>
 
+                <div className="field">
+                  <FieldLabel
+                    htmlFor="field-nominatim-search"
+                    label="Cari Desa / Kecamatan"
+                    tooltip="Ketik minimal 3 huruf nama desa, kecamatan, atau kabupaten di Indonesia untuk mengarahkan peta secara otomatis."
+                  />
+                  <div className="row">
+                    <input
+                      id="field-nominatim-search"
+                      style={{ flex: "1 1 200px" }}
+                      placeholder="Contoh: Lembang, Bandung Barat"
+                      value={nominatimQuery}
+                      onChange={(e) => setNominatimQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          void runNominatimSearch(nominatimQuery);
+                        }
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-quiet btn-sm"
+                      disabled={nominatimLoading || nominatimQuery.trim().length < 3}
+                      onClick={() => void runNominatimSearch(nominatimQuery)}
+                    >
+                      {nominatimLoading ? "Mencari…" : "Cari Lokasi"}
+                    </button>
+                  </div>
+                  {nominatimError !== null ? (
+                    <span className="faint" style={{ fontSize: "0.82rem" }}>
+                      {nominatimError}
+                    </span>
+                  ) : null}
+                  {nominatimResults.length > 0 ? (
+                    <div className="nominatim-results" role="listbox" aria-label="Hasil pencarian lokasi">
+                      {nominatimResults.map((hit) => (
+                        <button
+                          key={hit.place_id}
+                          type="button"
+                          className="nominatim-hit"
+                          onClick={() => applyNominatimHit(hit)}
+                        >
+                          <span>{hit.display_name}</span>
+                          <span className="faint numeric" style={{ fontSize: "0.75rem" }}>
+                            {Number(hit.lat).toFixed(4)}°, {Number(hit.lon).toFixed(4)}°
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+
                 <div className="btn-row">
                   <button
                     type="button"
@@ -857,19 +993,28 @@ export function FarmsPage() {
                   >
                     Ulangi sketsa
                   </button>
-                  <button
-                    type="button"
-                    className="btn btn-quiet btn-sm"
-                    aria-pressed={showOsmBasemap}
-                    onClick={() => {
-                      setOsmTileFailed(false);
-                      setShowOsmBasemap((prev) => !prev);
-                    }}
-                  >
-                    {showOsmBasemap
-                      ? "Sembunyikan latar peta"
-                      : "Tampilkan latar peta (OpenStreetMap)"}
-                  </button>
+                  <div className="basemap-toggle" role="group" aria-label="Mode latar peta">
+                    {(
+                      [
+                        { id: "none", label: "Sketsa Polos" },
+                        { id: "osm", label: "Peta Jalan (OSM)" },
+                        { id: "satellite", label: "Citra Satelit (Esri)" },
+                      ] as const
+                    ).map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        className={`btn btn-sm ${basemapMode === opt.id ? "btn-primary" : "btn-quiet"}`}
+                        aria-pressed={basemapMode === opt.id}
+                        onClick={() => {
+                          setTileFailed(false);
+                          setBasemapMode(opt.id);
+                        }}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 <div className="sketch-wrap">
@@ -887,17 +1032,17 @@ export function FarmsPage() {
                       height={PLOT_SIZE}
                       onPointerDown={addVertex}
                     />
-                    {showOsmBasemap && !osmTileFailed ? (
+                    {basemapMode !== "none" && !tileFailed ? (
                       <image
-                        href={osmTileUrl(Number(lat), Number(lon), spanKm)}
+                        href={basemapTileUrl(basemapMode, Number(lat), Number(lon), spanKm)}
                         x={PLOT_MIN}
                         y={PLOT_MIN}
                         width={PLOT_SIZE}
                         height={PLOT_SIZE}
                         preserveAspectRatio="xMidYMid slice"
-                        opacity={0.48}
+                        opacity={basemapMode === "satellite" ? 0.68 : 0.48}
                         pointerEvents="none"
-                        onError={() => setOsmTileFailed(true)}
+                        onError={() => setTileFailed(true)}
                       />
                     ) : null}
                     {[0.25, 0.5, 0.75].map((ratio) => {
@@ -976,6 +1121,13 @@ export function FarmsPage() {
                       />
                     ))}
                   </svg>
+                  {basemapMode !== "none" ? (
+                    <p className="basemap-attribution">
+                      {basemapMode === "satellite"
+                        ? "Tiles © Esri — World Imagery"
+                        : "© OpenStreetMap contributors"}
+                    </p>
+                  ) : null}
                   <p className="faint">
                     Klik di dalam kotak untuk menandai sudut lahan (minimal 3 titik), seret titik
                     untuk mengubah bentuknya, atau klik &ldquo;Buat bentuk persegi otomatis&rdquo;.
@@ -1388,7 +1540,12 @@ function computeEdgeLabels(
   return labels;
 }
 
-function osmTileUrl(latDeg: number, lonDeg: number, spanText: string): string {
+function basemapTileUrl(
+  mode: "osm" | "satellite",
+  latDeg: number,
+  lonDeg: number,
+  spanText: string,
+): string {
   const safeLat = Number.isFinite(latDeg) ? Math.max(-85, Math.min(85, latDeg)) : -6.322;
   const safeLon = Number.isFinite(lonDeg) ? Math.max(-180, Math.min(180, lonDeg)) : 107.752;
   const span = Number(spanText);
@@ -1402,10 +1559,19 @@ function osmTileUrl(latDeg: number, lonDeg: number, spanText: string): string {
           ? 14
           : 13;
   const n = 2 ** zoom;
-  const x = Math.floor(((safeLon + 180) / 360) * n);
+  const x = Math.max(0, Math.min(n - 1, Math.floor(((safeLon + 180) / 360) * n)));
   const latRad = (safeLat * Math.PI) / 180;
-  const y = Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n);
-  return `https://tile.openstreetmap.org/${zoom}/${Math.max(0, Math.min(n - 1, x))}/${Math.max(0, Math.min(n - 1, y))}.png`;
+  const y = Math.max(
+    0,
+    Math.min(
+      n - 1,
+      Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n),
+    ),
+  );
+  if (mode === "satellite") {
+    return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${zoom}/${y}/${x}`;
+  }
+  return `https://tile.openstreetmap.org/${zoom}/${x}/${y}.png`;
 }
 
 function countLabel(fields: readonly { farmId: string }[], farmId: string): string {

@@ -3,9 +3,14 @@ import "reflect-metadata";
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { unvalidatedGridRegistry } from "@agroclimate/weather-core";
+import {
+  resolveOpenMeteoLicenseConfig,
+  unvalidatedGridRegistry,
+  validatedOpenMeteoGridRegistry,
+} from "@agroclimate/weather-core";
 
 import { createApplication } from "./app.factory.js";
+import { createLlmBriefingProviderFromEnv } from "./briefing/llm-provider.js";
 import { loadLocalEnv, parseRuntimeConfig, readEnvironment } from "./config/runtime-config.js";
 
 // The repository-root local file sits three levels above both `src/main.ts` and
@@ -14,10 +19,21 @@ const localEnv = fileURLToPath(new URL("../../../.env", import.meta.url));
 if (existsSync(localEnv)) loadLocalEnv(localEnv);
 
 async function bootstrap(): Promise<void> {
-  const config = parseRuntimeConfig(readEnvironment());
+  const env = readEnvironment();
+  const config = parseRuntimeConfig(env);
+  resolveOpenMeteoLicenseConfig(env);
+  const briefingProvider = createLlmBriefingProviderFromEnv(env);
+  const gridRegistry =
+    config.nodeEnv !== "production"
+      ? validatedOpenMeteoGridRegistry
+      : env["WEATHER_PROVIDER_LICENSE_MODE"] !== undefined
+        ? validatedOpenMeteoGridRegistry
+        : unvalidatedGridRegistry;
+
   const app = await createApplication({
     config,
-    ...(config.nodeEnv !== "production" ? { gridRegistry: unvalidatedGridRegistry } : {}),
+    gridRegistry,
+    ...(briefingProvider === undefined ? {} : { briefingProvider }),
   });
   await app.listen(config.port);
   console.log(`[api] listening on ${config.port}`);

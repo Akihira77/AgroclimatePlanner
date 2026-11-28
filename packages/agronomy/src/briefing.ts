@@ -276,6 +276,40 @@ function basisLabelId(basis: PlantingWindow["evaluationBasis"]): string {
   }
 }
 
+function evidenceClassLabelId(cls: string): string {
+  switch (cls) {
+    case "weather_forecast":
+      return "prakiraan cuaca harian";
+    case "subseasonal_forecast":
+      return "prakiraan cuaca jangka menengah";
+    case "seasonal_forecast":
+      return "prakiraan cuaca musiman";
+    case "climatology":
+      return "rata-rata iklim historis";
+    case "field_observation":
+      return "pengamatan lapangan";
+    default:
+      return cls;
+  }
+}
+
+function formatFarmerReasonId(reason: string): string {
+  const t = reason.trim();
+  if (/^the critical stage rests on climatology/i.test(t)) {
+    return "fase kritis tanaman masih mengandalkan rata-rata iklim historis";
+  }
+  if (/^climate criteria rely on a single point-in-time field observation/i.test(t)) {
+    return "penilaian suhu baru memakai satu pengamatan lapangan hari ini";
+  }
+  if (/^a short-range daily weather forecast cannot cover a critical stage beyond/i.test(t)) {
+    return "prakiraan cuaca harian hanya mencakup 16 hari sehingga belum menjangkau fase kritis";
+  }
+  if (/^the critical stage is not fully covered by weather evidence/i.test(t)) {
+    return "data cuaca belum mencakup seluruh fase kritis tanaman";
+  }
+  return t;
+}
+
 export function buildDeterministicBriefing(context: BriefingContext): ClimateBriefingBody {
   const lead = context.windows[0];
   if (lead === undefined) {
@@ -294,27 +328,28 @@ export function buildDeterministicBriefing(context: BriefingContext): ClimateBri
     ),
   );
 
-  const summary = `Evaluasi deterministik untuk ${context.windows.length} jendela tanam menempatkan jendela utama ${lead.windowStart} s.d. ${lead.windowEnd} pada status ${verdictLabelId(lead.suitability)} dengan basis ${basisLabelId(lead.evaluationBasis)}.`;
+  const summary = `Hasil pemeriksaan lahan untuk periode tanam ${lead.windowStart} s.d. ${lead.windowEnd} berstatus ${verdictLabelId(lead.suitability)} berdasarkan ${basisLabelId(lead.evaluationBasis)}.`;
 
+  const weakestLabel = evidenceClassLabelId(lead.weakestEvidenceClass);
   const weatherParts: string[] = [
-    `Bukti cuaca terlemah pada jendela utama berasal dari kelas ${lead.weakestEvidenceClass} (${lead.segments.length} segmen).`,
+    `Data cuaca utama untuk periode ini bersumber dari ${weakestLabel}.`,
   ];
   if (hasClimatology && hasForecast) {
     weatherParts.push(
-      "Sebagian periode menggunakan baseline klimatologi historis (bukan prakiraan langsung) bersama data prakiraan.",
+      "Awal masa tanam memakai prakiraan cuaca aktif, sedangkan sisa musim hingga panen mengacu pada pola rata-rata iklim historis.",
     );
   } else if (hasClimatology) {
     weatherParts.push(
-      "Seluruh segmen saat ini bertumpu pada baseline klimatologi historis, bukan prakiraan cuaca aktif.",
+      "Seluruh periode saat ini mengacu pada pola rata-rata iklim historis, bukan prakiraan cuaca harian.",
     );
   }
   const weatherInterpretation = weatherParts.join(" ");
 
   const reasonDetail =
     lead.explanations.length > 0
-      ? `Alasan utama mesin agronomi: ${lead.explanations.slice(0, 3).join("; ")}.`
-      : "Tidak ada pelanggaran kendala tambahan yang tercatat pada jendela utama.";
-  const suitabilityExplanation = `Status ${verdictLabelId(lead.suitability)} ditetapkan oleh mesin aturan deterministik (bukan penilaian AI) dengan basis kritis ${lead.primaryBasis}. ${reasonDetail}`;
+      ? `Catatan utama: ${lead.explanations.slice(0, 3).map(formatFarmerReasonId).join("; ")}.`
+      : "Seluruh syarat tumbuh yang diperiksa berada dalam batas ideal.";
+  const suitabilityExplanation = `Status ${verdictLabelId(lead.suitability)} ditetapkan oleh perhitungan agronomi deterministik (bukan tebakan AI). ${reasonDetail}`;
 
   const riskHighlights: BriefingRiskHighlight[] = [];
   const leadSegmentIds = lead.segments.map((s) => s.evidenceSegmentId);
@@ -361,7 +396,7 @@ export function buildDeterministicBriefing(context: BriefingContext): ClimateBri
   const questionAnswer =
     context.question === null
       ? null
-      : `Pertanyaan "${context.question}" dijawab berdasarkan fakta run deterministik: jendela utama ${lead.windowStart} s.d. ${lead.windowEnd} berstatus ${verdictLabelId(lead.suitability)} (${basisLabelId(lead.evaluationBasis)}), dengan kelas bukti terlemah ${lead.weakestEvidenceClass}. Penilaian kesesuaian tetap ditentukan sepenuhnya oleh mesin agronomi deterministik.`;
+      : `Menjawab pertanyaan "${context.question}": periode tanam ${lead.windowStart} s.d. ${lead.windowEnd} berstatus ${verdictLabelId(lead.suitability)} dengan acuan utama ${weakestLabel}. Status kelayakan ditentukan sepenuhnya oleh perhitungan agronomi deterministik.`;
 
   return {
     summary,

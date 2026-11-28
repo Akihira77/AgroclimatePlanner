@@ -65,6 +65,7 @@ export interface ClimatologyHandlerOptions {
   readonly timeoutMs?: number | undefined;
   readonly maxBytes?: number | undefined;
   readonly baseUrl?: string | undefined;
+  readonly apiKey?: string | undefined;
 }
 
 /** The archive window is 30 years; the bound is for the small write, not the fetch. */
@@ -192,6 +193,7 @@ export function createClimatologyHandler(options: ClimatologyHandlerOptions): Jo
       endDate: ARCHIVE_PERIOD_TO,
       attribution,
       ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
+      ...(options.apiKey === undefined ? {} : { apiKey: options.apiKey }),
     };
     const outcome = await fetchArchiveDaily(config, runtime);
     if (!outcome.ok) return mapAdapterFailure(cell.cellKey, outcome);

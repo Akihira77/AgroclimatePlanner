@@ -61,6 +61,7 @@ export interface ForecastHandlerOptions {
   readonly timeoutMs?: number | undefined;
   readonly maxBytes?: number | undefined;
   readonly baseUrl?: string | undefined;
+  readonly apiKey?: string | undefined;
 }
 
 /** The relationship the timeout chain encodes: 5 s < 10 s < 20 s < 30 s. */
@@ -182,6 +183,8 @@ export function createForecastHandler(options: ForecastHandlerOptions): JobHandl
       longitude: cell.longitude,
       attribution: options.attribution,
       ...(options.baseUrl === undefined ? {} : { baseUrl: options.baseUrl }),
+      ...(run.model === "ecmwf_ifs025" ? { model: run.model } : {}),
+      ...(options.apiKey === undefined ? {} : { apiKey: options.apiKey }),
     };
 
     const outcome =
