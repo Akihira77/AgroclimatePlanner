@@ -3018,3 +3018,189 @@ a {
   background: var(--surface-muted);
 }
 
+/* Proactive Agroclimate Advisory & Recommendations */
+.advisory-hero {
+  border: 1.5px solid var(--accent);
+  background: linear-gradient(135deg, var(--surface) 0%, #f1f8f4 100%);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.advisory-hero-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.advisory-hero-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.advisory-subhead {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9rem;
+  color: var(--warn-ink);
+  margin-bottom: 6px;
+}
+
+.advisory-alert-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-2);
+}
+
+.advisory-alert-item {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: var(--radius);
+  padding: var(--space-2);
+}
+
+.advisory-weather-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-2);
+}
+
+.advisory-weather-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-2);
+}
+
+.season-regime-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-2);
+}
+
+.season-regime-card {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--line-strong);
+  border-radius: var(--radius);
+  padding: var(--space-2);
+  background: var(--surface);
+}
+
+.season-regime-card[data-category="wet"] {
+  border-left-color: var(--accent);
+  background: #f4faf6;
+}
+
+.season-regime-card[data-category="transition"] {
+  border-left-color: #2563eb;
+  background: #f5f8ff;
+}
+
+.season-regime-card[data-category="dry"] {
+  border-left-color: var(--warn);
+  background: #fffdf5;
+}
+
+.season-regime-card[data-category="missing"] {
+  border-left-style: dashed;
+  background: var(--surface-muted);
+}
+
+.recommendation-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--space-2);
+}
+
+.recommendation-card {
+  height: 100%;
+}
+
+.window-matrix-wrap {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: var(--space-2);
+}
+
+@media (max-width: 768px) {
+  .stack > *,
+  .section,
+  .panel {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .tabs {
+    flex-wrap: wrap;
+    max-width: 100%;
+  }
+
+  .onboarding-float {
+    bottom: 76px;
+    right: 12px;
+  }
+}
+
+.window-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+}
+
+.window-matrix th,
+.window-matrix td {
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--line);
+  text-align: center;
+}
+
+.window-matrix th:first-child,
+.window-matrix td:first-child {
+  text-align: left;
+  padding-right: 12px;
+  min-width: 130px;
+}
+
+.matrix-cell {
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.matrix-cell[data-verdict="suitable"] {
+  background: #16a34a;
+}
+
+.matrix-cell[data-verdict="conditional"] {
+  background: #eab308;
+}
+
+.matrix-cell[data-verdict="unsuitable"] {
+  background: #dc2626;
+}
+
+.matrix-cell[data-verdict="insufficient_data"] {
+  background: var(--surface-muted);
+  border: 1px dashed var(--line-strong);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+

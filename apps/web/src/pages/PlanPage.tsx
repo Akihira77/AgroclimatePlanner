@@ -1,6 +1,7 @@
 import type {
   AiBriefing,
   CropCycle,
+  FieldRecommendations,
   IrrigationAvailability,
   Planting,
   PlantingWindow,
@@ -15,6 +16,7 @@ import { CustomSelect } from "../components/CustomSelect.js";
 import { DatePicker } from "../components/DatePicker.js";
 import {
   ConstraintCheckList,
+  CropIllustration,
   EvaluationVisualSummary,
   GrowthStageTimeline,
 } from "../components/Visuals.js";
@@ -44,7 +46,7 @@ import { useAsync } from "../useAsync.js";
 
 const BASELINE_HASH_PLACEHOLDER = "0".repeat(64);
 
-type PlanTab = "evaluation" | "briefing" | "schedule";
+type PlanTab = "recommendations" | "evaluation" | "briefing" | "schedule";
 
 export function PlanPage() {
   const state = useAsync("plan-fields", async () => {
@@ -57,8 +59,18 @@ export function PlanPage() {
     return { fields, crops: catalog.crops, windows, plantings };
   });
 
-  const [tab, setTab] = useState<PlanTab>("evaluation");
+  const [tab, setTab] = useState<PlanTab>("recommendations");
   const [fieldId, setFieldId] = useState("");
+  const [horizonMonths, setHorizonMonths] = useState<3 | 6 | 12>(6);
+  const [recommendations, setRecommendations] = useState<FieldRecommendations | null>(null);
+  const [recLoading, setRecLoading] = useState(false);
+  const [selectedMatrixNote, setSelectedMatrixNote] = useState<{
+    readonly cropName: string;
+    readonly month: string;
+    readonly verdict: SuitabilityVerdict;
+    readonly rainfallMm: number | null;
+    readonly noteId: string;
+  } | null>(null);
   const [cropSlug, setCropSlug] = useState("");
   const [date, setDate] = useState(today);
   const [irrigation, setIrrigation] = useState<IrrigationAvailability>("rainfed");
@@ -121,6 +133,33 @@ export function PlanPage() {
       alive = false;
     };
   }, [field]);
+
+  useEffect(() => {
+    if (field === undefined) {
+      setRecommendations(null);
+      return;
+    }
+    let alive = true;
+    setRecLoading(true);
+    setSelectedMatrixNote(null);
+    api
+      .fieldRecommendations(field.id, horizonMonths)
+      .then(
+        (res) => {
+          if (!alive) return;
+          setRecommendations(res);
+          setRecLoading(false);
+        },
+        (err: unknown) => {
+          if (!alive) return;
+          setActionError(err);
+          setRecLoading(false);
+        },
+      );
+    return () => {
+      alive = false;
+    };
+  }, [field, horizonMonths]);
 
   if (state.loading) return <Loading />;
   if (state.error !== null) return <ErrorNotice error={state.error} />;
@@ -363,6 +402,237 @@ export function PlanPage() {
 
       {actionError !== null ? <ErrorNotice error={actionError} /> : null}
 
+      <div className="tabs" role="tablist" aria-label="Bagian Rencana Tanam">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "recommendations"}
+          className={`tab-btn${tab === "recommendations" ? " is-active" : ""}`}
+          onClick={() => setTab("recommendations")}
+        >
+          <IconSparkles size={16} />
+          <span>Rekomendasi Komoditas</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "evaluation"}
+          className={`tab-btn${tab === "evaluation" ? " is-active" : ""}`}
+          onClick={() => setTab("evaluation")}
+        >
+          <IconCalendar size={16} />
+          <span>Uji Tanggal Manual</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "briefing"}
+          className={`tab-btn${tab === "briefing" ? " is-active" : ""}`}
+          onClick={() => setTab("briefing")}
+        >
+          <IconSparkles size={16} />
+          <span>Asisten AI</span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "schedule"}
+          className={`tab-btn${tab === "schedule" ? " is-active" : ""}`}
+          onClick={() => setTab("schedule")}
+        >
+          <span>Jadwal Fase Tanam</span>
+        </button>
+      </div>
+
+      {tab === "recommendations" ? (
+        <div className="stack">
+          <div className="panel">
+            <div className="panel-body form-grid">
+              <div className="field">
+                <FieldLabel htmlFor="rec-field" label="Pilih Lahan" />
+                {fields.length === 0 ? (
+                  <p className="muted">
+                    Belum ada lahan. <Link to="/lahan">Buat lahan</Link> terlebih dahulu.
+                  </p>
+                ) : (
+                  <CustomSelect
+                    id="rec-field"
+                    value={field?.id ?? ""}
+                    onChange={(val) => setFieldId(val)}
+                    options={fields.map((f) => ({
+                      value: f.id,
+                      label: f.name,
+                    }))}
+                  />
+                )}
+              </div>
+
+              <div className="field">
+                <FieldLabel htmlFor="rec-horizon" label="Rentang Rekomendasi" />
+                <div className="segmented" id="rec-horizon" role="group" aria-label="Pilih rentang bulan">
+                  {([3, 6, 12] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      className={`segmented-btn${horizonMonths === m ? " is-active" : ""}`}
+                      onClick={() => setHorizonMonths(m)}
+                    >
+                      {m} Bulan
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {field === undefined ? null : recLoading ? (
+            <Loading label="Menganalisis kesesuaian seluruh komoditas untuk lahan Anda…" />
+          ) : recommendations === null ? null : (
+            <>
+              <Notice tone="info">
+                <span>
+                  <strong>Himbauan Indikatif:</strong> {recommendations.indicativeNotice}
+                </span>
+              </Notice>
+
+              <section className="section">
+                <div className="section-head">
+                  <h2>Peringkat Komoditas ({recommendations.horizonMonths} Bulan ke Depan)</h2>
+                  <span className="muted">{recommendations.rankings.length} komoditas dievaluasi</span>
+                </div>
+                <div className="recommendation-grid">
+                  {recommendations.rankings.map((item) => (
+                    <article className="panel recommendation-card" key={item.profileVersionId}>
+                      <div className="panel-body stack" style={{ gap: "var(--space-2)" }}>
+                        <div className="spread" style={{ gap: 10, alignItems: "flex-start" }}>
+                          <div className="row" style={{ gap: 10, alignItems: "center" }}>
+                            <CropIllustration slug={item.cropSlug} size={42} />
+                            <div>
+                              <h3 style={{ margin: 0 }}>{item.cropNameId}</h3>
+                              <span className="faint" style={{ fontSize: "0.84rem" }}>
+                                {item.cultivarName} · ~{item.durationDaysTypical} hr
+                              </span>
+                            </div>
+                          </div>
+                          <Tag tone={suitabilityTone(item.verdict)}>
+                            {suitabilityLabel(item.verdict)}
+                          </Tag>
+                        </div>
+
+                        <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+                          {item.bestStartMonth !== null ? (
+                            <Tag tone="accent">Terbaik: {monthLabel(item.bestStartMonth)}</Tag>
+                          ) : null}
+                          <Tag>{item.evidenceBadge}</Tag>
+                        </div>
+
+                        <p className="muted" style={{ margin: 0, fontSize: "0.9rem" }}>
+                          {item.summaryId}
+                        </p>
+
+                        <div>
+                          <button
+                            type="button"
+                            className="btn btn-quiet btn-sm"
+                            onClick={() => {
+                              setCropSlug(item.cropSlug);
+                              if (item.bestStartMonth !== null) {
+                                setDate(item.bestStartMonth);
+                              }
+                              setTab("evaluation");
+                            }}
+                          >
+                            Simulasikan di Uji Manual
+                          </button>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+
+              <section className="section">
+                <div className="section-head">
+                  <h2>Peta Jendela Tanam 12 Bulan</h2>
+                  <span className="muted">Klik atau arahkan kursor ke sel untuk melihat alasan</span>
+                </div>
+                <div className="panel window-matrix-wrap">
+                  <table className="window-matrix">
+                    <thead>
+                      <tr>
+                        <th>Komoditas</th>
+                        {recommendations.months.map((m) => (
+                          <th key={m}>{m.slice(5, 7)}/{m.slice(2, 4)}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {recommendations.matrix.map((row) => (
+                        <tr key={row.profileVersionId}>
+                          <td>
+                            <strong>{row.cropNameId}</strong>
+                            <div className="faint" style={{ fontSize: "0.75rem" }}>
+                              {row.cultivarName}
+                            </div>
+                          </td>
+                          {row.cells.map((cell) => (
+                            <td key={cell.month}>
+                              <button
+                                type="button"
+                                className="matrix-cell"
+                                data-verdict={cell.verdict}
+                                title={`${row.cropNameId} (${monthLabel(cell.month)}): ${suitabilityLabel(cell.verdict)} — ${cell.noteId}`}
+                                onClick={() =>
+                                  setSelectedMatrixNote({
+                                    cropName: row.cropNameId,
+                                    month: cell.month,
+                                    verdict: cell.verdict,
+                                    rainfallMm: cell.rainfallMm,
+                                    noteId: cell.noteId,
+                                  })
+                                }
+                              >
+                                <span className="sr-only">
+                                  {suitabilityLabel(cell.verdict)}
+                                </span>
+                              </button>
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {selectedMatrixNote !== null ? (
+                  <div className="panel" style={{ marginTop: "var(--space-2)" }}>
+                    <div className="panel-body spread" style={{ gap: 10, flexWrap: "wrap" }}>
+                      <div>
+                        <strong>
+                          {selectedMatrixNote.cropName} · {monthLabel(selectedMatrixNote.month)}
+                        </strong>
+                        {selectedMatrixNote.rainfallMm !== null ? (
+                          <span className="muted" style={{ marginLeft: 8 }}>
+                            (Perkiraan hujan siklus: ~{selectedMatrixNote.rainfallMm} mm)
+                          </span>
+                        ) : null}
+                        <p className="muted" style={{ margin: "4px 0 0" }}>
+                          {selectedMatrixNote.noteId}
+                        </p>
+                      </div>
+                      <Tag tone={suitabilityTone(selectedMatrixNote.verdict)}>
+                        {suitabilityLabel(selectedMatrixNote.verdict)}
+                      </Tag>
+                    </div>
+                  </div>
+                ) : null}
+              </section>
+            </>
+          )}
+        </div>
+      ) : null}
+
+      {tab !== "recommendations" ? (
       <form className="panel" onSubmit={(event) => event.preventDefault()}>
         <div className="panel-head">
           <h3>Parameter Evaluasi Tanam</h3>
@@ -453,38 +723,7 @@ export function PlanPage() {
           </div>
         </div>
       </form>
-
-      <div className="tabs" role="tablist" aria-label="Bagian Rencana Tanam">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "evaluation"}
-          className={`tab-btn${tab === "evaluation" ? " is-active" : ""}`}
-          onClick={() => setTab("evaluation")}
-        >
-          <IconCalendar size={16} />
-          <span>Evaluasi &amp; Kalender</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "briefing"}
-          className={`tab-btn${tab === "briefing" ? " is-active" : ""}`}
-          onClick={() => setTab("briefing")}
-        >
-          <IconSparkles size={16} />
-          <span>Asisten AI</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "schedule"}
-          className={`tab-btn${tab === "schedule" ? " is-active" : ""}`}
-          onClick={() => setTab("schedule")}
-        >
-          <span>Jadwal Fase Tanam</span>
-        </button>
-      </div>
+      ) : null}
 
       {tab === "evaluation" ? (
         <div className="stack">

@@ -1,8 +1,12 @@
-import { generatePlantingWindows } from "@agroclimate/agronomy";
+import { generatePlantingWindows, recommendCropsForField } from "@agroclimate/agronomy";
+import { assembleOutlookHorizon } from "@agroclimate/climate-core";
 import type {
   Constraint,
   FieldEvaluateRequest,
+  FieldRecommendations,
   FieldSnapshotPayload,
+  GridRegistry,
+  GridRegistryEntry,
   GrowthStage,
   IrrigationAvailability,
   PlantingWindow,
@@ -10,6 +14,9 @@ import type {
   SuitabilityRunWithWindows,
 } from "@agroclimate/contracts";
 import {
+  calendarMonthOf,
+  createSpatialResolution,
+  fieldRecommendationsSchema,
   fieldSnapshotPayloadSchema,
   hashDerivationDescriptor,
   hashFieldSnapshot,
@@ -18,9 +25,13 @@ import {
 import {
   createTenantScope,
   findCultivar,
+  findField,
   findLatestSuitabilityRun,
   findProfileVersion,
   listActivePlantingWindows,
+  listCrops,
+  listCultivars,
+  listProfileVersionsForCrop,
   loadActiveOutlookMonths,
   loadFieldSnapshotSource,
   persistSuitabilityRunWithWindows,
@@ -28,9 +39,10 @@ import {
 } from "@agroclimate/database";
 import type { PrismaClient, TenantScope } from "@agroclimate/database";
 import { unvalidatedGridRegistry } from "@agroclimate/weather-core";
-import { Inject, Injectable } from "@nestjs/common";
+import { Inject, Injectable, Optional } from "@nestjs/common";
 
-import { DATABASE_CLIENT } from "../tokens.js";
+import { jakartaMonthOf } from "../climate/calendar.js";
+import { DATABASE_CLIENT, GRID_REGISTRY } from "../tokens.js";
 
 export const AGRONOMY_ENGINE_VERSION = "0.1.0";
 export const AGRONOMY_DERIVATION_VERSION = "1";
@@ -177,7 +189,10 @@ export class AgronomyResourceNotFoundError extends Error {
 export class AgronomyService {
   private readonly tenants: TenantScope;
 
-  constructor(@Inject(DATABASE_CLIENT) prisma: PrismaClient) {
+  constructor(
+    @Inject(DATABASE_CLIENT) prisma: PrismaClient,
+    @Optional() @Inject(GRID_REGISTRY) private readonly grids?: GridRegistry,
+  ) {
     this.tenants = createTenantScope(prisma);
   }
 
@@ -419,5 +434,174 @@ export class AgronomyService {
         ...(query.to === undefined ? {} : { to: query.to }),
       }),
     );
+  }
+
+  private tryRegistryEntry(provider: string, model: string): GridRegistryEntry | null {
+    if (this.grids === undefined) return null;
+    try {
+      const spec = this.grids.specFor({ provider, model });
+      const evidence = this.grids.evidenceFor({ provider, model });
+      return { provider, model, spec, evidence };
+    } catch {
+      return null;
+    }
+  }
+
+  async recommendForField(
+    userId: string,
+    fieldId: string,
+    horizonMonths: 3 | 6 | 12,
+  ): Promise<FieldRecommendations> {
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const firstMonth = jakartaMonthOf(now);
+    const toMonth = calendarMonthOf(firstMonth, 12);
+
+    return this.tenants.withTenant(userId, async (tx) => {
+      const fieldRow = await findField(tx, fieldId);
+      const source = await loadFieldSnapshotSource(tx, fieldId);
+      if (fieldRow === null || source === null) {
+        throw new AgronomyResourceNotFoundError("field_not_found", `field not found: ${fieldId}`);
+      }
+
+      const anchor = await selectFieldAnchor(tx, fieldId);
+      const mergedMonths = new Map<
+        string,
+        { readonly month: string; readonly valueMm: number | null; readonly dataClass: string | null }
+      >();
+      for (let i = 1; i <= 12; i += 1) {
+        const m = calendarMonthOf(firstMonth, i);
+        mergedMonths.set(m, { month: m, valueMm: null, dataClass: null });
+      }
+
+      if (anchor !== null) {
+        const fcEntry = this.tryRegistryEntry("open-meteo", "ecmwf_ifs025");
+        const eraEntry = this.tryRegistryEntry("open-meteo", "era5");
+        let cellKey: string | null = null;
+        if (fcEntry !== null) {
+          try {
+            cellKey = createSpatialResolution(fcEntry, { lat: anchor.lat, lon: anchor.lon }).cellKey;
+          } catch {
+            cellKey = null;
+          }
+        } else {
+          try {
+            cellKey = unvalidatedGridRegistry.resolve(
+              { provider: "open-meteo", model: "ecmwf_ifs025" },
+              { lat: anchor.lat, lon: anchor.lon },
+            ).cellKey;
+          } catch {
+            cellKey = null;
+          }
+        }
+
+        if (cellKey !== null) {
+          if (eraEntry !== null) {
+            const eraStored = await loadActiveOutlookMonths(tx, {
+              provider: "open-meteo",
+              model: "era5",
+              cellKey,
+              fromMonth: firstMonth,
+              toMonth,
+            });
+            if (eraStored !== null) {
+              const assembled = assembleOutlookHorizon({
+                firstMonth,
+                rows: eraStored.months,
+                now: nowIso,
+              });
+              if (assembled.ok) {
+                for (const m of assembled.value.months) {
+                  if (m.valueMm !== null) {
+                    mergedMonths.set(m.month, {
+                      month: m.month,
+                      valueMm: m.valueMm,
+                      dataClass: m.dataClass,
+                    });
+                  }
+                }
+              }
+            }
+          }
+
+          const fcStored = await loadActiveOutlookMonths(tx, {
+            provider: "open-meteo",
+            model: "ecmwf_ifs025",
+            cellKey,
+            fromMonth: firstMonth,
+            toMonth,
+          });
+          if (fcStored !== null) {
+            const assembled = assembleOutlookHorizon({
+              firstMonth,
+              rows: fcStored.months,
+              now: nowIso,
+            });
+            if (assembled.ok) {
+              for (const m of assembled.value.months) {
+                if (m.valueMm !== null) {
+                  mergedMonths.set(m.month, {
+                    month: m.month,
+                    valueMm: m.valueMm,
+                    dataClass: m.dataClass,
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+
+      const crops = await listCrops(tx);
+      const candidates = [];
+      for (const crop of crops) {
+        const cultivars = await listCultivars(tx, crop.id);
+        const versions = await listProfileVersionsForCrop(tx, crop.id);
+        for (const cultivar of cultivars) {
+          const publishedSummary = versions.find(
+            (v) => v.cultivarId === cultivar.id && v.status === "published",
+          );
+          if (publishedSummary === undefined) continue;
+          const profile = await findProfileVersion(tx, publishedSummary.id);
+          if (profile === null) continue;
+          candidates.push({
+            cropId: crop.id,
+            cropSlug: crop.slug,
+            cropNameId: crop.nameId,
+            category: crop.category,
+            cultivarId: cultivar.id,
+            cultivarName: cultivar.name,
+            profileVersionId: profile.id,
+            durationDaysTypical: cultivar.durationDaysTypical,
+            altitudeMinM: cultivar.altitudeMinM,
+            altitudeMaxM: cultivar.altitudeMaxM,
+            constraints: profile.constraints as unknown as readonly Constraint[],
+          });
+        }
+      }
+
+      const latestTempObs = source.observationsUsed.find(
+        (obs) =>
+          obs.kind === "temperature" &&
+          ["°c", "c", "celsius"].includes(obs.unit.trim().toLowerCase()),
+      );
+
+      const computed = recommendCropsForField({
+        field: {
+          fieldId,
+          fieldName: fieldRow.name,
+          elevationM: source.elevationM,
+          soilPh: source.soilPh,
+          drainageClass: source.drainageClass,
+          irrigationAvailability: source.irrigationAvailability ?? "unknown",
+          latestTempC: latestTempObs?.value ?? null,
+        },
+        outlookMonths: [...mergedMonths.values()],
+        crops: candidates,
+        horizonMonths,
+      });
+
+      return fieldRecommendationsSchema.parse(computed);
+    });
   }
 }

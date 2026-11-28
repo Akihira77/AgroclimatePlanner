@@ -147,6 +147,60 @@ export function CropIllustration({ slug, size = 44 }: { slug: string; size?: num
         />
       </>
     );
+  } else if (key.includes("bawang") || key.includes("shallot")) {
+    label = "Ilustrasi tanaman bawang merah";
+    content = (
+      <>
+        <circle cx="24" cy="24" r="22" fill="#fdf2f8" />
+        <path d="M24 20C21 15 21 11 22 9M24 20C25 14 27 11 28 9M24 20V10" stroke="#15803d" strokeWidth="2" strokeLinecap="round" />
+        <ellipse cx="24" cy="28" rx="8.5" ry="7.5" fill="#9d174d" />
+        <path d="M24 20.5C21 24 21 31 24 35.5M24 20.5C27 24 27 31 24 35.5" stroke="#f472b6" strokeWidth="1.2" fill="none" />
+      </>
+    );
+  } else if (key.includes("tomat") || key.includes("tomato")) {
+    label = "Ilustrasi tanaman tomat";
+    content = (
+      <>
+        <circle cx="24" cy="24" r="22" fill="#fff1f2" />
+        <circle cx="24" cy="26.5" r="10.5" fill="#ef4444" />
+        <path d="M19 23C19 20 21 19 22 19" stroke="#fecaca" strokeWidth="1.8" strokeLinecap="round" fill="none" />
+        <path d="M24 16L20 12.5M24 16L28 12.5M24 16V10.5" stroke="#15803d" strokeWidth="2.2" strokeLinecap="round" />
+      </>
+    );
+  } else if (key.includes("kacang") || key.includes("peanut")) {
+    label = "Ilustrasi tanaman kacang tanah";
+    content = (
+      <>
+        <circle cx="24" cy="24" r="22" fill="#fefce8" />
+        <path d="M15 29C14 25 17 22 20 23C22 24 24 22 26 20C29 17 33 19 33 23C33 27 29 29 26 28C23 28 21 31 18 32C16 32 15 31 15 29Z" fill="#d97706" opacity="0.88" />
+        <circle cx="19.5" cy="27" r="2.2" fill="#fde68a" />
+        <circle cx="28.5" cy="23.5" r="2.2" fill="#fde68a" />
+        <path d="M22 18C18 15 17 11 20 9C23 11 24 14 22 18Z" fill="#2d6a4f" />
+      </>
+    );
+  } else if (key.includes("kentang") || key.includes("potato")) {
+    label = "Ilustrasi tanaman kentang";
+    content = (
+      <>
+        <circle cx="24" cy="24" r="22" fill="#fef9c3" />
+        <ellipse cx="21" cy="27" rx="8.5" ry="6.2" transform="rotate(-12 21 27)" fill="#b45309" />
+        <ellipse cx="29" cy="29" rx="6.5" ry="5" transform="rotate(14 29 29)" fill="#d97706" />
+        <circle cx="19" cy="26" r="1" fill="#fef3c7" />
+        <circle cx="24" cy="28" r="1" fill="#fef3c7" />
+        <path d="M24 19C20 16 19 12 22 10C25 12 25 15 24 19Z" fill="#15803d" />
+      </>
+    );
+  } else if (key.includes("ubi") || key.includes("singkong") || key.includes("cassava")) {
+    label = "Ilustrasi tanaman ubi kayu";
+    content = (
+      <>
+        <circle cx="24" cy="24" r="22" fill="#f5f5f4" />
+        <path d="M24 21C19 25 16 31 15 36C18 35 22 30 24 23Z" fill="#78350f" />
+        <path d="M24 21C25 27 25 32 24 37C27 35 28 29 26 22Z" fill="#92400e" />
+        <path d="M25 21C29 25 32 30 33 34C30 33 27 28 25 21Z" fill="#78350f" />
+        <path d="M24 21V11M24 15L18 11M24 15L30 11" stroke="#15803d" strokeWidth="2.2" strokeLinecap="round" />
+      </>
+    );
   } else {
     content = (
       <>

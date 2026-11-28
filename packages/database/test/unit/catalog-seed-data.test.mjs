@@ -30,9 +30,9 @@ const CYCLE_STARTS = new Set(["sowing", "transplant"]);
 const bySlug = new Map(CATALOGUE.map((entry) => [entry.crop.slug, entry]));
 
 describe("catalogue seed identity", () => {
-  test("four crops, unique slugs that satisfy the SQL slug shape", () => {
-    assert.equal(CATALOGUE.length, 4);
-    assert.equal(bySlug.size, 4);
+  test("nine crops, unique slugs that satisfy the SQL slug shape", () => {
+    assert.equal(CATALOGUE.length, 9);
+    assert.equal(bySlug.size, 9);
     for (const { crop } of CATALOGUE) {
       assert.match(crop.slug, /^[a-z][a-z0-9-]*$/, `${crop.slug} violates crops_slug_shape_check`);
       assert.notEqual(crop.nameId.trim(), "");

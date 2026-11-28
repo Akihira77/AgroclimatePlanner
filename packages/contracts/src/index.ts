@@ -1,4 +1,5 @@
 export * from "./activity.js";
+export * from "./advisory.js";
 export * from "./auth.js";
 export * from "./enums.js";
 export * from "./farm.js";

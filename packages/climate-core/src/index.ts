@@ -94,3 +94,12 @@ export {
   type VerificationOutcome,
   type VerificationPair,
 } from "./verification.js";
+export {
+  classifyOldemanMonth,
+  classifySeasonalRegimes,
+  summariseCurrentMonthSeason,
+  type CurrentMonthSeasonSummary,
+  type SeasonCategory,
+  type SeasonalOutlookMonthInput,
+  type SeasonalRegimePeriod,
+} from "./seasons.js";

@@ -1,6 +1,7 @@
 import { api } from "../api.js";
 import { FarmAreaBarChart, PlantingProgressList } from "../components/Visuals.js";
 import {
+  IconAlert,
   IconBook,
   IconCalendar,
   IconClipboard,
@@ -9,25 +10,26 @@ import {
   IconSparkles,
 } from "../icons.js";
 import { Link } from "../router.js";
-import { Empty, ErrorNotice, Loading, Notice, PageGuide } from "../ui.js";
+import { Empty, ErrorNotice, Loading, Notice, PageGuide, Tag } from "../ui.js";
 import { useAsync } from "../useAsync.js";
 
 export function DashboardPage() {
   const state = useAsync("dashboard", async () => {
-    const [farms, fields, plantings, windows] = await Promise.all([
+    const [farms, fields, plantings, windows, advisory] = await Promise.all([
       api.listFarms(),
       api.listFields(),
       api.listPlantings(),
       api.listPlantingWindows(),
+      api.dashboardAdvisory().catch(() => null),
     ]);
-    return { farms, fields, plantings, windows };
+    return { farms, fields, plantings, windows, advisory };
   });
 
   if (state.loading) return <Loading />;
   if (state.error !== null) return <ErrorNotice error={state.error} />;
   if (state.data === null) return null;
 
-  const { farms, fields, plantings, windows } = state.data;
+  const { farms, fields, plantings, windows, advisory } = state.data;
   const activePlantings = plantings.filter((p) => p.status === "active").length;
   const newest = [...farms].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 4);
 
@@ -54,6 +56,100 @@ export function DashboardPage() {
         ]}
         tip="Tips: Gunakan tombol mengambang 'Panduan Mulai' di pojok kanan bawah kapan saja untuk memantau progres langkah Anda."
       />
+
+      {advisory !== null ? (
+        <section className="panel advisory-hero" aria-label="Himbauan Iklim dan Fokus Minggu Ini">
+          <div className="advisory-hero-head">
+            <div className="stack" style={{ gap: 4 }}>
+              <div className="row" style={{ gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <IconCloud size={20} />
+                <h2 style={{ margin: 0 }}>Himbauan Iklim &amp; Fokus Minggu Ini</h2>
+                <Tag tone="accent">Himbauan Indikatif</Tag>
+              </div>
+              <p className="muted" style={{ margin: 0 }}>
+                {advisory.currentMonthSeason.summaryId}
+              </p>
+            </div>
+            <div className="btn-row">
+              <Link className="btn btn-quiet btn-sm" to="/iklim">
+                <IconCloud size={15} />
+                <span>Cuaca &amp; Iklim</span>
+              </Link>
+              <Link className="btn btn-primary btn-sm" to="/rencana">
+                <IconCalendar size={15} />
+                <span>Rekomendasi Tanam</span>
+              </Link>
+            </div>
+          </div>
+
+          <div className="advisory-hero-body">
+            {advisory.criticalStageAlerts.length > 0 ? (
+              <div className="advisory-alerts">
+                <strong className="advisory-subhead">
+                  <IconAlert size={15} />
+                  <span>Peringatan Siklus Tanam Aktif (Fase Kritis)</span>
+                </strong>
+                <div className="advisory-alert-list">
+                  {advisory.criticalStageAlerts.map((alert) => (
+                    <div className="advisory-alert-item" key={alert.plantingId}>
+                      <div className="spread" style={{ gap: 8 }}>
+                        <strong>
+                          {alert.cropNameId} ({alert.cultivarName}) · {alert.fieldName}
+                        </strong>
+                        <Tag tone={alert.status === "in_critical" ? "danger" : "warn"}>
+                          {alert.status === "in_critical"
+                            ? "Sedang Fase Kritis"
+                            : `H-${alert.daysUntilStart} Fase Kritis`}
+                        </Tag>
+                      </div>
+                      <p className="muted" style={{ margin: "4px 0 0" }}>
+                        {alert.weatherSummaryId}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {advisory.fieldWeather.length === 0 ? (
+              <p className="muted" style={{ margin: 0 }}>
+                Belum ada lahan terdaftar. <Link to="/lahan">Tambahkan lahan</Link> untuk memantau
+                ringkasan cuaca 7–14 hari ke depan.
+              </p>
+            ) : (
+              <div className="advisory-weather-grid">
+                {advisory.fieldWeather.map((fw) => (
+                  <div className="advisory-weather-card" key={fw.fieldId}>
+                    <div className="spread" style={{ gap: 8 }}>
+                      <div>
+                        <strong>{fw.fieldName}</strong>
+                        <span className="faint" style={{ marginLeft: 6, fontSize: "0.82rem" }}>
+                          {fw.farmName}
+                        </span>
+                      </div>
+                      {fw.hasData && fw.totalRainMm !== null ? (
+                        <Tag tone={fw.peakRainMm !== null && fw.peakRainMm >= 20 ? "warn" : "accent"}>
+                          ~{Math.round(fw.totalRainMm)} mm / {fw.horizonDays} hr
+                        </Tag>
+                      ) : (
+                        <Tag>Belum ada data cuaca</Tag>
+                      )}
+                    </div>
+                    <p style={{ margin: "6px 0 0", fontSize: "0.9rem" }}>{fw.advisoryTextId}</p>
+                    {!fw.hasData ? (
+                      <div style={{ marginTop: 8 }}>
+                        <Link className="btn btn-quiet btn-sm" to="/iklim">
+                          Cek Cuaca &amp; Iklim
+                        </Link>
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+      ) : null}
 
       <div className="stats">
         <div className="stat">

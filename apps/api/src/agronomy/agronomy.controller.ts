@@ -8,6 +8,8 @@ import type {
   Envelope,
   FieldEvaluateRequest,
   FieldId,
+  FieldRecommendations,
+  FieldRecommendationsQuery,
   PlantingWindow,
   PlantingWindowListQuery,
   SuitabilityRunWithWindows,
@@ -15,6 +17,7 @@ import type {
 import {
   fieldEvaluateRequestSchema,
   fieldIdSchema,
+  fieldRecommendationsQuerySchema,
   plantingWindowListQuerySchema,
 } from "@agroclimate/contracts";
 import {
@@ -22,6 +25,7 @@ import {
   Body,
   Controller,
   Get,
+  Logger,
   NotFoundException,
   Param,
   Post,
@@ -118,5 +122,34 @@ export class AgronomyController {
   ): Promise<Envelope<readonly PlantingWindow[]>> {
     const windows = await this.agronomy.listPlantingWindows(authenticatedUserId(request), query);
     return { data: windows };
+  }
+
+  @Get("fields/:fieldId/recommendations")
+  async getFieldRecommendations(
+    @Req() request: AuthenticatedRequest,
+    @Param("fieldId", new ZodValidationPipe(fieldIdSchema)) fieldId: FieldId,
+    @Query(new ZodValidationPipe(fieldRecommendationsQuerySchema))
+    query: FieldRecommendationsQuery,
+  ): Promise<Envelope<FieldRecommendations>> {
+    try {
+      const data = await this.agronomy.recommendForField(
+        authenticatedUserId(request),
+        fieldId,
+        query.horizonMonths as 3 | 6 | 12,
+      );
+      return { data };
+    } catch (error) {
+      if (error instanceof AgronomyResourceNotFoundError) {
+        throw new NotFoundException({
+          code: "NOT_FOUND",
+          message: "Field not found",
+        });
+      }
+      Logger.error(
+        `recommendForField failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`,
+        "AgronomyController",
+      );
+      throw error;
+    }
   }
 }

@@ -1,3 +1,4 @@
+import { classifySeasonalRegimes, type SeasonCategory } from "@agroclimate/climate-core/seasons";
 import type { ClimateDailyOutlook, ClimateOutlook } from "@agroclimate/contracts";
 import { useEffect, useState } from "react";
 
@@ -233,6 +234,26 @@ function MonthlyView({ request }: { readonly request: ReadRequest }) {
 
 function MonthlyTable({ outlook }: { readonly outlook: ClimateOutlook }) {
   const present = outlook.months.filter((month) => month.valueMm !== null).length;
+  const regimes = classifySeasonalRegimes(
+    outlook.months.map((m) => ({
+      month: m.month,
+      valueMm: m.valueMm,
+      dataClass: m.dataClass,
+    })),
+  );
+  const baselines = Array.from(
+    new Set(
+      outlook.months
+        .map((m) => m.baselineVersion)
+        .filter((b): b is string => b !== null && b.length > 0),
+    ),
+  );
+
+  const seasonTone = (cat: SeasonCategory): "accent" | "warn" | undefined => {
+    if (cat === "wet") return "accent";
+    if (cat === "dry") return "warn";
+    return undefined;
+  };
 
   return (
     <section className="stack">
@@ -245,46 +266,101 @@ function MonthlyTable({ outlook }: { readonly outlook: ClimateOutlook }) {
 
       <MonthlyRainfallChart outlook={outlook} />
 
-      <div className="month-list">
-        {outlook.months.map((month) => (
-          <div className="month-row" key={month.month}>
-            <span className="month">{monthLabel(month.month)}</span>
-            <span className="meta">
-              {month.dataClass === null ? (
-                <Tag>
-                  {month.missingReason === null
-                    ? "Data kosong"
-                    : missingReasonLabel(month.missingReason)}
-                </Tag>
-              ) : (
-                <>
-                  <Tag tone={month.dataClass === "climatology" ? "warn" : "accent"}>
-                    {dataClassLabel(month.dataClass)}
-                  </Tag>
-                  {month.availability !== null ? (
-                    <Tag tone={month.availability === "stale" ? "warn" : undefined}>
-                      {availabilityLabel(month.availability)}
-                    </Tag>
-                  ) : null}
-                  {month.baselineVersion !== null ? <Tag>Acuan {month.baselineVersion}</Tag> : null}
-                </>
-              )}
-            </span>
-            <span className="value">
-              {month.valueMm === null ? (
-                <span className="faint">—</span>
-              ) : (
-                millimetres(month.valueMm)
-              )}
-            </span>
+      <div className="panel">
+        <div className="panel-head spread" style={{ flexWrap: "wrap", gap: 8 }}>
+          <div>
+            <h3 style={{ margin: 0 }}>Himbauan Pola Musim 12 Bulan</h3>
+            <p className="muted" style={{ margin: "2px 0 0", fontSize: "0.86rem" }}>
+              Pengelompokan bulan basah (&gt;200 mm), peralihan (100–200 mm), dan kering (&lt;100 mm).
+            </p>
           </div>
-        ))}
+          <Tag tone="accent">Himbauan indikatif • Gabungan prakiraan musiman &amp; rata-rata historis</Tag>
+        </div>
+        <div className="panel-body">
+          <div className="season-regime-grid">
+            {regimes.map((reg) => {
+              const rangeLabel =
+                reg.startMonth === reg.endMonth
+                  ? monthLabel(reg.startMonth)
+                  : `${shortMonthLabel(reg.startMonth)} ${reg.startMonth.slice(0, 4)} – ${shortMonthLabel(reg.endMonth)} ${reg.endMonth.slice(0, 4)}`;
+              const mmRange =
+                reg.minMm === null || reg.maxMm === null
+                  ? "Data belum tersedia"
+                  : reg.minMm === reg.maxMm
+                    ? `${reg.minMm} mm/bln`
+                    : `${reg.minMm}–${reg.maxMm} mm/bln`;
+
+              return (
+                <div
+                  className="season-regime-card"
+                  data-category={reg.category}
+                  key={`${reg.startMonth}:${reg.category}`}
+                >
+                  <div className="spread" style={{ gap: 8 }}>
+                    <strong>{rangeLabel}</strong>
+                    <Tag tone={seasonTone(reg.category)}>{reg.labelId}</Tag>
+                  </div>
+                  <div className="muted numeric" style={{ fontSize: "0.85rem", marginTop: 4 }}>
+                    {mmRange} ({reg.monthCount} bln)
+                  </div>
+                  <p style={{ margin: "8px 0 0", fontSize: "0.88rem" }}>{reg.guidanceId}</p>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
 
-      <p className="faint">
-        Catatan: Nilai rata-rata iklim historis dan prakiraan musiman memiliki tingkat kepastian
-        yang berbeda dan ditampilkan terpisah agar mudah dibandingkan.
-      </p>
+      <details className="tech-details">
+        <summary>Lihat rincian angka per bulan &amp; sumber data</summary>
+        <div className="stack" style={{ marginTop: "var(--space-2)" }}>
+          {baselines.length > 0 ? (
+            <p className="faint" style={{ margin: 0 }}>
+              Acuan rata-rata iklim historis: <strong>{baselines.join(", ")}</strong>
+            </p>
+          ) : null}
+
+          <div className="month-list">
+            {outlook.months.map((month) => (
+              <div className="month-row" key={month.month}>
+                <span className="month">{monthLabel(month.month)}</span>
+                <span className="meta">
+                  {month.dataClass === null ? (
+                    <Tag>
+                      {month.missingReason === null
+                        ? "Data kosong"
+                        : missingReasonLabel(month.missingReason)}
+                    </Tag>
+                  ) : (
+                    <>
+                      <Tag tone={month.dataClass === "climatology" ? "warn" : "accent"}>
+                        {dataClassLabel(month.dataClass)}
+                      </Tag>
+                      {month.availability !== null ? (
+                        <Tag tone={month.availability === "stale" ? "warn" : undefined}>
+                          {availabilityLabel(month.availability)}
+                        </Tag>
+                      ) : null}
+                    </>
+                  )}
+                </span>
+                <span className="value">
+                  {month.valueMm === null ? (
+                    <span className="faint">—</span>
+                  ) : (
+                    millimetres(month.valueMm)
+                  )}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <p className="faint" style={{ margin: 0 }}>
+            Catatan: Nilai rata-rata iklim historis dan prakiraan musiman memiliki tingkat kepastian
+            yang berbeda dan ditampilkan terpisah agar mudah dibandingkan.
+          </p>
+        </div>
+      </details>
     </section>
   );
 }

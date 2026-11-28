@@ -48,3 +48,22 @@ export type {
   GenerateGroundedBriefingInput,
   GeneratedBriefingResult,
 } from "./briefing.js";
+export {
+  buildFieldWeeklyWeatherAdvisory,
+  detectCriticalStageAlerts,
+  type ActivePlantingInput,
+  type CriticalStageAlertResult,
+  type DailyRainSample,
+  type FieldWeeklyWeatherAdvisoryInput,
+  type FieldWeeklyWeatherAdvisoryResult,
+} from "./advisory.js";
+export {
+  recommendCropsForField,
+  type CropCatalogCandidateInput,
+  type CropMatrixCellResult,
+  type CropMatrixRowResult,
+  type CropRankingResult,
+  type FieldContextForRecommendation,
+  type FieldRecommendationsResult,
+  type OutlookMonthPoint,
+} from "./recommendations.js";

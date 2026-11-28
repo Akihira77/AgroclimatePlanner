@@ -8,6 +8,7 @@ import type {
   CropList,
   CropProfileVersion,
   CsrfTokenResponse,
+  DashboardAdvisory,
   Farm,
   Field,
   FieldAgronomyProfile,
@@ -15,6 +16,7 @@ import type {
   FieldEvaluateRequest,
   FieldObservation,
   FieldObservationCreateRequest,
+  FieldRecommendations,
   Harvest,
   HarvestCreateRequest,
   HarvestListMeta,
@@ -480,6 +482,21 @@ export const api = {
   async getLatestBriefing(fieldId: string): Promise<AiBriefing> {
     const body = await request<{ data: AiBriefing }>(
       `/fields/${encodeURIComponent(fieldId)}/briefing`,
+    );
+    return body.data;
+  },
+
+  async dashboardAdvisory(): Promise<DashboardAdvisory> {
+    const body = await request<{ data: DashboardAdvisory }>("/dashboard/advisory");
+    return body.data;
+  },
+
+  async fieldRecommendations(
+    fieldId: string,
+    horizonMonths: 3 | 6 | 12 = 6,
+  ): Promise<FieldRecommendations> {
+    const body = await request<{ data: FieldRecommendations }>(
+      `/fields/${encodeURIComponent(fieldId)}/recommendations?horizonMonths=${horizonMonths}`,
     );
     return body.data;
   },

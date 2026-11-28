@@ -11,6 +11,7 @@
     "dev": "vite"
   },
   "dependencies": {
+    "@agroclimate/climate-core": "workspace:*",
     "@agroclimate/contracts": "workspace:*",
     "react": "catalog:",
     "react-dom": "catalog:"

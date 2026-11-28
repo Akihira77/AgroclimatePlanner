@@ -15,6 +15,7 @@ import { AgronomyModule } from "./agronomy/agronomy.module.js";
 import { BriefingModule } from "./briefing/briefing.module.js";
 import { ClimateModule } from "./climate/climate.module.js";
 import { CropModule } from "./crop/crop.module.js";
+import { DashboardModule } from "./dashboard/dashboard.module.js";
 import { FarmModule } from "./farm/farm.module.js";
 import { FieldModule } from "./field/field.module.js";
 import { HealthModule } from "./health/health.module.js";
@@ -57,7 +58,8 @@ export class AppModule {
         ClimateModule.register(gridRegistry),
         CropModule,
         ActivityModule,
-        AgronomyModule,
+        AgronomyModule.register(gridRegistry),
+        DashboardModule.register(gridRegistry),
         BriefingModule.register(deps.briefingProvider),
         HealthModule,
       ],
