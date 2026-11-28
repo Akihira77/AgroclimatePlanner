@@ -112,4 +112,5 @@ export {
   SYNTHETIC_GRID_PROVIDER,
 } from "./grids/synthetic.js";
 
-export { syntheticGridRegistry } from "./grids/registry.js";
+export { ECMWF_IFS025_GRID_ENTRY, ECMWF_IFS025_GRID_SPEC } from "./grids/ecmwf-ifs025.js";
+export { syntheticGridRegistry, unvalidatedGridRegistry } from "./grids/registry.js";

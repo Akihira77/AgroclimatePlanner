@@ -36,6 +36,9 @@ const DECIMAL_PATTERN = /^-?(0|[1-9]\d*)(?:\.(\d{1,6}))?$/;
 export const SUPPORTED_GRID_ORIENTATIONS = ["south-west"] as const;
 export type GridOrientation = (typeof SUPPORTED_GRID_ORIENTATIONS)[number];
 
+export const SUPPORTED_CELL_SELECTIONS = ["lower-edge", "nearest-centre"] as const;
+export type GridCellSelection = (typeof SUPPORTED_CELL_SELECTIONS)[number];
+
 export type GridDomain = "global" | "bounded";
 
 export interface GridSpecInput {
@@ -48,6 +51,7 @@ export interface GridSpecInput {
   readonly lonDomain: GridDomain;
   readonly lonRange?: readonly [string, string];
   readonly orientation: string;
+  readonly cellSelection?: GridCellSelection;
   readonly spatialResolutionKm: number;
 }
 
@@ -61,6 +65,7 @@ export interface GridSpec {
   readonly lonDomain: GridDomain;
   readonly lonRange?: readonly [string, string];
   readonly orientation: GridOrientation;
+  readonly cellSelection: GridCellSelection;
   readonly rowCount: number;
   readonly colCount: number;
   readonly spatialResolutionKm: number;
@@ -163,6 +168,7 @@ function floorDiv(a: number, b: number): number {
 
 interface GridPreimage {
   readonly cellAnchor: GridOrientation;
+  readonly cellSelection?: GridCellSelection;
   readonly colCount: number;
   readonly gridId: string;
   readonly latMax: string;
@@ -182,11 +188,17 @@ interface GridPreimage {
  * Hash input, deliberately flat. `canonicalJson` refuses an array with no declared
  * ordering rule, and a grid range is ordered data, not a set — flattening avoids
  * teaching the shared canonicaliser about a new array kind for one hash.
+ *
+ * `cellSelection` is omitted when `"lower-edge"` so all pinned lower-edge
+ * fixtures retain their exact SHA-256 digests, and included for `"nearest-centre"`.
  */
 function preimageOf(spec: Omit<GridSpec, "gridSpecHash">): GridPreimage {
+  const selection =
+    spec.cellSelection === "nearest-centre" ? { cellSelection: spec.cellSelection } : {};
   return spec.lonDomain === "bounded"
     ? {
         cellAnchor: spec.orientation,
+        ...selection,
         colCount: spec.colCount,
         gridId: spec.gridId,
         latMax: spec.latRange[1],
@@ -203,6 +215,7 @@ function preimageOf(spec: Omit<GridSpec, "gridSpecHash">): GridPreimage {
       }
     : {
         cellAnchor: spec.orientation,
+        ...selection,
         colCount: spec.colCount,
         gridId: spec.gridId,
         latMax: spec.latRange[1],
@@ -254,6 +267,16 @@ export function defineGridSpec(input: GridSpecInput): GridSpec {
     throw new GridConfigurationError(
       "unsupported_grid_orientation",
       `"${input.orientation}" is not supported; v1 supports ${SUPPORTED_GRID_ORIENTATIONS.join(", ")}`,
+    );
+  }
+  const requestedSelection = input.cellSelection ?? "lower-edge";
+  const cellSelection = SUPPORTED_CELL_SELECTIONS.find(
+    (supported) => supported === requestedSelection,
+  );
+  if (!cellSelection) {
+    throw new GridConfigurationError(
+      "invalid_domain",
+      `"${String(requestedSelection)}" is not a supported cellSelection`,
     );
   }
   if (input.gridId.trim().length === 0) {
@@ -330,6 +353,7 @@ export function defineGridSpec(input: GridSpecInput): GridSpec {
     lonDomain: input.lonDomain,
     ...(lonRange ? { lonRange } : {}),
     orientation,
+    cellSelection,
     rowCount,
     colCount,
     spatialResolutionKm: input.spatialResolutionKm,
@@ -353,6 +377,7 @@ export function assertGridSpecIntegrity(spec: GridSpec): void {
     lonDomain: spec.lonDomain,
     ...(spec.lonRange ? { lonRange: spec.lonRange } : {}),
     orientation: spec.orientation,
+    cellSelection: spec.cellSelection,
     spatialResolutionKm: spec.spatialResolutionKm,
   });
   if (recomputed.gridSpecHash !== spec.gridSpecHash) {
@@ -415,18 +440,39 @@ export function resolveGridCell(spec: GridSpec, request: GridResolutionRequest):
       ? (microOf(spec.lonRange?.[0] ?? spec.originLon) - originLonMicro) / stepLonMicro
       : 0;
 
-  const i = floorDiv(lat.micro - originLatMicro, stepLatMicro);
-  const j = floorDiv(lonMicro - originLonMicro, stepLonMicro);
-  if (
-    i < rowStart ||
-    i >= rowStart + spec.rowCount ||
-    j < colStart ||
-    j >= colStart + spec.colCount
-  ) {
-    throw new CellResolutionError(
-      "out_of_grid",
-      `cell (${i}, ${j}) is outside the ${spec.rowCount}×${spec.colCount} grid`,
-    );
+  let i: number;
+  let j: number;
+
+  if (spec.cellSelection === "nearest-centre") {
+    i = floorDiv(2 * (lat.micro - originLatMicro) + stepLatMicro, 2 * stepLatMicro);
+    j = floorDiv(2 * (lonMicro - originLonMicro) + stepLonMicro, 2 * stepLonMicro);
+    if (spec.lonDomain === "global") {
+      j = ((j % spec.colCount) + spec.colCount) % spec.colCount;
+    }
+    if (
+      i < rowStart ||
+      i > rowStart + spec.rowCount ||
+      (spec.lonDomain === "bounded" && (j < colStart || j > colStart + spec.colCount))
+    ) {
+      throw new CellResolutionError(
+        "out_of_grid",
+        `cell (${i}, ${j}) is outside the ${spec.rowCount}×${spec.colCount} grid`,
+      );
+    }
+  } else {
+    i = floorDiv(lat.micro - originLatMicro, stepLatMicro);
+    j = floorDiv(lonMicro - originLonMicro, stepLonMicro);
+    if (
+      i < rowStart ||
+      i >= rowStart + spec.rowCount ||
+      j < colStart ||
+      j >= colStart + spec.colCount
+    ) {
+      throw new CellResolutionError(
+        "out_of_grid",
+        `cell (${i}, ${j}) is outside the ${spec.rowCount}×${spec.colCount} grid`,
+      );
+    }
   }
 
   const nodeLatMicro = originLatMicro + i * stepLatMicro;
@@ -489,7 +535,7 @@ export interface GridKey {
  * snapping from interpolation); anything less is `synthetic`. It is declared, never
  * inferred from a name, a resolution figure, or a passing test.
  */
-export type GridEvidence = "synthetic" | "validated";
+export type GridEvidence = "synthetic" | "unvalidated" | "validated";
 
 export interface GridRegistryEntry {
   readonly provider: string;
@@ -556,6 +602,7 @@ export function createGridRegistry(entries: readonly GridRegistryEntry[]): GridR
         lonDomain: entry.spec.lonDomain,
         ...(entry.spec.lonRange ? { lonRange: entry.spec.lonRange } : {}),
         orientation: entry.spec.orientation,
+        cellSelection: entry.spec.cellSelection,
         spatialResolutionKm: entry.spec.spatialResolutionKm,
       }),
       evidence: entry.evidence,

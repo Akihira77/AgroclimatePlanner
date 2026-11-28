@@ -5,7 +5,7 @@ import {
   createSpatialResolution,
   defineGridSpec,
 } from "@agroclimate/contracts";
-import { syntheticGridRegistry } from "./registry.js";
+import { syntheticGridRegistry, unvalidatedGridRegistry } from "./registry.js";
 import {
   SYNTHETIC_GRID_ENTRY,
   SYNTHETIC_GRID_ID,
@@ -159,5 +159,19 @@ describe("syntheticGridRegistry — SpatialResolution integration", () => {
     expect(resolution).not.toHaveProperty("servedCoordinate");
     expect(resolution).not.toHaveProperty("distanceKm");
     expect(Object.isFrozen(resolution)).toBe(true);
+  });
+});
+
+describe("unvalidatedGridRegistry — ADR-008 ecmwf_ifs025", () => {
+  const ifsKey = { provider: "open-meteo", model: "ecmwf_ifs025" };
+
+  it("resolves Jakarta using nearest-centre while remaining labelled unvalidated", () => {
+    const resolved = unvalidatedGridRegistry.resolve(ifsKey, { lat: "-6.21", lon: "106.85" });
+    expect(resolved.cellKey).toBe("-6.25,106.75");
+    expect(unvalidatedGridRegistry.evidenceFor(ifsKey)).toBe("unvalidated");
+  });
+
+  it("refuses requireValidated so unvalidated grids never enter production ingest", () => {
+    expect(() => unvalidatedGridRegistry.requireValidated(ifsKey)).toThrow(/grid_not_validated/);
   });
 });

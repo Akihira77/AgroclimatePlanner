@@ -1,4 +1,5 @@
 import { createGridRegistry, type GridRegistry } from "@agroclimate/contracts";
+import { ECMWF_IFS025_GRID_ENTRY } from "./ecmwf-ifs025.js";
 import { SYNTHETIC_GRID_ENTRY } from "./synthetic.js";
 
 /**
@@ -15,3 +16,13 @@ import { SYNTHETIC_GRID_ENTRY } from "./synthetic.js";
  * registry is `createGridRegistry` itself, not a second implementation of it.
  */
 export const syntheticGridRegistry: GridRegistry = createGridRegistry([SYNTHETIC_GRID_ENTRY]);
+
+/**
+ * Registry including `open-meteo / ecmwf_ifs025` marked `unvalidated` (`ADR-008` /
+ * `OPEN-18`). Useful for non-production cell resolution; `requireValidated` still
+ * refuses every entry here.
+ */
+export const unvalidatedGridRegistry: GridRegistry = createGridRegistry([
+  SYNTHETIC_GRID_ENTRY,
+  ECMWF_IFS025_GRID_ENTRY,
+]);

@@ -718,3 +718,57 @@ describe("SpatialResolution — 5.2.3", () => {
     expect(attempt).toThrow(/grid_spec_hash_mismatch/);
   });
 });
+
+describe("nearest-centre cell selection (ADR-008 / OPEN-18)", () => {
+  const ifsSpec = defineGridSpec({
+    gridId: "ifs-025",
+    originLat: "-90",
+    originLon: "-180",
+    stepLat: "0.25",
+    stepLon: "0.25",
+    latRange: ["-90", "90"],
+    lonDomain: "global",
+    orientation: "south-west",
+    cellSelection: "nearest-centre",
+    spatialResolutionKm: 25,
+  });
+
+  it("changes gridSpecHash compared to lower-edge on the same lattice", () => {
+    const lowerEdge = defineGridSpec({
+      gridId: "ifs-025",
+      originLat: "-90",
+      originLon: "-180",
+      stepLat: "0.25",
+      stepLon: "0.25",
+      latRange: ["-90", "90"],
+      lonDomain: "global",
+      orientation: "south-west",
+      spatialResolutionKm: 25,
+    });
+    expect(ifsSpec.gridSpecHash).not.toBe(lowerEdge.gridSpecHash);
+  });
+
+  it("resolves ADR-008 measured pairs including ties toward +infinity, poles, and antimeridian wrap", () => {
+    expect(resolveGridCell(ifsSpec, { lat: "0.125", lon: "0.125" }).cellKey).toBe("0.25,0.25");
+    expect(resolveGridCell(ifsSpec, { lat: "-0.125", lon: "-0.125" }).cellKey).toBe("0.00,0.00");
+    expect(resolveGridCell(ifsSpec, { lat: "89.88", lon: "0" }).cellKey).toBe("90.00,0.00");
+    expect(resolveGridCell(ifsSpec, { lat: "-89.88", lon: "0" }).cellKey).toBe("-90.00,0.00");
+    expect(resolveGridCell(ifsSpec, { lat: "0", lon: "179.90" }).cellKey).toBe("0.00,-180.00");
+    expect(resolveGridCell(ifsSpec, { lat: "-6.21", lon: "106.85" }).cellKey).toBe("-6.25,106.75");
+  });
+
+  it("refuses unvalidated grid entries in requireValidated", () => {
+    const reg = createGridRegistry([
+      {
+        provider: "open-meteo",
+        model: "ecmwf_ifs025",
+        spec: ifsSpec,
+        evidence: "unvalidated",
+      },
+    ]);
+    expect(reg.evidenceFor({ provider: "open-meteo", model: "ecmwf_ifs025" })).toBe("unvalidated");
+    expect(() => reg.requireValidated({ provider: "open-meteo", model: "ecmwf_ifs025" })).toThrow(
+      /grid_not_validated/,
+    );
+  });
+});

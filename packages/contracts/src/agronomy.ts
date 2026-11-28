@@ -3,6 +3,8 @@ import { z } from "zod";
 import { evidenceGradeSchema } from "./crop.js";
 import {
   evaluationBasisSchema,
+  irrigationAvailabilitySchema,
+  isoDateSchema,
   isoInstantSchema,
   opaqueIdSchema,
   singleValueEvaluationBasisSchema,
@@ -15,6 +17,7 @@ import {
   missingRangeSchema,
   unreproducibleReasonSchema,
 } from "./provenance.js";
+import { envelopeSchema } from "./response.js";
 
 /**
  * Agronomic engine row contracts — Phase 6.1.
@@ -215,3 +218,36 @@ export const suitabilityRunWithWindowsSchema = suitabilityRunSchema.extend({
   plantingWindows: z.array(plantingWindowSchema),
 });
 export type SuitabilityRunWithWindows = z.infer<typeof suitabilityRunWithWindowsSchema>;
+
+export const fieldEvaluationCandidateSchema = z.strictObject({
+  startDate: isoDateSchema,
+  observations: z.record(z.string().min(1), z.number().finite().nullable()),
+  primaryBasis: singleValueEvaluationBasisSchema,
+  evidenceSegments: z.array(evidenceSegmentSchema),
+  missingRanges: z.array(missingRangeSchema),
+});
+export type FieldEvaluationCandidate = z.infer<typeof fieldEvaluationCandidateSchema>;
+
+export const fieldEvaluateRequestSchema = z.strictObject({
+  profileVersionId: z.uuid(),
+  irrigationAvailability: irrigationAvailabilitySchema.optional(),
+  inputRefs: z.array(dataInputRefSchema).min(1),
+  candidates: z.array(fieldEvaluationCandidateSchema).min(1).max(24),
+  reproducible: z.boolean().default(false),
+  unreproducibleReason: unreproducibleReasonSchema.nullable().optional(),
+});
+export type FieldEvaluateRequest = z.infer<typeof fieldEvaluateRequestSchema>;
+
+export const plantingWindowListQuerySchema = z.strictObject({
+  fieldId: z.uuid().optional(),
+  cropId: z.uuid().optional(),
+  suitability: suitabilityVerdictSchema.optional(),
+  from: isoDateSchema.optional(),
+  to: isoDateSchema.optional(),
+});
+export type PlantingWindowListQuery = z.infer<typeof plantingWindowListQuerySchema>;
+
+export const suitabilityRunWithWindowsEnvelopeSchema = envelopeSchema(
+  suitabilityRunWithWindowsSchema,
+);
+export const plantingWindowListEnvelopeSchema = envelopeSchema(z.array(plantingWindowSchema));

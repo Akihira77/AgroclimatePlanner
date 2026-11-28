@@ -210,6 +210,18 @@ export {
   ObservationFutureDateError,
 } from "./observations.js";
 export type { FieldObservationCreateInput, FieldObservationRecord } from "./observations.js";
+export {
+  findLatestSuitabilityRun,
+  listActivePlantingWindows,
+  loadFieldSnapshotSource,
+  persistSuitabilityRunWithWindows,
+} from "./agronomy.js";
+export type {
+  FieldSnapshotSource,
+  PersistSuitabilityInput,
+  PersistWindowInput,
+  PlantingWindowListFilters,
+} from "./agronomy.js";
 
 export interface DatabaseOptions {
   /** `postgresql://…` connection string. Validated by `pg`, not by us. */
