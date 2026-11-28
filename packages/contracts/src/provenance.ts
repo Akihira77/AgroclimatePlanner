@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  irrigationAvailabilitySchema,
   isoDateSchema,
   isoInstantSchema,
   missingReasonSchema,
@@ -136,7 +137,7 @@ export const fieldSnapshotPayloadSchema = z.strictObject({
   soilType: z.string().nullable(),
   soilPh: z.number().nullable(),
   drainageClass: z.string().nullable(),
-  irrigationAvailable: z.boolean(),
+  irrigationAvailability: irrigationAvailabilitySchema,
   irrigationSource: z.string().nullable(),
   extractionPolicy: z.enum(["centroid", "area_weighted"]),
   resolvedCells: z.array(resolvedCellSchema),

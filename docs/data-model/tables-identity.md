@@ -122,7 +122,7 @@ Notes:
 | `soil_type` | `text` | yes | — | vocabulary unsettled, `OPEN-21` |
 | `soil_ph` | `numeric(3,1)` | yes | — | `CHECK (BETWEEN 3.0 AND 10.0)`; unknown ≠ neutral |
 | `drainage_class` | `text` | yes | — | vocabulary unsettled, `OPEN-21` |
-| `irrigation_availability` | `text` | yes | — | vocabulary unsettled, `OPEN-21`; see note below |
+| `irrigation_availability` | `text` | yes | — | closed enum (`irrigated`, `partial_irrigation`, `rainfed`, `unknown`) approved 2026-11-28 (`OPEN-21`); `CHECK` migration pending DB verification |
 | `water_source` | `text` | yes | — | free text (`"irrigation canal"`, `"rainfed"`, `"well"`) |
 | `cropping_history_notes` | `text` | yes | — | free text; the structured history is `plantings` |
 | `created_at` | `timestamptz(6)` | no | `now()` | — |
@@ -191,13 +191,13 @@ query and exists because spatial predicates are planned in Phase 6; recorded as
 
 Notes:
 
-- **`irrigation_availability` is text and `FieldSnapshot.irrigationAvailable` is
-  boolean.** No document defines the mapping, so it is `OPEN-21` and this
-  specification does not invent one. `field_snapshot` stores the boolean the
-  contract requires; the conversion lives in the application and must be reviewed
-  once the vocabulary is agreed. This is the single most consequential open item in
-  the identity group, because a wrong conversion silently changes every window's
-  `fieldSnapshotHash` and every suitability verdict that depends on water.
+- **`irrigation_availability` uses a closed enum across `fields` and `FieldSnapshot`.**
+  Per the 2026-11-28 `OPEN-21` decision, `FieldSnapshot.irrigationAvailability`
+  uses `irrigated | partial_irrigation | rainfed | unknown` instead of a lossy
+  boolean, preserving `partial_irrigation` and `unknown` without forcing
+  `partial_irrigation` to `false`. The `CHECK` constraint on
+  `app.fields.irrigation_availability` awaits migration alongside the remaining
+  `soil_type` and `drainage_class` vocabularies under `OPEN-21`.
 - `water_source` is the physical home of `FieldSnapshot.irrigationSource`.
 - No `user_id` update path: the policy's `WITH CHECK` makes a transfer impossible.
 

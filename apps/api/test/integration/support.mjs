@@ -141,6 +141,19 @@ export async function cleanupUsers(owner, prefix) {
   );
 
   for (const { id } of users) {
+    await owner.$executeRawUnsafe("DELETE FROM app.ai_briefings WHERE user_id = $1::uuid", id);
+    await owner.$executeRawUnsafe("DELETE FROM app.planting_windows WHERE user_id = $1::uuid", id);
+    await owner.$executeRawUnsafe("DELETE FROM app.suitability_runs WHERE user_id = $1::uuid", id);
+    await owner.$executeRawUnsafe("DELETE FROM app.harvests WHERE user_id = $1::uuid", id);
+    await owner.$executeRawUnsafe("DELETE FROM app.plantings WHERE user_id = $1::uuid", id);
+    await owner.$executeRawUnsafe(
+      "DELETE FROM app.field_observations WHERE user_id = $1::uuid",
+      id,
+    );
+    await owner.$executeRawUnsafe(
+      "DELETE FROM app.field_outlook_cells WHERE user_id = $1::uuid",
+      id,
+    );
     await owner.$executeRawUnsafe("DELETE FROM app.fields WHERE user_id = $1::uuid", id);
     await owner.$executeRawUnsafe("DELETE FROM app.farms WHERE user_id = $1::uuid", id);
     await owner.$executeRawUnsafe("DELETE FROM app.sessions WHERE user_id = $1::uuid", id);

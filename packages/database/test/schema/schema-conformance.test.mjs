@@ -197,22 +197,41 @@ describe("row-level security flags", () => {
   });
 });
 
-describe("deferred decisions (D26 / OPEN-09)", () => {
-  test("plantings.status has no default", async () => {
+describe("settled decisions (D26 / OPEN-09 & OPEN-21)", () => {
+  test("plantings.status defaults to 'active'", async () => {
     const { rows } = await owner.query(
       `select column_default
          from information_schema.columns
         where table_schema = 'app' and table_name = 'plantings' and column_name = 'status'`,
     );
     assert.equal(rows.length, 1, "plantings.status is missing");
-    assert.equal(rows[0].column_default, null, "plantings.status must not acquire a default");
+    assert.ok(
+      typeof rows[0].column_default === "string" && rows[0].column_default.startsWith("'active'"),
+      `expected 'active' default, got ${String(rows[0].column_default)}`,
+    );
   });
 
-  test("no plantings_active_idx was added ahead of the vocabulary decision", async () => {
+  test("plantings_active_idx exists", async () => {
     const { rows } = await owner.query(
       "select indexname from pg_indexes where schemaname = 'app' and indexname = 'plantings_active_idx'",
     );
-    assert.deepEqual(rows, [], "plantings_active_idx exists but OPEN-09 is undecided");
+    assert.equal(rows.length, 1, "plantings_active_idx is missing");
+  });
+
+  test("plantings_status_check and fields_irrigation_availability_check exist", async () => {
+    const { rows } = await owner.query(
+      `select conname
+         from pg_constraint c
+         join pg_namespace n on n.oid = c.connamespace
+        where n.nspname = 'app'
+          and c.contype = 'c'
+          and c.conname in ('plantings_status_check', 'fields_irrigation_availability_check')
+        order by conname`,
+    );
+    assert.deepEqual(
+      rows.map((r) => r.conname),
+      ["fields_irrigation_availability_check", "plantings_status_check"],
+    );
   });
 });
 

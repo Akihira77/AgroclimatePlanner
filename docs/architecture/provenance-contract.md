@@ -292,7 +292,7 @@ interface FieldSnapshot {
   soilType: string | null;
   soilPh: number | null;
   drainageClass: string | null;
-  irrigationAvailable: boolean;
+  irrigationAvailability: "irrigated" | "partial_irrigation" | "rainfed" | "unknown";
   irrigationSource: string | null;
   extractionPolicy: "centroid" | "area_weighted";
   resolvedCells: Array<{ provider: string; model: string; cellKey: string;
@@ -413,7 +413,7 @@ This is the deliberate choice over normalising to a canonical precision. Normali
 2. **Array permutation** — `resolvedCells`, `observationsUsed`, `inputRefs` in any order produce identical bytes.
 3. **Nested array permutation** — `forecastRunIds`, `ingestionRunIds`, `cellKeys`, `observationIds`, each tested independently.
 4. **Combined permutation** — every nested array shuffled at once, plus shuffled `inputRefs`.
-5. **Meaningful change** — geometry, area, elevation, soil type, soil pH, drainage, irrigation flag and source, extraction policy, field snapshot hash, profile version, engine version, derivation version, source artifact hashes, forecast run ids, dataset version, baseline version, `promptVersion`, `modelId`, and the `artifact` discriminator itself.
+5. **Meaningful change** — geometry, area, elevation, soil type, soil pH, drainage, irrigation availability and source, extraction policy, field snapshot hash, profile version, engine version, derivation version, source artifact hashes, forecast run ids, dataset version, baseline version, `promptVersion`, `modelId`, and the `artifact` discriminator itself.
 6. **Deduplication** — identical duplicates collapse where permitted; conflicting duplicates throw; `dedupe: no` arrays retain everything.
 7. **Timestamp representation** — the two spellings of one instant stay distinct.
 8. **Known-answer** — at least one digest taken from an independent implementation (coreutils `sha256sum` / the NIST vector), never computed by the code under test.
@@ -471,7 +471,7 @@ Two rules that follow, and are not negotiable:
 - Same hash, different output ⇒ **critical defect**: something that affects the result is missing from the descriptor.
 - Different hash, same output ⇒ defect in the other direction: something irrelevant leaked in. Not a correctness bug, but it invalidates cache/supersession logic and must be fixed.
 
-Conversely, **different field state must produce a different hash.** Editing a plot's soil type, drainage, irrigation flag, or geometry changes `fieldSnapshotHash`, hence `inputSnapshotHash`, hence the artifact is distinguishable from the one computed before the edit. If that fails, the hash is decorative.
+Conversely, **different field state must produce a different hash.** Editing a plot's soil type, drainage, irrigation availability, or geometry changes `fieldSnapshotHash`, hence `inputSnapshotHash`, hence the artifact is distinguishable from the one computed before the edit. If that fails, the hash is decorative.
 
 ### Reproducibility requirements
 

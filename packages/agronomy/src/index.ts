@@ -22,3 +22,9 @@ export type { Verdict, VerdictInput, VerdictReason, VerdictReasonCode } from "./
 export { assessSuitability } from "./suitability.js";
 export type { SuitabilityAssessment, SuitabilityInput } from "./suitability.js";
 export { SuitabilityInputError } from "./suitability.js";
+export { WindowGenerationError, WindowPartitionError, generatePlantingWindows } from "./windows.js";
+export type {
+  GeneratePlantingWindowsInput,
+  GeneratedPlantingWindow,
+  PlantingWindowCandidate,
+} from "./windows.js";

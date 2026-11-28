@@ -177,4 +177,34 @@ describe("validatePartition — a refusal names what to fix", () => {
       ),
     ).toContain("no_evidence_segment");
   });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -10, 120])(
+    "refuses out-of-range or non-finite coveragePercent (%s)",
+    (coveragePercent) => {
+      expect(
+        codes(
+          validatePartition({
+            ...window,
+            segments: [segment("2026-11-01", "2026-11-10", coveragePercent)],
+            missingRanges: [],
+          }),
+        ),
+      ).toContain("coverage_mismatch");
+    },
+  );
+
+  it("refuses compensating out-of-range coveragePercent across two segments", () => {
+    expect(
+      codes(
+        validatePartition({
+          ...window,
+          segments: [
+            segment("2026-11-01", "2026-11-05", 150),
+            segment("2026-11-06", "2026-11-10", 50),
+          ],
+          missingRanges: [],
+        }),
+      ),
+    ).toContain("coverage_mismatch");
+  });
 });

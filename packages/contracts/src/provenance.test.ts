@@ -32,7 +32,7 @@ const snapshotPayload = {
   soilType: null,
   soilPh: 6.1,
   drainageClass: "moderate",
-  irrigationAvailable: false,
+  irrigationAvailability: "rainfed",
   irrigationSource: null,
   extractionPolicy: "centroid",
   resolvedCells: [
@@ -162,5 +162,42 @@ describe("FieldSnapshot", () => {
     const parsed = fieldSnapshotPayloadSchema.parse(snapshotPayload);
     expect("fieldSnapshotHash" in parsed).toBe(false);
     expect(parsed.areaHa).toBe(1.4);
+  });
+
+  it.each(["irrigated", "partial_irrigation", "rainfed", "unknown"] as const)(
+    "accepts irrigationAvailability=%s",
+    (value) => {
+      expect(
+        fieldSnapshotPayloadSchema.safeParse({ ...snapshotPayload, irrigationAvailability: value })
+          .success,
+      ).toBe(true);
+    },
+  );
+
+  it("rejects boolean or unknown irrigationAvailability values", () => {
+    expect(
+      fieldSnapshotPayloadSchema.safeParse({ ...snapshotPayload, irrigationAvailability: false })
+        .success,
+    ).toBe(false);
+    expect(
+      fieldSnapshotPayloadSchema.safeParse({ ...snapshotPayload, irrigationAvailability: "none" })
+        .success,
+    ).toBe(false);
+  });
+
+  it("rejects legacy irrigationAvailable field (strictObject backward-compat guard)", () => {
+    const { irrigationAvailability: _omitted, ...withoutNewField } = snapshotPayload;
+    expect(
+      fieldSnapshotPayloadSchema.safeParse({
+        ...withoutNewField,
+        irrigationAvailable: false,
+      }).success,
+    ).toBe(false);
+    expect(
+      fieldSnapshotPayloadSchema.safeParse({
+        ...snapshotPayload,
+        irrigationAvailable: false,
+      }).success,
+    ).toBe(false);
   });
 });

@@ -140,6 +140,23 @@ export function validatePartition(input: PartitionInput): readonly PartitionViol
       });
       continue;
     }
+    // Out-of-range or non-finite coveragePercent (e.g. NaN, -10, 150) must be
+    // refused before the accounting sum, otherwise NaN makes `Math.abs(...) > slack`
+    // evaluate to false and silently passes.
+    if (
+      !Number.isFinite(segment.coveragePercent) ||
+      segment.coveragePercent < 0 ||
+      segment.coveragePercent > 100
+    ) {
+      dropped += 1;
+      violations.push({
+        code: "coverage_mismatch",
+        startDate: segment.startDate,
+        endDate: segment.endDate,
+        detail: `coveragePercent must be a finite number in [0, 100], got ${String(segment.coveragePercent)}`,
+      });
+      continue;
+    }
     // A segment carrying no evidence at all is a missing range. `coveragePercent`
     // is the only signal the row has, and 0 means "every day in here is a hole".
     if (segment.coveragePercent === 0) {

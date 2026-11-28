@@ -669,8 +669,9 @@ model Planting {
   cycleStartUsed  String   @map("cycle_start_used")
   // May be smaller than fields.area_ha: a farmer may plant part of a plot.
   areaPlantedHa   Float    @map("area_planted_ha")
-  // OPEN-09: no DEFAULT and no CHECK; the vocabulary is undecided.
-  status          String
+  // OPEN-09 settled 2026-11-28; plantings_status_check and partial index
+  // plantings_active_idx live in SQL.
+  status          String   @default("active")
   createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 

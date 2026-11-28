@@ -15,7 +15,7 @@ const payload: FieldSnapshotPayload = {
   soilType: "clay",
   soilPh: 6.1,
   drainageClass: "moderate",
-  irrigationAvailable: false,
+  irrigationAvailability: "rainfed",
   irrigationSource: null,
   extractionPolicy: "centroid",
   resolvedCells: [
@@ -312,7 +312,12 @@ describe("meaningful input changes", () => {
     ["soilType", { soilType: "sandy" }],
     ["soilPh", { soilPh: 6.2 }],
     ["drainageClass", { drainageClass: "poor" }],
-    ["irrigationAvailable", { irrigationAvailable: true }],
+    ["irrigationAvailability (irrigated)", { irrigationAvailability: "irrigated" }],
+    [
+      "irrigationAvailability (partial_irrigation)",
+      { irrigationAvailability: "partial_irrigation" },
+    ],
+    ["irrigationAvailability (unknown)", { irrigationAvailability: "unknown" }],
     ["irrigationSource", { irrigationSource: "well" }],
     ["extractionPolicy", { extractionPolicy: "area_weighted" as const }],
     ["null becomes a value", { soilType: null }],
@@ -402,5 +407,15 @@ describe("field snapshot preimage", () => {
     const hash = hashFieldSnapshot(payload);
     expect(hash).toMatch(/^[0-9a-f]{64}$/);
     expect(hash).toBe(sha256Hex(canonicalJson(payload)));
+  });
+
+  it("produces pairwise-distinct hashes for all four irrigationAvailability states and omits legacy irrigationAvailable", () => {
+    const canonical = canonicalJson(payload);
+    expect(canonical).toContain('"irrigationAvailability":"rainfed"');
+    expect(canonical).not.toContain('"irrigationAvailable"');
+
+    const states = ["irrigated", "partial_irrigation", "rainfed", "unknown"] as const;
+    const hashes = states.map((irrigationAvailability) => snapshotHash({ irrigationAvailability }));
+    expect(new Set(hashes).size).toBe(4);
   });
 });

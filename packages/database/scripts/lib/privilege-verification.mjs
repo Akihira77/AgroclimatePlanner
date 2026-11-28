@@ -2101,29 +2101,46 @@ export async function runPrivilegeVerification({
       );
     }
 
-    // Phase 3 decisions rather than privileges: the status vocabulary is
-    // undecided (OPEN-09/D26), so a default or a partial index on a status
-    // literal would encode a value nobody approved.
+    // Phase 3 settled decisions (OPEN-09 / D26 & OPEN-21): plantings.status
+    // defaults to 'active', plantings_active_idx exists, and both CHECK
+    // constraints enforce the approved closed vocabularies.
     const { rows: plantingsStatus } = await owner.query(
       `select column_default
          from information_schema.columns
         where table_schema = 'app' and table_name = 'plantings' and column_name = 'status'`,
     );
     check(
-      "plantings.status has no column default",
-      plantingsStatus.length === 1 && plantingsStatus[0].column_default === null,
+      "plantings.status defaults to 'active'",
+      plantingsStatus.length === 1 &&
+        typeof plantingsStatus[0].column_default === "string" &&
+        plantingsStatus[0].column_default.startsWith("'active'"),
       plantingsStatus.length === 0
         ? "column not found"
-        : `default ${plantingsStatus[0].column_default}`,
+        : `default ${String(plantingsStatus[0].column_default)}`,
     );
 
     const { rows: plantingsActive } = await owner.query(
       "select indexname from pg_indexes where schemaname = 'app' and indexname = 'plantings_active_idx'",
     );
     check(
-      "no plantings_active_idx exists",
-      plantingsActive.length === 0,
+      "plantings_active_idx exists",
+      plantingsActive.length === 1,
       JSON.stringify(plantingsActive),
+    );
+
+    const { rows: settledChecks } = await owner.query(
+      `select conname
+         from pg_constraint c
+         join pg_namespace n on n.oid = c.connamespace
+        where n.nspname = 'app'
+          and c.contype = 'c'
+          and c.conname in ('plantings_status_check', 'fields_irrigation_availability_check')
+        order by conname`,
+    );
+    check(
+      "OPEN-09 and OPEN-21 CHECK constraints exist",
+      settledChecks.length === 2,
+      JSON.stringify(settledChecks),
     );
 
     // Without NULLS NOT DISTINCT every re-ingest of a deterministic product

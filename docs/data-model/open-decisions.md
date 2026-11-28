@@ -74,15 +74,15 @@ part of it.
 
 | ID | Sev | Category | Applies | Blocking | What is unresolved | Blocked | Continues independently |
 |---|---|---|---|---|---|---|---|
-| `OPEN-09` | P1 | catalog vocabulary | after Phase 3 (vocabulary only) | **none** — `D26` omits the DDL | whether the planting status vocabulary spells `active` | the `plantings.status` default and `plantings_active_idx`, both **deliberately not created** in Phase 3 | the `plantings` table without a default, `harvests`, every other table and index |
+| `OPEN-09` | P1 | catalog vocabulary | after Phase 3 (vocabulary only) | **none** — resolved 2026-11-28 (`active`, `harvested`, `failed`, `abandoned`); `D26` omits the DDL until additive migration | nothing on vocabulary (`planned` confirmed unnecessary for actual plantings); additive migration for default + `plantings_active_idx` pending writer | the `plantings` table without a default, `harvests`, every other table and index |
 | `OPEN-01` | P1 | authentication | after Phase 3 | **none** — resolved 2026-11-21: the mechanism (`ADR-004`, S3/S4/S6) is shipped, and `POST /v1/auth/login` reads a credential through `app_auth` (`S8`, real-role integration test) | nothing now; it blocked login, session issuance, and every authenticated request | the DDL, the catalog, the weather plane, all RLS policies and grants |
 | `OPEN-13` | P1 | authentication | after Phase 3 | **none** — resolved 2026-11-20 | nothing: PostgreSQL `app.sessions` was selected (`ADR-005`) and shipped in S5 | nothing on the storage question; the request path that uses the table arrived with `S8`, closing `OPEN-01` | everything — the table exists, is granted, and is verified on canonical |
 | `OPEN-17` | P1 | field snapshot | after Phase 3 | **hard**, for point-shaped fields only | what `areaHa` means for a `POINT`-shaped field | field snapshot creation for point-shaped fields, and every artifact derived from one | the DDL (a `POINT` row is still storable); `POLYGON`/`MULTIPOLYGON` fields end to end |
-| `OPEN-21` | P1 | field snapshot | after Phase 3 | **hard** | the `irrigationAvailable` boolean mapping and three field vocabularies | field → snapshot construction | the DDL — the columns stay unconstrained `text`; every non-snapshot path |
-| `OPEN-18` | P1 | cell resolution | after Phase 3 | **conditional** — generic resolver, literal hash fixtures, the `(provider, model)` registry, the `SpatialResolution` result contract, and a synthetic-only registry instance implemented 2026-11-22 (5.2.1–5.2.4); per-`(provider, model)` grid configuration pending graded evidence; `ecmwf_ifs025` measured 2026-11-24 — geometry **grade B**, product-identifier mapping still **grade C**, so the grade A + B that `climate-data-foundation.md` §5.2.6 requires for a `validated` entry is not met — and still unconfigurable, because the resolver cannot express nearest-centre cell selection (`docs/review/open-18-open-meteo-ifs025-evidence.md`); the candidate decisions are recorded as `docs/adr/ADR-008-grid-cell-selection-semantics.md`, status **Proposed** and not accepted | the per-provider/model grid origin, spacing, orientation, longitude convention, and revision | cell identity, and field → cell resolution, for a model whose grid configuration is unvalidated | the DDL (`cell_key` is `text` for exactly this reason), the catalog, every query that reads an already-keyed cell, and the now-implemented generic resolver, registry and result contract |
+| `OPEN-21` | P1 | field snapshot | after Phase 3 | **conditional** — `irrigationAvailability` enum (`irrigated`, `partial_irrigation`, `rainfed`, `unknown`) approved 2026-11-28; `soil_type` & `drainage_class` vocabularies and DB `CHECK` migrations remain | `soil_type` and `drainage_class` closed vocabularies and `CHECK` constraints | full field → snapshot construction until all field vocabularies are constrained | the DDL — the columns stay unconstrained `text`; every non-snapshot path |
+| `OPEN-18` | P1 | cell resolution | after Phase 3 | **conditional** — generic resolver, literal hash fixtures, the `(provider, model)` registry, the `SpatialResolution` result contract, and a synthetic-only registry instance implemented 2026-11-22 (5.2.1–5.2.4); owner conditionally approved `nearest-centre` per `ADR-008` (2026-11-28) subject to `ADR-008` evidence validity, with `ecmwf_ifs025` kept `unvalidated` and barred from validated production claims | `ADR-008` acceptance/implementation and grade A+B evidence for `validated` production `(provider, model)` entries | validated production cell identity and field → cell resolution for unvalidated models | the DDL (`cell_key` is `text` for exactly this reason), the catalog, every query that reads an already-keyed cell, and the now-implemented generic resolver, registry and result contract |
 | `OPEN-26` | P1 | window write | after Phase 3 | **conditional** — the six-check validator was written 2026-11-27 (`packages/agronomy/src/partition.ts`) and every violation it can see is reported; what remains is a writer that calls it, which needs `OPEN-27` and a generated window | the six-check `EvidenceSegment` partition validator | persisting a `planting_windows` row (**no writer exists**, so nothing can persist one) | the table, its index, every read path, `suitability_runs`, `ai_briefings` |
-| `OPEN-27` | P1 | worker | after Phase 3 | **hard** | how the worker learns which fields a cell serves | `recompute.windows` — the job that delivers a new forecast to a dashboard | the DDL **and** the grants, which ship the documented default: no `app_system` grant on a tenant-owned table |
-| `OPEN-11` | P1 | AI slice | after Phase 3 | **hard** | the `ClimateBriefing` body shape | writing or validating an `ai_briefings` row | the `ai_briefings` DDL; the table is createable exactly as specified, it simply cannot yet hold a valid document |
+| `OPEN-27` | P1 | worker | after Phase 3 | **hard** — hybrid direction agreed 2026-11-28 (API per-field enqueue + narrow `SECURITY DEFINER` fan-out after ingestion); final design pending privilege/`search_path`/RLS/tenant-isolation verification; fan-out implementation deferred until recomputation worker needs it | finalized security design & ADR comparing API enqueue vs `SECURITY DEFINER` | `recompute.windows` — the job that delivers a new forecast to a dashboard | the DDL **and** the grants, which ship the documented default: no `app_system` grant on a tenant-owned table |
+| `OPEN-11` | P1 | AI slice | after Phase 3 | **none** — resolved 2026-11-28: structured JSON with `evidenceSegmentId` references; implementation deferred to Phase 8 | schema authoring when Phase 8 begins | nothing until Phase 8 | the `ai_briefings` DDL; the table is createable exactly as specified |
 | `OPEN-04` | P1 | identity lifecycle | after Phase 3 | **hard** | the account-deletion policy | the deletion path and whether `users` gains a partial unique email index | the `users` DDL as implemented; registration; every read |
 | `OPEN-03` | P1 | deployment / licensing | after Phase 3 | **conditional** — at production launch | Open-Meteo paid plan vs self-host | production deployment legality and `raw_payload_ref` retention | the DDL; non-production use |
 | `OPEN-05` | P1 | retention | after Phase 3 | **hard** for a `reproducible: true` claim | per-provider raw payload retention | that claim for an artifact built on the provider | the DDL; artifacts stored with `reproducible: false` and a reason |
@@ -175,21 +175,25 @@ path. Nothing in the current documents establishes that requirement.
 **Would be settled by:** whether the product supports "I do not know my plot
 boundary" as a first-class case.
 
-### 1.4 `OPEN-27` — the recompute fan-out cannot query tenant rows — **P1**
+### 1.4 `OPEN-27` — the recompute fan-out cannot query tenant rows — **P1 (DIRECTIONALLY AGREED 2026-11-28)**
 
 Q18 ("which fields does this cell serve?") reads `field_outlook_cells`, which is
 tenant-owned and RLS-protected, while the job that needs the answer runs as
 `app_system`, which has no grant on it — and if it were granted one, its
 `BYPASSRLS` would expose every tenant's resolutions.
 
-Options: narrow `SELECT` to `app_system` (widest exposure) · a `SECURITY DEFINER`
-function returning only field ids (narrow output, one privileged entry point) · a
-global "cell → interested field" projection table (duplicates state, can drift).
+**Direction agreed 2026-11-28 (final design verification pending):** hybrid approach —
+API enqueues per-field jobs for user-triggered data mutations, while a narrow
+`SECURITY DEFINER` discovery function handles post-ingestion fan-out. Before
+implementation, the design must be finalized against per-field API enqueueing and
+verified for least-privilege grants, `SET search_path = pg_catalog, app`, RLS, and
+tenant isolation (with worker writes still executing inside `withTenant`).
+Implementation of the fan-out mechanism is deferred until the recomputation worker
+requires it.
 
 **Blocks:** `recompute.windows`, i.e. the one job that makes a new forecast reach
-a user's dashboard. **Would be settled by:** a decision on the narrowest
-acceptable shape, in a follow-up ADR that does not yet exist (an earlier draft of
-this document pointed at `ADR-004`; no such file exists and none is written).
+a user's dashboard. **Would be settled by:** finalizing the security design in an
+ADR and implementing it when the recomputation worker is built.
 
 ### 1.5 `OPEN-26` — no `evidence_segments` partition validator — **P1**
 
@@ -220,34 +224,29 @@ absence of a write path, not by this code.
 Each of these is a row in §1.1. Eight are `after Phase 3`; `OPEN-09` is the single
 `Phase 3 DDL` item, and `OPEN-02` blocks nothing because its fallback exists.
 
-### `OPEN-21` — field vocabularies and the `irrigationAvailable` mapping — **P1**
+### `OPEN-21` — field vocabularies and `irrigationAvailability` — **P1 (PARTIALLY SETTLED 2026-11-28)**
 
-`fields.soil_type`, `drainage_class`, `irrigation_availability` are text with no
-vocabulary; `FieldSnapshotPayload.irrigationAvailable` is a **boolean**. No
-document defines the conversion, so the mapping is unowned — and a wrong one
-silently changes every window's `fieldSnapshotHash` and every water-dependent
-verdict. Options: a lookup table, a `CHECK` list, or a boolean column.
+`fields.soil_type`, `drainage_class`, `irrigation_availability` were unconstrained
+`text`, while `FieldSnapshotPayload.irrigationAvailable` was a **boolean**.
 
-**Blocks:** field → snapshot construction. This is the most consequential open
-item in the identity group. **Does not block:** the DDL — the three columns stay
-unconstrained `text`, and a `CHECK` vocabulary is one of the options, so it would
-arrive as a later migration rather than as Phase 3 DDL.
+**Owner decision 2026-11-28:** `irrigationAvailability` uses an explicit closed
+enum (`irrigated` · `partial_irrigation` · `rainfed` · `unknown`) and DB `CHECK`
+constraint instead of a lossy boolean conversion. `partial_irrigation` must not be
+forced to `false`, and both `partial_irrigation` and `unknown` must be preserved
+across contracts, database, domain logic, API, frontend, and golden hash tests.
 
-### `OPEN-09` — `plantings.status` vocabulary — **P1**
+**Remaining:** `soil_type` and `drainage_class` closed vocabularies / `CHECK`
+constraints before full `FieldSnapshot` construction from field rows.
 
-No enum is written anywhere. `plantings_active_idx` assumes a value spelled
-`active`, and the column carries `DEFAULT 'active'`. Options: `active` ·
-`harvested` · `failed` · `abandoned`.
+### `OPEN-09` — `plantings.status` vocabulary — **P1 — RESOLVED 2026-11-28**
 
-**Blocks:** the first writer of a `plantings` row, and the "what is growing here"
-query that would read through the index (`tables-identity.md` §6,
-`indexes-and-query-patterns.md` §2).
-**Does not block Phase 3 any more.** `D26` (Phase 2.4) removes the question from
-the migration instead of answering it: the column ships `NOT NULL` with **no
-default**, and `plantings_active_idx` is **not created**. Both arrive in one
-additive migration once the vocabulary is decided, with no data rewrite — no row
-can exist before then. `D26` is a decision about the DDL, not about the
-vocabulary, and the vocabulary is still open.
+**Owner decision 2026-11-28:** four statuses — `active` · `harvested` · `failed` ·
+`abandoned`. `planned` is confirmed unnecessary because `app.plantings` records
+actual plantings (`planted_at date NOT NULL`), while planned cycles live in
+`planting_windows` and calendar projections.
+
+**Blocks:** nothing on vocabulary; the additive migration (`CHECK`, `DEFAULT 'active'`,
+and `plantings_active_idx` per `D26`) ships with the first `plantings` writer.
 
 ### `OPEN-18` — cell identity resolver per `(provider, model)` — **P1**
 
@@ -454,15 +453,12 @@ missing — an artifact with no `inputRefs` is a separate defect. **Revisit:** w
 lawful paid or self-hosted plan exists, storage cost is known, and a verification run
 must re-derive a score.
 
-### `OPEN-11` — the briefing body contract — **P1**
+### `OPEN-11` — the briefing body contract — **P1 — RESOLVED 2026-11-28**
 
-`ai_briefings.body` is validated against the `ClimateBriefing` contract, whose
-shape is not defined anywhere. Three distinct states, which should not be
-conflated: the **table** can be created exactly as specified; a **row** cannot be
-validated, because there is nothing to validate against; the **AI subsystem**
-cannot be implemented. **Blocks:** the AI slice, and the write path into
-`ai_briefings`. **Does not block:** the `ai_briefings` DDL, its constraints, its
-indexes, or any read of a row written under a later contract.
+**Owner decision 2026-11-28:** `ai_briefings.body` uses a bounded **structured JSON**
+contract whose sections cite `evidenceSegmentId` references. Implementation remains
+deferred until Phase 8. **Does not block:** the `ai_briefings` DDL, its constraints,
+or its indexes.
 
 ### `OPEN-13` — session storage — **P1 — RESOLVED 2026-11-20**
 
@@ -602,15 +598,15 @@ and "deferred" were doing too much work:
 
 | ID | Disposition | Assigned to | Why Phase 3 does not depend on it |
 |---|---|---|---|
-| `OPEN-09` | **DEFERRED** | the first `plantings` writer | the DDL half is settled by omission (`D26`): no default, no partial index |
+| `OPEN-09` | **RESOLVED** | — | resolved 2026-11-28: `active` · `harvested` · `failed` · `abandoned` (`planned` confirmed unnecessary for actual plantings); additive DDL (`D26`) ships with the first `plantings` writer |
 | `OPEN-01` | **RESOLVED** | — | both halves met: the owner confirmed the `app_auth` boundary as final (`docs/review/phase-3.2-owner-decisions.md` *Amendment 3*), and `POST /v1/auth/login` now reads `password_hash` through it, proven by `packages/database/test/integration/session.test.mjs` (`current_user = app_auth`, `app.user_id` unset, `app_api` still refused `42501`) |
 | `OPEN-13` | **RESOLVED** | — | not applicable now: `ADR-005` accepted, S5 applied canonically, and the S6 `auth-boundary` suite green (49 cases) |
 | `OPEN-17` | **BLOCKED_EXTERNAL_INPUT** | product decision, then the snapshot path | a `POINT` row is storable; only its snapshot is impossible |
-| `OPEN-18` | **BLOCKED_EXTERNAL_INPUT** | 5.0/5.2: pinned hash, provider/model registry, then provider grid validation — now also an owner decision on cell-selection semantics (nearest-centre row vs lower-edge resolver), analysed in `docs/adr/ADR-008-grid-cell-selection-semantics.md` (`Proposed`, not accepted) | the generic resolver contract is approved (2026-11-21); `cell_key` is `text` and no constraint depends on its content; the field-mapping boundary is resolved (5.2 defers `field_outlook_cells`); `ecmwf_ifs025` geometry measured 2026-11-24 |
-| `OPEN-21` | **BLOCKED_EXTERNAL_INPUT** | agronomic decision, then snapshot construction | the columns stay unconstrained `text` |
+| `OPEN-18` | **BLOCKED_EXTERNAL_INPUT** | 5.0/5.2: pinned hash, provider/model registry, then provider grid validation — owner conditionally approved `nearest-centre` per `ADR-008` (2026-11-28) subject to `ADR-008` evidence validity, with `ecmwf_ifs025` kept `unvalidated` and barred from validated production claims | the generic resolver contract is approved (2026-11-21); `cell_key` is `text` and no constraint depends on its content; the field-mapping boundary is resolved (5.2 defers `field_outlook_cells`); `ecmwf_ifs025` geometry measured 2026-11-24 |
+| `OPEN-21` | **BLOCKED_EXTERNAL_INPUT** | `irrigationAvailability` enum (`irrigated`, `partial_irrigation`, `rainfed`, `unknown`) approved 2026-11-28; `soil_type` & `drainage_class` vocabularies remain | `soil_type` and `drainage_class` stay unconstrained `text` until closed |
 | `OPEN-26` | **DEFERRED** (conditional) | the window engine that produces segments calls `validatePartition` before any write | the table, plus a `jsonb_typeof` array check, is all the schema can honestly do; the validator exists and no writer can bypass it yet, because none exists |
-| `OPEN-27` | **BLOCKED_EXTERNAL_INPUT** | worker phase, with a security review of the narrowest read shape | grants ship the default: nothing to `app_system` |
-| `OPEN-11` | **DEFERRED** | AI slice; the contract is authored with the briefing engine | `ai_briefings` is creatable exactly as specified |
+| `OPEN-27` | **BLOCKED_EXTERNAL_INPUT** | hybrid direction agreed 2026-11-28 (API per-field enqueue + narrow `SECURITY DEFINER` fan-out); final design verification pending privilege/`search_path`/RLS/tenant-isolation review; fan-out deferred until recomputation worker | grants ship the default: nothing to `app_system` |
+| `OPEN-11` | **RESOLVED** | — | resolved 2026-11-28: structured JSON with `evidenceSegmentId` references; implementation deferred until Phase 8 |
 | `OPEN-04` | **BLOCKED_EXTERNAL_INPUT** | product/legal decision on account deletion | `users` is already implemented and unchanged |
 | `OPEN-03` | **BLOCKED_EXTERNAL_INPUT** | commercial decision at production launch | development use is inside the free tier |
 | `OPEN-05` | **BLOCKED_EXTERNAL_INPUT** | licensing, per provider | the column is an object-store key, granted or `NULL` |
@@ -637,19 +633,22 @@ value the matrix in §1.1 assigns (`conditional` for both), not a fifth disposit
 putting it in the disposition column is how the earlier count drifted. The counts
 below follow the disposition alone.
 
-**Counts (recomputed from the table, 2026-11-28):** 3 RESOLVED (`OPEN-01`,
-`OPEN-13`, `OPEN-20`), 18 DEFERRED, 8 BLOCKED_EXTERNAL_INPUT, 0 NOT_APPLICABLE. The earlier
+**Counts (recomputed from the table, 2026-11-28):** 5 RESOLVED (`OPEN-01`,
+`OPEN-09`, `OPEN-11`, `OPEN-13`, `OPEN-20`), 16 DEFERRED, 8 BLOCKED_EXTERNAL_INPUT, 0 NOT_APPLICABLE. The earlier
 count of 9 BLOCKED_EXTERNAL_INPUT did not match the seven BLOCKED rows in the table;
 `OPEN-18` moved from DEFERRED to BLOCKED_EXTERNAL_INPUT when its generic contract was
 approved, which is the eighth.
 
-All three `RESOLVED` items earned the word, and none earned it from a decision alone:
-`OPEN-13` from an accepted ADR, an applied migration, and a real-role suite green on the
-canonical database; `OPEN-01` from the confirmed boundary plus a login path that reads a
-credential through it, with a real-role test proving `current_user = app_auth`;
-`OPEN-20` from an owner answer plus a seed that runs, a contract-valid read of all four
-profiles, and a unit test over the seed's content. The other 26 still need an owner
-outside this task — a product decision, a licence, an agronomic vocabulary, or a
+Three of the five `RESOLVED` items earned the word through shipped runtime and
+database evidence, not a decision alone: `OPEN-13` from an accepted ADR, an applied
+migration, and a real-role suite green on the canonical database; `OPEN-01` from
+the confirmed boundary plus a login path that reads a credential through it, with
+a real-role test proving `current_user = app_auth`; `OPEN-20` from an owner
+answer plus a seed that runs, a contract-valid read of all four profiles, and a
+unit test over the seed's content. `OPEN-09` and `OPEN-11` are policy-resolved
+on 2026-11-28, with their additive migration (`D26`) and schema authoring
+deferred to the `plantings` writer and Phase 8 slices respectively. The other 24
+still need an owner decision, an external licence, an agronomic vocabulary, or a
 security review.
 
 Note that `RESOLVED` is still not the goal. A phase that resolved `OPEN-17` by assuming a

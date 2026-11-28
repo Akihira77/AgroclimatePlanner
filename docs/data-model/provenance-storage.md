@@ -109,7 +109,7 @@ Consequences:
    payload carrying `fieldSnapshotHash` at runtime, because a structural type
    cannot stop an untyped caller from passing the persisted `FieldSnapshot`.
 3. **An edited field cannot retcon a stored run.** The snapshot holds
-   `geometryHash`, `areaHa`, `soilPh`, `irrigationAvailable`, `resolvedCells`, and
+   `geometryHash`, `areaHa`, `soilPh`, `irrigationAvailability`, `resolvedCells`, and
    `observationsUsed`; the field row may since have changed, and the run still
    describes what it actually evaluated.
 4. **`observationsUsed` embeds observation ids, not values.** The values are

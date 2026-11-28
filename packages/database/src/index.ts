@@ -185,6 +185,31 @@ export type {
   SeasonalOutlookMonthRow,
   SeasonalPopulationOutcome,
 } from "./outlook.js";
+export {
+  createHarvest,
+  createPlanting,
+  findPlanting,
+  HarvestDateError,
+  InvalidPlantingTransitionError,
+  listHarvests,
+  listPlantings,
+  PlantingReferenceError,
+  updatePlantingStatus,
+} from "./plantings.js";
+export type {
+  HarvestCreateInput,
+  HarvestListResult,
+  HarvestRecord,
+  PlantingCreateInput,
+  PlantingListFilters,
+  PlantingRecord,
+} from "./plantings.js";
+export {
+  createFieldObservation,
+  listFieldObservations,
+  ObservationFutureDateError,
+} from "./observations.js";
+export type { FieldObservationCreateInput, FieldObservationRecord } from "./observations.js";
 
 export interface DatabaseOptions {
   /** `postgresql://…` connection string. Validated by `pg`, not by us. */

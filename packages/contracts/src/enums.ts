@@ -59,6 +59,18 @@ export const missingReasonSchema = z.enum([
 export type MissingReason = z.infer<typeof missingReasonSchema>;
 
 /**
+ * Explicit irrigation availability vocabulary (`OPEN-21`). Preserves partial
+ * and unknown states instead of collapsing to a lossy boolean.
+ */
+export const irrigationAvailabilitySchema = z.enum([
+  "irrigated",
+  "partial_irrigation",
+  "rainfed",
+  "unknown",
+]);
+export type IrrigationAvailability = z.infer<typeof irrigationAvailabilitySchema>;
+
+/**
  * ISO 8601 calendar date, interpreted in Asia/Jakarta wherever a date appears.
  * Calendar validity is checked, not just shape: `2026-02-31` and `2026-13-01`
  * are rejected, `2024-02-29` is accepted.
